@@ -3,10 +3,10 @@ import { renderHead } from '../components/head'
 import { renderNav } from '../components/nav'
 import { renderFooter } from '../components/footer'
 
-import { getCGUContent } from './legal/cgu'
-import { getConfidentialiteContent } from './legal/confidentialite'
-import { getMentionsContent } from './legal/mentions'
-import { getCookiesContent } from './legal/cookies'
+import { getCGUContent } from './cgu'
+import { getConfidentialiteContent } from './confidentialite'
+import { getMentionsContent } from './mentions'
+import { getCookiesContent } from './cookies'
 
 export function renderLegalPage(type: 'cgu' | 'confidentialite' | 'mentions' | 'cookies', nomProjet: string): string {
   const year = new Date().getFullYear()
