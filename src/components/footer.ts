@@ -18,7 +18,7 @@ export function renderFooter(nomProjet: string): string {
           <span>${nomProjet}</span>
         </a>
         <p class="text-sm text-gray-400 leading-relaxed mb-5">
-          La plateforme de commande en ligne pour les restaurants d'Afrique de l'Ouest et Centrale. Sans commission sur vos ventes.
+          La solution complète de commande en ligne pour restaurants. Augmentez vos ventes et simplifiez votre gestion sans aucune commission.
         </p>
 
         <!-- Réseaux sociaux -->
@@ -54,27 +54,25 @@ export function renderFooter(nomProjet: string): string {
       <nav aria-label="Liens produit">
         <h3 class="text-white font-semibold text-sm mb-4 uppercase tracking-wide">Produit</h3>
         <ul class="space-y-2.5 text-sm">
-          <li><a href="/fonctionnalites" class="hover:text-white transition-colors">Fonctionnalités</a></li>
-          <li><a href="/tarifs" class="hover:text-white transition-colors">Tarifs</a></li>
+          <li><a href="/#fonctionnalites" class="hover:text-white transition-colors">Fonctionnalités</a></li>
+          <li><a href="/#tarifs" class="hover:text-white transition-colors">Tarifs</a></li>
           <li><a href="/inscription" class="hover:text-white transition-colors">Créer ma boutique</a></li>
           <li><a href="/dashboard" class="hover:text-white transition-colors">Se connecter</a></li>
           <li><a href="/blog" class="hover:text-white transition-colors">Blog</a></li>
         </ul>
       </nav>
 
-      <!-- Colonne 3 : Pays couverts -->
-      <nav aria-label="Pays couverts">
-        <h3 class="text-white font-semibold text-sm mb-4 uppercase tracking-wide">Pays</h3>
+      <!-- Colonne 3 : Support -->
+      <nav aria-label="Support et Aide">
+        <h3 class="text-white font-semibold text-sm mb-4 uppercase tracking-wide">Aide</h3>
         <ul class="space-y-2.5 text-sm">
-          <li><span class="text-gray-400 flex items-center gap-1.5"><i class="fa-solid fa-circle text-green-500 text-xs" aria-hidden="true"></i> Burkina Faso</span></li>
-          <li><span class="text-gray-500 flex items-center gap-1.5"><i class="fa-solid fa-circle text-yellow-500 text-xs" aria-hidden="true"></i> Côte d'Ivoire <span class="text-xs text-gray-600 ml-1">(bientôt)</span></span></li>
-          <li><span class="text-gray-500 flex items-center gap-1.5"><i class="fa-solid fa-circle text-yellow-500 text-xs" aria-hidden="true"></i> Cameroun <span class="text-xs text-gray-600 ml-1">(bientôt)</span></span></li>
-          <li><span class="text-gray-500 flex items-center gap-1.5"><i class="fa-solid fa-circle text-yellow-500 text-xs" aria-hidden="true"></i> Sénégal <span class="text-xs text-gray-600 ml-1">(bientôt)</span></span></li>
-          <li><a href="/contact" class="text-red-400 hover:text-red-300 transition-colors text-xs flex items-center gap-1 mt-2"><i class="fa-solid fa-plus text-xs" aria-hidden="true"></i> Votre pays bientôt</a></li>
+          <li><a href="/contact" class="hover:text-white transition-colors">Contactez-nous</a></li>
+          <li><a href="/faq" class="hover:text-white transition-colors">FAQ</a></li>
+          <li><a href="mailto:support@monmenu.app" class="hover:text-white transition-colors">Support technique</a></li>
         </ul>
       </nav>
 
-      <!-- Colonne 4 : Légal + Contact -->
+      <!-- Colonne 4 : Légal -->
       <nav aria-label="Liens légaux">
         <h3 class="text-white font-semibold text-sm mb-4 uppercase tracking-wide">Légal</h3>
         <ul class="space-y-2.5 text-sm">
@@ -82,14 +80,6 @@ export function renderFooter(nomProjet: string): string {
           <li><a href="/legal/confidentialite" class="hover:text-white transition-colors">Confidentialité</a></li>
           <li><a href="/legal/mentions" class="hover:text-white transition-colors">Mentions légales</a></li>
           <li><a href="/legal/cookies" class="hover:text-white transition-colors">Politique cookies</a></li>
-          <li class="pt-2 border-t border-gray-800 mt-1">
-            <a href="/contact" class="hover:text-white transition-colors">Contact support</a>
-          </li>
-          <li>
-            <a href="mailto:support@monmenu.app" class="hover:text-white transition-colors text-xs">
-              support@monmenu.app
-            </a>
-          </li>
         </ul>
       </nav>
     </div>
@@ -101,11 +91,10 @@ export function renderFooter(nomProjet: string): string {
       </p>
       <div class="flex items-center gap-4 text-xs text-gray-500">
         <span class="flex items-center gap-1.5">
-          <i class="fa-solid fa-heart text-red-500 text-xs" aria-hidden="true"></i>
-          Fait avec rigueur pour l'Afrique
+          Propulsé par une technologie innovante
         </span>
         <span class="hidden sm:inline">·</span>
-        <span class="hidden sm:inline">v2.0</span>
+        <span class="hidden sm:inline">v2.1</span>
       </div>
     </div>
   </div>

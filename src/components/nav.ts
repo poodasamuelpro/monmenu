@@ -22,11 +22,11 @@ export function renderNav(nomProjet: string, activePage: string = ''): string {
 
       <!-- Menu desktop -->
       <div class="hidden md:flex items-center gap-6" role="menubar">
-        <a href="/fonctionnalites" role="menuitem"
+        <a href="/#fonctionnalites" role="menuitem"
           class="text-sm transition-colors ${isActive('fonctionnalites')}">
           Fonctionnalités
         </a>
-        <a href="/tarifs" role="menuitem"
+        <a href="/#tarifs" role="menuitem"
           class="text-sm transition-colors ${isActive('tarifs')}">
           Tarifs
         </a>
@@ -48,7 +48,7 @@ export function renderNav(nomProjet: string, activePage: string = ''): string {
           <span>Connexion</span>
         </a>
         <a href="/inscription"
-          class="inline-flex items-center gap-1.5 bg-red-600 hover:bg-red-700 text-white text-sm font-semibold px-4 py-2 rounded-lg transition-colors shadow-sm">
+          class="hidden md:inline-flex items-center gap-1.5 bg-red-600 hover:bg-red-700 text-white text-sm font-semibold px-4 py-2 rounded-lg transition-colors shadow-sm">
           <i class="fa-solid fa-store text-xs" aria-hidden="true"></i>
           <span>Créer ma boutique</span>
         </a>
@@ -63,12 +63,12 @@ export function renderNav(nomProjet: string, activePage: string = ''): string {
     <!-- Menu mobile -->
     <div id="mobile-menu" class="hidden md:hidden pb-4" aria-hidden="true" role="menu">
       <div class="flex flex-col gap-1 pt-2 border-t border-gray-100">
-        <a href="/fonctionnalites" role="menuitem"
+        <a href="/#fonctionnalites" role="menuitem"
           class="px-3 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 rounded-lg flex items-center gap-2">
           <i class="fa-solid fa-star text-gray-400 w-4 text-center" aria-hidden="true"></i>
           Fonctionnalités
         </a>
-        <a href="/tarifs" role="menuitem"
+        <a href="/#tarifs" role="menuitem"
           class="px-3 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 rounded-lg flex items-center gap-2">
           <i class="fa-solid fa-tag text-gray-400 w-4 text-center" aria-hidden="true"></i>
           Tarifs
@@ -88,11 +88,6 @@ export function renderNav(nomProjet: string, activePage: string = ''): string {
             class="px-3 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 rounded-lg flex items-center gap-2">
             <i class="fa-regular fa-circle-user text-gray-400 w-4 text-center" aria-hidden="true"></i>
             Connexion restaurant
-          </a>
-          <a href="/inscription" role="menuitem"
-            class="px-3 py-2.5 text-sm font-semibold text-red-600 hover:bg-red-50 rounded-lg flex items-center gap-2">
-            <i class="fa-solid fa-store text-red-400 w-4 text-center" aria-hidden="true"></i>
-            Créer ma boutique gratuitement
           </a>
         </div>
       </div>

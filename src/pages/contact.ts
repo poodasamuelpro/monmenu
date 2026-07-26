@@ -1,5 +1,5 @@
 // =============================================================
-// PAGE CONTACT
+// PAGE CONTACT — Épurée et Professionnelle
 // =============================================================
 import { renderHead } from '../components/head'
 import { renderNav } from '../components/nav'
@@ -8,232 +8,103 @@ import { renderFooter } from '../components/footer'
 export function renderContactPage(nomProjet: string, whatsappSupport: string = ''): string {
   const waNumber = whatsappSupport.replace(/[^0-9]/g, '')
   const waLink = waNumber
-    ? `https://wa.me/${waNumber}?text=Bonjour%20${encodeURIComponent(nomProjet)}%2C%20j%27ai%20une%20question%20:`
+    ? `https://wa.me/${waNumber}?text=Bonjour%20${encodeURIComponent(nomProjet)}`
     : 'https://wa.me/22600000000'
 
   return `${renderHead(
     `Contact — ${nomProjet}`,
-    `Contactez l'équipe ${nomProjet}. Support en français, réponse rapide par WhatsApp ou email. Disponible du lundi au samedi.`,
+    `Contactez l'équipe ${nomProjet}. Support réactif par WhatsApp ou email.`,
     nomProjet
   )}
 <body class="font-sans bg-white text-gray-900">
   ${renderNav(nomProjet, 'contact')}
 
-  <!-- Hero -->
-  <section class="py-16 bg-gradient-to-b from-gray-50 to-white" aria-labelledby="contact-hero-heading">
-    <div class="max-w-3xl mx-auto px-4 sm:px-6 text-center">
-      <div class="inline-flex items-center gap-2 bg-green-100 text-green-700 text-xs font-semibold px-3 py-1.5 rounded-full mb-6">
-        <i class="fa-solid fa-circle text-green-500 text-xs animate-pulse" aria-hidden="true"></i>
-        Support en ligne
-      </div>
-      <h1 id="contact-hero-heading" class="text-4xl font-extrabold text-gray-900 mb-4">
-        Comment pouvons-nous vous aider ?
-      </h1>
-      <p class="text-gray-600 text-lg max-w-xl mx-auto">
-        Notre équipe répond en français du lundi au samedi, de 8h à 20h (GMT+0).
-        Délai habituel : moins de 4 heures.
+  <main class="max-w-4xl mx-auto px-4 py-20">
+    <div class="text-center mb-16">
+      <h1 class="text-4xl font-extrabold text-gray-900 mb-4">Contactez-nous</h1>
+      <p class="text-gray-500 text-lg max-w-xl mx-auto">
+        Une question ou besoin d'assistance ? Notre équipe vous répond rapidement du lundi au samedi.
       </p>
     </div>
-  </section>
 
-  <!-- Canaux de contact -->
-  <section class="pb-12" aria-labelledby="channels-heading">
-    <div class="max-w-3xl mx-auto px-4 sm:px-6">
-      <div class="sr-only" id="channels-heading">Canaux de contact</div>
-      <div class="grid sm:grid-cols-3 gap-4 mb-12">
-
-        <!-- WhatsApp -->
-        <a href="${waLink}" target="_blank" rel="noopener noreferrer"
-          class="border border-green-200 bg-green-50 rounded-xl p-5 flex flex-col items-center text-center hover:shadow-md transition-all group hover:border-green-400">
-          <div class="w-14 h-14 bg-green-500 rounded-2xl flex items-center justify-center text-white mb-3 shadow-md shadow-green-200 group-hover:scale-105 transition-transform">
-            <i class="fa-brands fa-whatsapp text-3xl" aria-hidden="true"></i>
+    <div class="grid md:grid-cols-2 gap-12">
+      <!-- Informations de contact -->
+      <div class="space-y-8">
+        <div>
+          <h2 class="text-sm font-bold text-red-600 uppercase tracking-widest mb-4">Canaux directs</h2>
+          <div class="space-y-4">
+            <a href="${waLink}" target="_blank" class="flex items-center gap-4 p-4 rounded-2xl bg-green-50 border border-green-100 hover:border-green-300 transition-colors group">
+              <div class="w-12 h-12 bg-green-500 rounded-xl flex items-center justify-center text-white shadow-sm">
+                <i class="fa-brands fa-whatsapp text-2xl"></i>
+              </div>
+              <div>
+                <div class="font-bold text-gray-900">WhatsApp Support</div>
+                <div class="text-sm text-green-700">Réponse en moins d'une heure</div>
+              </div>
+            </a>
+            <a href="mailto:support@monmenu.app" class="flex items-center gap-4 p-4 rounded-2xl bg-blue-50 border border-blue-100 hover:border-blue-300 transition-colors group">
+              <div class="w-12 h-12 bg-blue-600 rounded-xl flex items-center justify-center text-white shadow-sm">
+                <i class="fa-regular fa-envelope text-xl"></i>
+              </div>
+              <div>
+                <div class="font-bold text-gray-900">Email</div>
+                <div class="text-sm text-blue-700">support@monmenu.app</div>
+              </div>
+            </a>
           </div>
-          <div class="font-bold text-gray-900 mb-1">WhatsApp</div>
-          <div class="text-sm text-gray-600 mb-2">Réponse la plus rapide</div>
-          <div class="text-xs text-green-600 font-semibold">Généralement &lt; 1h</div>
-        </a>
+        </div>
 
-        <!-- Email -->
-        <a href="mailto:support@monmenu.app"
-          class="border border-blue-200 bg-blue-50 rounded-xl p-5 flex flex-col items-center text-center hover:shadow-md transition-all group hover:border-blue-400">
-          <div class="w-14 h-14 bg-blue-600 rounded-2xl flex items-center justify-center text-white mb-3 shadow-md shadow-blue-200 group-hover:scale-105 transition-transform">
-            <i class="fa-regular fa-envelope text-2xl" aria-hidden="true"></i>
+        <div>
+          <h2 class="text-sm font-bold text-gray-400 uppercase tracking-widest mb-4">Disponibilité</h2>
+          <div class="flex items-center gap-3 text-gray-600">
+            <i class="fa-solid fa-clock text-gray-300"></i>
+            <span class="text-sm">Lundi au Samedi : 08h00 — 20h00 (GMT)</span>
           </div>
-          <div class="font-bold text-gray-900 mb-1">Email</div>
-          <div class="text-sm text-gray-600 mb-2">support@monmenu.app</div>
-          <div class="text-xs text-blue-600 font-semibold">Réponse sous 24h</div>
-        </a>
-
-        <!-- Documentation -->
-        <a href="/blog"
-          class="border border-gray-200 bg-gray-50 rounded-xl p-5 flex flex-col items-center text-center hover:shadow-md transition-all group hover:border-gray-400">
-          <div class="w-14 h-14 bg-gray-700 rounded-2xl flex items-center justify-center text-white mb-3 shadow-md shadow-gray-200 group-hover:scale-105 transition-transform">
-            <i class="fa-solid fa-book-open text-2xl" aria-hidden="true"></i>
-          </div>
-          <div class="font-bold text-gray-900 mb-1">Blog & Guides</div>
-          <div class="text-sm text-gray-600 mb-2">Tutoriels et conseils</div>
-          <div class="text-xs text-gray-600 font-semibold">Accès immédiat</div>
-        </a>
+        </div>
       </div>
 
-      <!-- Formulaire de contact -->
-      <div class="bg-gray-50 rounded-2xl p-8 border border-gray-100" aria-labelledby="form-heading">
-        <h2 id="form-heading" class="text-xl font-bold text-gray-900 mb-6 flex items-center gap-2">
-          <i class="fa-solid fa-paper-plane text-red-500" aria-hidden="true"></i>
-          Envoyer un message
-        </h2>
-
-        <form id="contact-form" class="space-y-5" onsubmit="submitContact(event)" novalidate>
-          <div class="grid sm:grid-cols-2 gap-4">
-            <div>
-              <label for="contact-nom" class="block text-sm font-semibold text-gray-700 mb-1.5">
-                Prénom et nom <span class="text-red-500" aria-hidden="true">*</span>
-              </label>
-              <input id="contact-nom" name="nom" type="text" required autocomplete="name"
-                class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200 focus:border-red-400 bg-white transition-colors"
-                placeholder="Fatou Traoré">
-            </div>
-            <div>
-              <label for="contact-email" class="block text-sm font-semibold text-gray-700 mb-1.5">
-                Email ou téléphone <span class="text-red-500" aria-hidden="true">*</span>
-              </label>
-              <input id="contact-email" name="email" type="text" required autocomplete="email"
-                class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200 focus:border-red-400 bg-white transition-colors"
-                placeholder="contact@monrestaurant.com">
-            </div>
-          </div>
-
+      <!-- Formulaire simplifié -->
+      <div class="bg-white border border-gray-100 rounded-3xl p-8 shadow-xl shadow-gray-100/50">
+        <form id="contact-form" class="space-y-4" onsubmit="submitContact(event)">
           <div>
-            <label for="contact-profil" class="block text-sm font-semibold text-gray-700 mb-1.5">Je suis</label>
-            <select id="contact-profil" name="profil"
-              class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200 focus:border-red-400 bg-white transition-colors">
-              <option value="restaurant">Un restaurateur (propriétaire ou gérant)</option>
-              <option value="client">Un client final</option>
-              <option value="partenaire">Un partenaire commercial</option>
-              <option value="investisseur">Un investisseur</option>
-              <option value="autre">Autre</option>
-            </select>
+            <label class="block text-xs font-bold text-gray-400 uppercase mb-2 ml-1">Nom complet</label>
+            <input type="text" id="contact-nom" required class="w-full bg-gray-50 border-none rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-red-100 transition-all" placeholder="Votre nom">
           </div>
-
           <div>
-            <label for="contact-sujet" class="block text-sm font-semibold text-gray-700 mb-1.5">Sujet</label>
-            <select id="contact-sujet" name="sujet"
-              class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200 focus:border-red-400 bg-white transition-colors">
-              <option value="support">Support technique</option>
-              <option value="inscription">Question sur l'inscription</option>
-              <option value="tarifs">Question sur les tarifs</option>
-              <option value="enterprise">Plan Enterprise / volume</option>
-              <option value="partenariat">Partenariat</option>
-              <option value="autre">Autre</option>
-            </select>
+            <label class="block text-xs font-bold text-gray-400 uppercase mb-2 ml-1">Email ou Téléphone</label>
+            <input type="text" id="contact-email" required class="w-full bg-gray-50 border-none rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-red-100 transition-all" placeholder="votre@email.com">
           </div>
-
           <div>
-            <label for="contact-message" class="block text-sm font-semibold text-gray-700 mb-1.5">
-              Message <span class="text-red-500" aria-hidden="true">*</span>
-            </label>
-            <textarea id="contact-message" name="message" required rows="5"
-              class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200 focus:border-red-400 bg-white resize-none transition-colors"
-              placeholder="Décrivez votre question ou problème..."></textarea>
+            <label class="block text-xs font-bold text-gray-400 uppercase mb-2 ml-1">Message</label>
+            <textarea id="contact-message" required rows="4" class="w-full bg-gray-50 border-none rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-red-100 transition-all resize-none" placeholder="Comment pouvons-nous vous aider ?"></textarea>
           </div>
-
-          <div id="contact-feedback" class="hidden px-4 py-3 rounded-xl text-sm" role="alert"></div>
-
-          <button type="submit" id="contact-btn"
-            class="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3.5 rounded-xl transition-colors flex items-center justify-center gap-2">
-            <i class="fa-solid fa-paper-plane" aria-hidden="true"></i>
-            <span>Envoyer le message</span>
+          <button type="submit" id="contact-btn" class="w-full bg-gray-900 hover:bg-black text-white font-bold py-4 rounded-xl transition-all shadow-lg">
+            Envoyer le message
           </button>
-
-          <p class="text-xs text-gray-400 text-center">
-            Vos données ne seront pas partagées. Voir notre
-            <a href="/legal/confidentialite" class="hover:text-red-600 transition-colors underline">politique de confidentialité</a>.
-          </p>
+          <div id="contact-feedback" class="hidden text-center p-3 rounded-xl text-xs font-medium"></div>
         </form>
       </div>
     </div>
-  </section>
-
-  <!-- Infos pratiques -->
-  <section class="py-12 bg-gray-50" aria-labelledby="info-heading">
-    <div class="max-w-3xl mx-auto px-4 sm:px-6">
-      <h2 id="info-heading" class="text-lg font-bold text-gray-900 mb-6">Informations pratiques</h2>
-      <div class="grid sm:grid-cols-3 gap-4">
-        <div class="flex items-start gap-3">
-          <div class="w-9 h-9 bg-white rounded-lg border border-gray-100 flex items-center justify-center flex-shrink-0 shadow-sm">
-            <i class="fa-solid fa-clock text-gray-500 text-sm" aria-hidden="true"></i>
-          </div>
-          <div>
-            <div class="font-semibold text-gray-900 text-sm">Horaires support</div>
-            <div class="text-sm text-gray-500">Lun–Sam, 8h–20h (GMT+0)</div>
-          </div>
-        </div>
-        <div class="flex items-start gap-3">
-          <div class="w-9 h-9 bg-white rounded-lg border border-gray-100 flex items-center justify-center flex-shrink-0 shadow-sm">
-            <i class="fa-solid fa-language text-gray-500 text-sm" aria-hidden="true"></i>
-          </div>
-          <div>
-            <div class="font-semibold text-gray-900 text-sm">Langues</div>
-            <div class="text-sm text-gray-500">Français, Mooré (bientôt)</div>
-          </div>
-        </div>
-        <div class="flex items-start gap-3">
-          <div class="w-9 h-9 bg-white rounded-lg border border-gray-100 flex items-center justify-center flex-shrink-0 shadow-sm">
-            <i class="fa-solid fa-location-dot text-gray-500 text-sm" aria-hidden="true"></i>
-          </div>
-          <div>
-            <div class="font-semibold text-gray-900 text-sm">Basé à</div>
-            <div class="text-sm text-gray-500">Ouagadougou, Burkina Faso</div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </section>
+  </main>
 
   ${renderFooter(nomProjet)}
-  <script src="/static/js/main.js"></script>
   <script>
     async function submitContact(e) {
       e.preventDefault();
       const btn = document.getElementById('contact-btn');
       const feedback = document.getElementById('contact-feedback');
-
       btn.disabled = true;
-      btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i><span>Envoi en cours...</span>';
-      feedback.classList.add('hidden');
-
-      const nom = document.getElementById('contact-nom').value.trim();
-      const email = document.getElementById('contact-email').value.trim();
-      const message = document.getElementById('contact-message').value.trim();
-
-      if (!nom || !email || !message) {
-        feedback.textContent = 'Veuillez remplir tous les champs obligatoires.';
-        feedback.className = 'px-4 py-3 rounded-xl text-sm bg-red-50 text-red-700 border border-red-200';
-        btn.disabled = false;
-        btn.innerHTML = '<i class="fa-solid fa-paper-plane"></i><span>Envoyer le message</span>';
-        return;
-      }
-
-      // Simulation envoi (à relier à une vraie API ou Brevo)
-      await new Promise(r => setTimeout(r, 1500));
-
-      feedback.textContent = '✓ Message envoyé avec succès. Nous vous répondrons dans les 24 heures à l\\'adresse : ' + email;
-      feedback.className = 'px-4 py-3 rounded-xl text-sm bg-green-50 text-green-700 border border-green-200';
+      btn.innerText = 'Envoi...';
+      
+      // Simulation
+      await new Promise(r => setTimeout(r, 1000));
+      
+      feedback.innerText = '✓ Message envoyé. Nous vous répondrons très bientôt.';
+      feedback.className = 'text-green-600 bg-green-50 p-3 rounded-xl text-xs font-medium mt-4';
       feedback.classList.remove('hidden');
       e.target.reset();
       btn.disabled = false;
-      btn.innerHTML = '<i class="fa-solid fa-paper-plane"></i><span>Envoyer le message</span>';
-    }
-
-    // Pré-remplir le sujet si passé en query param
-    const urlParams = new URLSearchParams(window.location.search);
-    const sujet = urlParams.get('sujet');
-    if (sujet) {
-      const select = document.getElementById('contact-sujet');
-      if (select) {
-        const opt = Array.from(select.options).find(o => o.value === sujet);
-        if (opt) select.value = sujet;
-      }
+      btn.innerText = 'Envoyer le message';
     }
   </script>
 </body>
