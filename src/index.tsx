@@ -147,14 +147,25 @@ app.get('/:slug', async (c) => {
     return c.notFound()
   }
 
-  // Vérifier que le restaurant existe
+  // Vérifier que le restaurant existe (+ PDV pour le footer)
   const tenant = await c.env.DB
-    .prepare("SELECT id, nom, slug, logo_url, banniere_url, couleur_primaire, couleur_secondaire, whatsapp_number FROM tenants WHERE slug = ? AND statut IN ('actif', 'essai') AND deleted_at IS NULL")
+    .prepare(`
+      SELECT t.id, t.nom, t.slug, t.logo_url, t.banniere_url,
+             t.couleur_primaire, t.couleur_secondaire, t.whatsapp_number,
+             pdv.nom as pdv_nom, pdv.adresse as pdv_adresse, pdv.horaires as pdv_horaires,
+             pdv.latitude as pdv_latitude, pdv.longitude as pdv_longitude
+      FROM tenants t
+      LEFT JOIN points_de_vente pdv ON pdv.tenant_id = t.id AND pdv.actif = 1
+      WHERE t.slug = ? AND t.statut IN ('actif', 'essai') AND t.deleted_at IS NULL
+      LIMIT 1
+    `)
     .bind(slug)
     .first<{
       id: string; nom: string; slug: string; logo_url: string | null
       banniere_url: string | null; couleur_primaire: string; couleur_secondaire: string
       whatsapp_number: string
+      pdv_nom: string | null; pdv_adresse: string | null; pdv_horaires: string | null
+      pdv_latitude: number | null; pdv_longitude: number | null
     }>()
 
   if (!tenant) {
@@ -827,6 +838,8 @@ function renderBoutiquePage(tenant: {
   id: string; nom: string; slug: string; logo_url: string | null
   banniere_url: string | null; couleur_primaire: string; couleur_secondaire: string
   whatsapp_number: string
+  pdv_nom?: string | null; pdv_adresse?: string | null; pdv_horaires?: string | null
+  pdv_latitude?: number | null; pdv_longitude?: number | null
 }, nomProjet: string): string {
   const primaryColor = tenant.couleur_primaire || '#DC2626'
   const secondaryColor = tenant.couleur_secondaire || '#1D4ED8'
@@ -1015,6 +1028,60 @@ function renderBoutiquePage(tenant: {
       </form>
     </div>
   </div>
+
+  <!-- Footer boutique restaurant -->
+  <footer class="bg-gray-900 text-white pt-10 pb-8 mt-12">
+    <div class="max-w-3xl mx-auto px-4">
+      <div class="flex flex-col sm:flex-row sm:items-start gap-8">
+        <!-- Identité restaurant -->
+        <div class="flex-1">
+          <div class="flex items-center gap-3 mb-3">
+            ${tenant.logo_url
+              ? `<img src="${tenant.logo_url}" alt="${tenant.nom}" class="w-10 h-10 rounded-lg object-cover border border-gray-700">`
+              : `<div class="w-10 h-10 rounded-lg flex items-center justify-center text-white font-bold text-base flex-shrink-0" style="background-color:${primaryColor}">${tenant.nom.charAt(0)}</div>`
+            }
+            <span class="font-bold text-lg">${tenant.nom}</span>
+          </div>
+          <a href="https://wa.me/${tenant.whatsapp_number.replace(/[^0-9]/g, '')}" 
+             target="_blank" rel="noopener"
+             class="inline-flex items-center gap-2 text-sm text-green-400 hover:text-green-300 transition-colors font-medium">
+            <i class="fa-brands fa-whatsapp text-base"></i>
+            ${tenant.whatsapp_number}
+          </a>
+          ${tenant.pdv_adresse ? `
+          <div class="mt-2 text-sm text-gray-400 flex items-start gap-2">
+            <i class="fa-solid fa-location-dot mt-0.5 flex-shrink-0 text-gray-500"></i>
+            <span>${tenant.pdv_adresse}</span>
+          </div>` : ''}
+          ${tenant.pdv_latitude && tenant.pdv_longitude ? `
+          <a href="https://www.google.com/maps?q=${tenant.pdv_latitude},${tenant.pdv_longitude}" 
+             target="_blank" rel="noopener"
+             class="mt-2 inline-flex items-center gap-1.5 text-xs text-blue-400 hover:text-blue-300 transition-colors">
+            <i class="fa-solid fa-map-location-dot"></i>
+            Voir sur la carte
+          </a>` : ''}
+        </div>
+
+        <!-- Horaires -->
+        ${tenant.pdv_horaires ? `
+        <div class="sm:w-56">
+          <div class="font-semibold text-sm mb-2 text-gray-300 flex items-center gap-2">
+            <i class="fa-regular fa-clock"></i> Horaires
+          </div>
+          <div class="text-sm text-gray-400 whitespace-pre-line leading-relaxed">${tenant.pdv_horaires}</div>
+        </div>` : ''}
+      </div>
+
+      <div class="border-t border-gray-800 mt-8 pt-5 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-gray-500">
+        <span>© ${new Date().getFullYear()} ${tenant.nom} — Propulsé par <a href="/" class="text-red-400 hover:text-red-300">${nomProjet}</a></span>
+        <div class="flex gap-4">
+          <a href="/legal/cgu" class="hover:text-gray-300 transition-colors">CGU</a>
+          <a href="/legal/confidentialite" class="hover:text-gray-300 transition-colors">Confidentialité</a>
+          <a href="/contact" class="hover:text-gray-300 transition-colors">Contact</a>
+        </div>
+      </div>
+    </div>
+  </footer>
 
   <script src="/static/js/boutique.js"></script>
   <script>
@@ -1685,10 +1752,22 @@ function renderInscriptionPage(nomProjet: string): string {
         });
         const data = await res.json();
         if (res.ok && data.success) {
-          successEl.textContent = 'Compte créé ! Vérifiez votre email pour confirmer. Vous serez redirigé vers votre tableau de bord.';
-          successEl.classList.remove('hidden');
-          e.target.reset();
-          setTimeout(() => { window.location.href = '/dashboard'; }, 3000);
+          // Stocker le token d'authentification si Supabase a créé une session directe
+          if (data.access_token) {
+            localStorage.setItem('monmenu_auth_token', data.access_token);
+            if (data.refresh_token) localStorage.setItem('monmenu_refresh_token', data.refresh_token);
+            if (data.tenant) localStorage.setItem('monmenu_tenant', JSON.stringify(data.tenant));
+            successEl.textContent = data.message || 'Compte créé ! Vous êtes connecté. Redirection vers votre tableau de bord...';
+            successEl.classList.remove('hidden');
+            e.target.reset();
+            setTimeout(() => { window.location.href = '/dashboard/commandes'; }, 2000);
+          } else {
+            // Pas de session directe (email de confirmation requis)
+            successEl.textContent = 'Compte créé ! Vérifiez votre email pour confirmer, puis connectez-vous.';
+            successEl.classList.remove('hidden');
+            e.target.reset();
+            setTimeout(() => { window.location.href = '/dashboard'; }, 3000);
+          }
         } else {
           errEl.textContent = data.error || 'Erreur lors de la création du compte.';
           errEl.classList.remove('hidden');

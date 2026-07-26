@@ -3,6 +3,9 @@
   "name": "monmenu-public",
   "compatibility_date": "2024-09-23",
   "compatibility_flags": ["nodejs_compat"],
+
+  // Cloudflare Pages — répertoire de sortie Vite (contient _worker.js + assets statiques)
+  // La commande de déploiement correcte est : wrangler pages deploy dist
   "pages_build_output_dir": "./dist",
 
   // D1 Database principale (auto-provisionnée par gsk hosted deploy)

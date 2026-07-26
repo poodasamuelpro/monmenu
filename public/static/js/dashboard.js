@@ -695,7 +695,7 @@ async function toggleLivreurActif(livId, currentActif) {
   try {
     await fetch('/api/v1/dashboard/livreurs/' + livId, {
       method:'PATCH', headers:{'Content-Type':'application/json','Authorization':'Bearer '+authToken},
-      body: JSON.stringify({ actif: !currentActif })
+      body: JSON.stringify({ actif: currentActif ? 0 : 1 })
     });
     loadLivreurs();
   } catch { alert('Erreur réseau.'); }
