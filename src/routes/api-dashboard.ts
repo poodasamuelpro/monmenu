@@ -1,15 +1,18 @@
 // API Dashboard — Routes protégées pour le tableau de bord restaurant
+// ARCHITECTURE :
+//   • D1 (Cloudflare) → SITE WEB uniquement : config_globale, pays, plans
+//   • Supabase (PostgreSQL) → APPLICATION : tenants, commandes, menu, livreurs, etc.
 // Toutes les routes nécessitent un JWT Supabase valide
 
 import { Hono } from 'hono'
 import type { Env } from '../types/database'
-import { createSupabaseClient } from '../lib/supabase'
+import { createSupabaseClient, createSupabaseClientWithToken, createSupabaseAdminClient } from '../lib/supabase'
 import { setSecurityHeaders, checkRateLimit } from '../lib/security'
 
 const dashboardRouter = new Hono<{ Bindings: Env }>()
 
 // ---- Middleware d'authentification ----
-async function verifyAuth(c: any): Promise<{ user_id: string; tenant_id: string; tenant_slug: string } | null> {
+async function verifyAuth(c: any): Promise<{ user_id: string; tenant_id: string; tenant_slug: string; token: string } | null> {
   const authHeader = c.req.header('Authorization')
   if (!authHeader?.startsWith('Bearer ')) return null
 
@@ -21,18 +24,20 @@ async function verifyAuth(c: any): Promise<{ user_id: string; tenant_id: string;
     const { data: { user }, error } = await supabase.auth.getUser(token)
     if (error || !user) return null
 
-    const tenant = await c.env.DB
-      .prepare(`
-        SELECT t.id, t.slug FROM utilisateurs_tenant ut
-        JOIN tenants t ON t.id = ut.tenant_id
-        WHERE ut.auth_user_id = ? AND t.deleted_at IS NULL AND t.statut != 'suspendu'
-        LIMIT 1
-      `)
-      .bind(user.id)
-      .first<{ id: string; slug: string }>()
+    // SUPABASE — lookup tenant via utilisateurs_tenant (APPLICATION DATA)
+    const supabaseToken = createSupabaseClientWithToken(c.env, token)
+    const { data: utData, error: utError } = await supabaseToken
+      .from('utilisateurs_tenant')
+      .select('tenant_id, tenants!inner(id, slug, statut, deleted_at)')
+      .eq('auth_user_id', user.id)
+      .is('tenants.deleted_at', null)
+      .neq('tenants.statut', 'suspendu')
+      .single()
 
-    if (!tenant) return null
-    return { user_id: user.id, tenant_id: tenant.id, tenant_slug: tenant.slug }
+    if (utError || !utData) return null
+
+    const tenant = utData.tenants as any
+    return { user_id: user.id, tenant_id: utData.tenant_id, tenant_slug: tenant.slug, token }
   } catch { return null }
 }
 
@@ -47,40 +52,32 @@ dashboardRouter.get('/commandes', async (c) => {
   const limit = 50
   const offset = (page - 1) * limit
 
-  let query = `
-    SELECT id, client_nom, client_telephone, client_adresse,
-           items_json, montant_total, frais_livraison, mode_paiement,
-           statut, token_suivi, notes, livreur_id, created_at, updated_at
-    FROM commandes
-    WHERE tenant_id = ? AND deleted_at IS NULL
-  `
-  const params: any[] = [auth.tenant_id]
+  // SUPABASE — commandes (APPLICATION DATA)
+  const supabase = createSupabaseClientWithToken(c.env, auth.token)
 
-  if (statut) {
-    query += ' AND statut = ?'
-    params.push(statut)
-  }
+  let query = supabase
+    .from('commandes')
+    .select('id, client_nom, client_telephone, client_adresse, items_json, montant_total, frais_livraison, mode_paiement, statut, token_suivi, notes, livreur_id, created_at, updated_at', { count: 'exact' })
+    .eq('tenant_id', auth.tenant_id)
+    .is('deleted_at', null)
+    .order('created_at', { ascending: false })
+    .range(offset, offset + limit - 1)
 
-  query += ' ORDER BY created_at DESC LIMIT ? OFFSET ?'
-  params.push(limit, offset)
+  if (statut) query = query.eq('statut', statut)
 
-  const commandes = await c.env.DB.prepare(query).bind(...params).all()
+  const { data: commandes, count, error } = await query
 
-  // Total count
-  let countQuery = 'SELECT COUNT(*) as cnt FROM commandes WHERE tenant_id = ? AND deleted_at IS NULL'
-  const countParams: any[] = [auth.tenant_id]
-  if (statut) { countQuery += ' AND statut = ?'; countParams.push(statut) }
-  const countRow = await c.env.DB.prepare(countQuery).bind(...countParams).first<{ cnt: number }>()
+  if (error) return c.json({ error: 'Erreur récupération commandes.', detail: error.message }, 500)
 
   return c.json({
-    commandes: commandes.results,
+    commandes: commandes ?? [],
     page,
     limit,
-    total: countRow?.cnt ?? 0
+    total: count ?? 0
   })
 })
 
-// ---- PATCH /api/v1/dashboard/commandes/:id/statut — Mise à jour statut (AUTH REQUISE) ----
+// ---- PATCH /api/v1/dashboard/commandes/:id/statut ----
 dashboardRouter.patch('/commandes/:id/statut', async (c) => {
   setSecurityHeaders(c)
   const auth = await verifyAuth(c)
@@ -95,25 +92,46 @@ dashboardRouter.patch('/commandes/:id/statut', async (c) => {
     return c.json({ error: 'Statut invalide.' }, 422)
   }
 
-  // Vérifier que la commande appartient bien au tenant authentifié
-  const commande = await c.env.DB
-    .prepare('SELECT id, statut FROM commandes WHERE id = ? AND tenant_id = ? AND deleted_at IS NULL')
-    .bind(commandeId, auth.tenant_id)
-    .first<{ id: string; statut: string }>()
+  const supabase = createSupabaseClientWithToken(c.env, auth.token)
 
-  if (!commande) return c.json({ error: 'Commande introuvable.' }, 404)
+  // Vérifier que la commande appartient au tenant
+  const { data: commande, error: fetchError } = await supabase
+    .from('commandes')
+    .select('id, statut')
+    .eq('id', commandeId)
+    .eq('tenant_id', auth.tenant_id)
+    .is('deleted_at', null)
+    .single()
+
+  if (fetchError || !commande) return c.json({ error: 'Commande introuvable.' }, 404)
 
   const now = new Date().toISOString()
 
-  await c.env.DB.prepare(`
-    UPDATE commandes SET statut = ?, livreur_id = COALESCE(?, livreur_id), updated_at = ?
-    WHERE id = ? AND tenant_id = ?
-  `).bind(body.statut, body.livreur_id ?? null, now, commandeId, auth.tenant_id).run()
+  // Mettre à jour le statut
+  const updateData: any = { statut: body.statut, updated_at: now }
+  if (body.livreur_id) updateData.livreur_id = body.livreur_id
 
-  await c.env.DB.prepare(`
-    INSERT INTO commandes_historique (id, commande_id, ancien_statut, nouveau_statut, timestamp, source, note)
-    VALUES (?, ?, ?, ?, ?, 'restaurant', ?)
-  `).bind(crypto.randomUUID(), commandeId, commande.statut, body.statut, now, body.note ?? null).run()
+  const { error: updateError } = await supabase
+    .from('commandes')
+    .update(updateData)
+    .eq('id', commandeId)
+    .eq('tenant_id', auth.tenant_id)
+
+  if (updateError) return c.json({ error: 'Erreur mise à jour statut.', detail: updateError.message }, 500)
+
+  // Insérer dans historique (avec admin client pour bypasser RLS si besoin)
+  const adminClient = createSupabaseAdminClient(c.env)
+  await adminClient
+    .from('commandes_historique')
+    .insert({
+      id: crypto.randomUUID(),
+      commande_id: commandeId,
+      ancien_statut: commande.statut,
+      nouveau_statut: body.statut,
+      timestamp: now,
+      source: 'restaurant',
+      note: body.note ?? null
+    })
 
   return c.json({ success: true, statut: body.statut })
 })
@@ -127,23 +145,25 @@ dashboardRouter.get('/commandes/export-csv', async (c) => {
   const dateDebut = c.req.query('date_debut') ?? new Date(Date.now() - 30 * 86400000).toISOString().split('T')[0]
   const dateFin = c.req.query('date_fin') ?? new Date().toISOString().split('T')[0]
 
-  const commandes = await c.env.DB.prepare(`
-    SELECT id, client_nom, client_telephone, client_adresse,
-           items_json, montant_total, frais_livraison, mode_paiement,
-           statut, token_suivi, notes, created_at
-    FROM commandes
-    WHERE tenant_id = ? AND deleted_at IS NULL
-      AND date(created_at) >= ? AND date(created_at) <= ?
-    ORDER BY created_at DESC
-    LIMIT 5000
-  `).bind(auth.tenant_id, dateDebut, dateFin).all<any>()
+  const supabase = createSupabaseClientWithToken(c.env, auth.token)
 
-  // Construire CSV
+  const { data: commandes, error } = await supabase
+    .from('commandes')
+    .select('id, client_nom, client_telephone, client_adresse, items_json, montant_total, frais_livraison, mode_paiement, statut, token_suivi, notes, created_at')
+    .eq('tenant_id', auth.tenant_id)
+    .is('deleted_at', null)
+    .gte('created_at', `${dateDebut}T00:00:00Z`)
+    .lte('created_at', `${dateFin}T23:59:59Z`)
+    .order('created_at', { ascending: false })
+    .limit(5000)
+
+  if (error) return c.json({ error: 'Erreur export CSV.', detail: error.message }, 500)
+
   const headers = ['ID', 'Date', 'Client', 'Téléphone', 'Adresse', 'Montant (FCFA)', 'Frais livraison', 'Paiement', 'Statut', 'Produits', 'Notes', 'Token suivi']
-  const rows = commandes.results.map(cmd => {
+  const rows = (commandes ?? []).map(cmd => {
     let produits = ''
     try {
-      const items = JSON.parse(cmd.items_json)
+      const items = typeof cmd.items_json === 'string' ? JSON.parse(cmd.items_json) : cmd.items_json
       produits = items.map((it: any) => `${it.nom} x${it.quantite}`).join(' | ')
     } catch {}
     return [
@@ -159,7 +179,7 @@ dashboardRouter.get('/commandes/export-csv', async (c) => {
       produits,
       cmd.notes ?? '',
       cmd.token_suivi
-    ].map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')
+    ].map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')
   })
 
   const csv = [headers.join(','), ...rows].join('\n')
@@ -180,79 +200,96 @@ dashboardRouter.get('/stats', async (c) => {
   const auth = await verifyAuth(c)
   if (!auth) return c.json({ error: 'Non authentifié.' }, 401)
 
+  const supabase = createSupabaseClientWithToken(c.env, auth.token)
+
   const today = new Date().toISOString().split('T')[0]
   const monthStart = today.substring(0, 7) + '-01'
+  const thirtyDaysAgo = new Date(Date.now() - 29 * 86400000).toISOString().split('T')[0]
 
-  const [statToday, statMonth, statTaux, statsJours, topProduits, caParStatut] = await Promise.all([
-    c.env.DB.prepare(`
-      SELECT COUNT(*) as cnt, COALESCE(SUM(montant_total), 0) as total
-      FROM commandes WHERE tenant_id = ? AND date(created_at) = ? AND deleted_at IS NULL
-    `).bind(auth.tenant_id, today).first<{ cnt: number; total: number }>(),
+  // SUPABASE — toutes les stats sur commandes (APPLICATION DATA)
+  const [
+    { data: allCommandes },
+    { data: todayCommandes },
+    { data: monthCommandes },
+    { data: last30Days },
+    { data: nbProduits }
+  ] = await Promise.all([
+    supabase
+      .from('commandes')
+      .select('statut, montant_total')
+      .eq('tenant_id', auth.tenant_id)
+      .is('deleted_at', null),
 
-    c.env.DB.prepare(`
-      SELECT COUNT(*) as cnt, COALESCE(SUM(montant_total), 0) as total
-      FROM commandes
-      WHERE tenant_id = ? AND date(created_at) >= ? AND deleted_at IS NULL
-    `).bind(auth.tenant_id, monthStart).first<{ cnt: number; total: number }>(),
+    supabase
+      .from('commandes')
+      .select('montant_total')
+      .eq('tenant_id', auth.tenant_id)
+      .is('deleted_at', null)
+      .gte('created_at', `${today}T00:00:00Z`)
+      .lte('created_at', `${today}T23:59:59Z`),
 
-    c.env.DB.prepare(`
-      SELECT 
-        COUNT(*) as total,
-        SUM(CASE WHEN statut = 'livree' THEN 1 ELSE 0 END) as livrees,
-        SUM(CASE WHEN statut = 'annulee' THEN 1 ELSE 0 END) as annulees
-      FROM commandes WHERE tenant_id = ? AND deleted_at IS NULL
-    `).bind(auth.tenant_id).first<{ total: number; livrees: number; annulees: number }>(),
+    supabase
+      .from('commandes')
+      .select('montant_total')
+      .eq('tenant_id', auth.tenant_id)
+      .is('deleted_at', null)
+      .gte('created_at', `${monthStart}T00:00:00Z`),
 
-    c.env.DB.prepare(`
-      SELECT date(created_at) as jour, COUNT(*) as cnt, COALESCE(SUM(montant_total), 0) as ca
-      FROM commandes WHERE tenant_id = ? AND date(created_at) >= date('now', '-29 days') AND deleted_at IS NULL
-      GROUP BY date(created_at) ORDER BY jour ASC
-    `).bind(auth.tenant_id).all<{ jour: string; cnt: number; ca: number }>(),
+    supabase
+      .from('commandes')
+      .select('created_at, montant_total')
+      .eq('tenant_id', auth.tenant_id)
+      .is('deleted_at', null)
+      .gte('created_at', `${thirtyDaysAgo}T00:00:00Z`)
+      .order('created_at', { ascending: true }),
 
-    // Top 5 produits (approximation via parsing items_json non possible en SQL pur — retourner nb commandes par jour)
-    c.env.DB.prepare(`
-      SELECT statut, COUNT(*) as cnt FROM commandes
-      WHERE tenant_id = ? AND deleted_at IS NULL
-      GROUP BY statut
-    `).bind(auth.tenant_id).all<{ statut: string; cnt: number }>(),
-
-    c.env.DB.prepare(`
-      SELECT COUNT(*) as nb_produits FROM produits WHERE tenant_id = ? AND deleted_at IS NULL
-    `).bind(auth.tenant_id).first<{ nb_produits: number }>()
+    supabase
+      .from('produits')
+      .select('id', { count: 'exact', head: true })
+      .eq('tenant_id', auth.tenant_id)
+      .is('deleted_at', null)
   ])
 
-  // Séries 30 jours
+  // Calculs stats
+  const caToday = (todayCommandes ?? []).reduce((s, c) => s + (c.montant_total ?? 0), 0)
+  const caMonth = (monthCommandes ?? []).reduce((s, c) => s + (c.montant_total ?? 0), 0)
+
+  const totalAll = (allCommandes ?? []).length
+  const livrees = (allCommandes ?? []).filter(c => c.statut === 'livree').length
+  const annulees = (allCommandes ?? []).filter(c => c.statut === 'annulee').length
+  const statutsMap: Record<string, number> = {}
+  for (const c of (allCommandes ?? [])) {
+    statutsMap[c.statut] = (statutsMap[c.statut] ?? 0) + 1
+  }
+
+  // Série 30 jours
   const labels: string[] = []
   const values: number[] = []
   const caValues: number[] = []
-  const mapJours = new Map(statsJours.results.map(r => [r.jour, { cnt: r.cnt, ca: r.ca }]))
+  const dayMap = new Map<string, { cnt: number; ca: number }>()
+  for (const cmd of (last30Days ?? [])) {
+    const jour = cmd.created_at.split('T')[0]
+    const prev = dayMap.get(jour) ?? { cnt: 0, ca: 0 }
+    dayMap.set(jour, { cnt: prev.cnt + 1, ca: prev.ca + (cmd.montant_total ?? 0) })
+  }
   for (let i = 29; i >= 0; i--) {
     const d = new Date()
     d.setDate(d.getDate() - i)
     const key = d.toISOString().split('T')[0]
     labels.push(key.slice(5))
-    const jour = mapJours.get(key)
+    const jour = dayMap.get(key)
     values.push(jour?.cnt ?? 0)
     caValues.push(jour?.ca ?? 0)
   }
 
-  const taux = statTaux && statTaux.total > 0
-    ? Math.round((statTaux.livrees / statTaux.total) * 100) : 0
-  const tauxAnnulation = statTaux && statTaux.total > 0
-    ? Math.round((statTaux.annulees / statTaux.total) * 100) : 0
-
-  // Répartition par statut
-  const statutsMap: Record<string, number> = {}
-  for (const s of (topProduits.results || [])) { statutsMap[s.statut] = s.cnt }
-
   return c.json({
-    today: statToday?.cnt ?? 0,
-    ca_today: statToday?.total ?? 0,
-    month: statMonth?.cnt ?? 0,
-    ca_month: statMonth?.total ?? 0,
-    taux_livraison: taux,
-    taux_annulation: tauxAnnulation,
-    nb_produits: (caParStatut as any)?.nb_produits ?? 0,
+    today: todayCommandes?.length ?? 0,
+    ca_today: caToday,
+    month: monthCommandes?.length ?? 0,
+    ca_month: caMonth,
+    taux_livraison: totalAll > 0 ? Math.round((livrees / totalAll) * 100) : 0,
+    taux_annulation: totalAll > 0 ? Math.round((annulees / totalAll) * 100) : 0,
+    nb_produits: nbProduits ?? 0,
     statuts: statutsMap,
     labels,
     values,
@@ -260,38 +297,43 @@ dashboardRouter.get('/stats', async (c) => {
   })
 })
 
-// ---- GET /api/v1/dashboard/menu — Liste catégories + produits ----
+// ---- GET /api/v1/dashboard/menu ----
 dashboardRouter.get('/menu', async (c) => {
   setSecurityHeaders(c)
   const auth = await verifyAuth(c)
   if (!auth) return c.json({ error: 'Non authentifié.' }, 401)
 
-  const categories = await c.env.DB.prepare(`
-    SELECT id, nom, description, ordre_affichage, actif, created_at
-    FROM categories_menu
-    WHERE tenant_id = ?
-    ORDER BY ordre_affichage ASC, nom ASC
-  `).bind(auth.tenant_id).all<any>()
+  const supabase = createSupabaseClientWithToken(c.env, auth.token)
 
-  const produits = await c.env.DB.prepare(`
-    SELECT p.id, p.categorie_id, p.nom, p.description, p.prix,
-           p.photo_url, p.disponible, p.ordre_affichage, p.stock_actuel, p.created_at,
-           c.nom as categorie_nom
-    FROM produits p
-    LEFT JOIN categories_menu c ON c.id = p.categorie_id
-    WHERE p.tenant_id = ? AND p.deleted_at IS NULL
-    ORDER BY p.ordre_affichage ASC, p.nom ASC
-  `).bind(auth.tenant_id).all<any>()
+  // SUPABASE — catégories + produits (APPLICATION DATA)
+  const [{ data: categories, error: catError }, { data: produits, error: prodError }] = await Promise.all([
+    supabase
+      .from('categories_menu')
+      .select('id, nom, description, ordre_affichage, actif, created_at')
+      .eq('tenant_id', auth.tenant_id)
+      .order('ordre_affichage', { ascending: true }),
 
-  // Regrouper par catégorie
+    supabase
+      .from('produits')
+      .select('id, categorie_id, nom, description, prix, photo_url, disponible, ordre_affichage, stock_actuel, created_at, categories_menu!inner(nom)')
+      .eq('tenant_id', auth.tenant_id)
+      .is('deleted_at', null)
+      .order('ordre_affichage', { ascending: true })
+  ])
+
+  if (catError) return c.json({ error: 'Erreur récupération menu.', detail: catError.message }, 500)
+
   const produitsByCategorie = new Map<string, any[]>()
-  for (const p of produits.results) {
+  for (const p of (produits ?? [])) {
+    const categorie_nom = (p.categories_menu as any)?.nom ?? ''
+    const produitFormatted = { ...p, categorie_nom }
+    delete produitFormatted.categories_menu
     const list = produitsByCategorie.get(p.categorie_id) ?? []
-    list.push(p)
+    list.push(produitFormatted)
     produitsByCategorie.set(p.categorie_id, list)
   }
 
-  const menuComplet = categories.results.map(cat => ({
+  const menuComplet = (categories ?? []).map(cat => ({
     ...cat,
     produits: produitsByCategorie.get(cat.id) ?? []
   }))
@@ -299,8 +341,8 @@ dashboardRouter.get('/menu', async (c) => {
   return c.json({
     categories: menuComplet,
     stats: {
-      nb_categories: categories.results.length,
-      nb_produits: produits.results.length
+      nb_categories: categories?.length ?? 0,
+      nb_produits: produits?.length ?? 0
     }
   })
 })
@@ -318,17 +360,31 @@ dashboardRouter.post('/categories', async (c) => {
     return c.json({ error: 'Nom de catégorie invalide (2 caractères minimum).' }, 422)
   }
 
-  const count = await c.env.DB
-    .prepare('SELECT COUNT(*) as cnt FROM categories_menu WHERE tenant_id = ?')
-    .bind(auth.tenant_id).first<{ cnt: number }>()
+  const supabase = createSupabaseClientWithToken(c.env, auth.token)
+
+  // Compter les catégories existantes pour l'ordre
+  const { count } = await supabase
+    .from('categories_menu')
+    .select('id', { count: 'exact', head: true })
+    .eq('tenant_id', auth.tenant_id)
 
   const catId = crypto.randomUUID()
   const now = new Date().toISOString()
 
-  await c.env.DB.prepare(`
-    INSERT INTO categories_menu (id, tenant_id, nom, description, ordre_affichage, actif, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, 1, ?, ?)
-  `).bind(catId, auth.tenant_id, body.nom.trim(), body.description?.trim() ?? null, (count?.cnt ?? 0), now, now).run()
+  const { error } = await supabase
+    .from('categories_menu')
+    .insert({
+      id: catId,
+      tenant_id: auth.tenant_id,
+      nom: body.nom.trim(),
+      description: body.description?.trim() ?? null,
+      ordre_affichage: count ?? 0,
+      actif: true,
+      created_at: now,
+      updated_at: now
+    })
+
+  if (error) return c.json({ error: 'Erreur création catégorie.', detail: error.message }, 500)
 
   try { if (c.env.KV_CACHE) await c.env.KV_CACHE.delete(`menu:${auth.tenant_slug}`) } catch {}
 
@@ -345,28 +401,30 @@ dashboardRouter.patch('/categories/:id', async (c) => {
   let body: { nom?: string; description?: string; actif?: boolean; ordre_affichage?: number }
   try { body = await c.req.json() } catch { return c.json({ error: 'JSON invalide.' }, 400) }
 
-  const cat = await c.env.DB
-    .prepare('SELECT id FROM categories_menu WHERE id = ? AND tenant_id = ?')
-    .bind(catId, auth.tenant_id).first()
+  const supabase = createSupabaseClientWithToken(c.env, auth.token)
+
+  const { data: cat } = await supabase
+    .from('categories_menu')
+    .select('id')
+    .eq('id', catId)
+    .eq('tenant_id', auth.tenant_id)
+    .single()
 
   if (!cat) return c.json({ error: 'Catégorie introuvable.' }, 404)
 
-  const now = new Date().toISOString()
-  await c.env.DB.prepare(`
-    UPDATE categories_menu SET
-      nom = COALESCE(?, nom),
-      description = COALESCE(?, description),
-      actif = COALESCE(?, actif),
-      ordre_affichage = COALESCE(?, ordre_affichage),
-      updated_at = ?
-    WHERE id = ? AND tenant_id = ?
-  `).bind(
-    body.nom?.trim() ?? null,
-    body.description?.trim() ?? null,
-    body.actif !== undefined ? (body.actif ? 1 : 0) : null,
-    body.ordre_affichage ?? null,
-    now, catId, auth.tenant_id
-  ).run()
+  const updateData: any = { updated_at: new Date().toISOString() }
+  if (body.nom !== undefined) updateData.nom = body.nom.trim()
+  if (body.description !== undefined) updateData.description = body.description?.trim() ?? null
+  if (body.actif !== undefined) updateData.actif = body.actif
+  if (body.ordre_affichage !== undefined) updateData.ordre_affichage = body.ordre_affichage
+
+  const { error } = await supabase
+    .from('categories_menu')
+    .update(updateData)
+    .eq('id', catId)
+    .eq('tenant_id', auth.tenant_id)
+
+  if (error) return c.json({ error: 'Erreur mise à jour catégorie.', detail: error.message }, 500)
 
   try { if (c.env.KV_CACHE) await c.env.KV_CACHE.delete(`menu:${auth.tenant_slug}`) } catch {}
 
@@ -380,18 +438,27 @@ dashboardRouter.delete('/categories/:id', async (c) => {
   if (!auth) return c.json({ error: 'Non authentifié.' }, 401)
 
   const catId = c.req.param('id')
+  const supabase = createSupabaseClientWithToken(c.env, auth.token)
 
   // Vérifier si des produits existent dans cette catégorie
-  const prodCount = await c.env.DB
-    .prepare('SELECT COUNT(*) as cnt FROM produits WHERE categorie_id = ? AND tenant_id = ? AND deleted_at IS NULL')
-    .bind(catId, auth.tenant_id).first<{ cnt: number }>()
+  const { count: prodCount } = await supabase
+    .from('produits')
+    .select('id', { count: 'exact', head: true })
+    .eq('categorie_id', catId)
+    .eq('tenant_id', auth.tenant_id)
+    .is('deleted_at', null)
 
-  if ((prodCount?.cnt ?? 0) > 0) {
+  if ((prodCount ?? 0) > 0) {
     return c.json({ error: 'Impossible de supprimer : la catégorie contient des produits.' }, 409)
   }
 
-  await c.env.DB.prepare('DELETE FROM categories_menu WHERE id = ? AND tenant_id = ?')
-    .bind(catId, auth.tenant_id).run()
+  const { error } = await supabase
+    .from('categories_menu')
+    .delete()
+    .eq('id', catId)
+    .eq('tenant_id', auth.tenant_id)
+
+  if (error) return c.json({ error: 'Erreur suppression catégorie.', detail: error.message }, 500)
 
   try { if (c.env.KV_CACHE) await c.env.KV_CACHE.delete(`menu:${auth.tenant_slug}`) } catch {}
 
@@ -414,30 +481,45 @@ dashboardRouter.post('/produits', async (c) => {
     return c.json({ error: 'Prix invalide.' }, 422)
   }
 
-  const cat = await c.env.DB
-    .prepare('SELECT id FROM categories_menu WHERE id = ? AND tenant_id = ?')
-    .bind(body.categorie_id, auth.tenant_id).first()
+  const supabase = createSupabaseClientWithToken(c.env, auth.token)
+
+  // Vérifier que la catégorie appartient bien au tenant
+  const { data: cat } = await supabase
+    .from('categories_menu')
+    .select('id')
+    .eq('id', body.categorie_id)
+    .eq('tenant_id', auth.tenant_id)
+    .single()
 
   if (!cat) return c.json({ error: 'Catégorie introuvable.' }, 404)
 
-  const count = await c.env.DB
-    .prepare('SELECT COUNT(*) as cnt FROM produits WHERE categorie_id = ? AND tenant_id = ?')
-    .bind(body.categorie_id, auth.tenant_id).first<{ cnt: number }>()
+  // Compter les produits de cette catégorie pour l'ordre
+  const { count } = await supabase
+    .from('produits')
+    .select('id', { count: 'exact', head: true })
+    .eq('categorie_id', body.categorie_id)
+    .eq('tenant_id', auth.tenant_id)
 
   const prodId = crypto.randomUUID()
   const now = new Date().toISOString()
 
-  await c.env.DB.prepare(`
-    INSERT INTO produits (id, tenant_id, categorie_id, nom, description, prix, photo_url, disponible, ordre_affichage, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).bind(
-    prodId, auth.tenant_id, body.categorie_id,
-    body.nom.trim(), body.description?.trim() ?? null,
-    body.prix,
-    body.photo_url ?? null,
-    body.disponible !== false ? 1 : 0,
-    count?.cnt ?? 0, now, now
-  ).run()
+  const { error } = await supabase
+    .from('produits')
+    .insert({
+      id: prodId,
+      tenant_id: auth.tenant_id,
+      categorie_id: body.categorie_id,
+      nom: body.nom.trim(),
+      description: body.description?.trim() ?? null,
+      prix: body.prix,
+      photo_url: body.photo_url ?? null,
+      disponible: body.disponible !== false,
+      ordre_affichage: count ?? 0,
+      created_at: now,
+      updated_at: now
+    })
+
+  if (error) return c.json({ error: 'Erreur création produit.', detail: error.message }, 500)
 
   try { if (c.env.KV_CACHE) await c.env.KV_CACHE.delete(`menu:${auth.tenant_slug}`) } catch {}
 
@@ -454,9 +536,15 @@ dashboardRouter.patch('/produits/:id', async (c) => {
   let body: { nom?: string; description?: string; prix?: number; disponible?: boolean; photo_url?: string | null; ordre_affichage?: number; categorie_id?: string }
   try { body = await c.req.json() } catch { return c.json({ error: 'JSON invalide.' }, 400) }
 
-  const prod = await c.env.DB
-    .prepare('SELECT id FROM produits WHERE id = ? AND tenant_id = ? AND deleted_at IS NULL')
-    .bind(prodId, auth.tenant_id).first()
+  const supabase = createSupabaseClientWithToken(c.env, auth.token)
+
+  const { data: prod } = await supabase
+    .from('produits')
+    .select('id')
+    .eq('id', prodId)
+    .eq('tenant_id', auth.tenant_id)
+    .is('deleted_at', null)
+    .single()
 
   if (!prod) return c.json({ error: 'Produit introuvable.' }, 404)
 
@@ -464,28 +552,22 @@ dashboardRouter.patch('/produits/:id', async (c) => {
     return c.json({ error: 'Prix invalide.' }, 422)
   }
 
-  const now = new Date().toISOString()
-  await c.env.DB.prepare(`
-    UPDATE produits SET
-      nom = COALESCE(?, nom),
-      description = COALESCE(?, description),
-      prix = COALESCE(?, prix),
-      photo_url = COALESCE(?, photo_url),
-      disponible = COALESCE(?, disponible),
-      ordre_affichage = COALESCE(?, ordre_affichage),
-      categorie_id = COALESCE(?, categorie_id),
-      updated_at = ?
-    WHERE id = ? AND tenant_id = ?
-  `).bind(
-    body.nom?.trim() ?? null,
-    body.description?.trim() ?? null,
-    body.prix ?? null,
-    body.photo_url !== undefined ? (body.photo_url ?? null) : null,
-    body.disponible !== undefined ? (body.disponible ? 1 : 0) : null,
-    body.ordre_affichage ?? null,
-    body.categorie_id ?? null,
-    now, prodId, auth.tenant_id
-  ).run()
+  const updateData: any = { updated_at: new Date().toISOString() }
+  if (body.nom !== undefined) updateData.nom = body.nom.trim()
+  if (body.description !== undefined) updateData.description = body.description?.trim() ?? null
+  if (body.prix !== undefined) updateData.prix = body.prix
+  if (body.photo_url !== undefined) updateData.photo_url = body.photo_url
+  if (body.disponible !== undefined) updateData.disponible = body.disponible
+  if (body.ordre_affichage !== undefined) updateData.ordre_affichage = body.ordre_affichage
+  if (body.categorie_id !== undefined) updateData.categorie_id = body.categorie_id
+
+  const { error } = await supabase
+    .from('produits')
+    .update(updateData)
+    .eq('id', prodId)
+    .eq('tenant_id', auth.tenant_id)
+
+  if (error) return c.json({ error: 'Erreur mise à jour produit.', detail: error.message }, 500)
 
   try { if (c.env.KV_CACHE) await c.env.KV_CACHE.delete(`menu:${auth.tenant_slug}`) } catch {}
 
@@ -499,34 +581,45 @@ dashboardRouter.delete('/produits/:id', async (c) => {
   if (!auth) return c.json({ error: 'Non authentifié.' }, 401)
 
   const prodId = c.req.param('id')
-  const now = new Date().toISOString()
+  const supabase = createSupabaseClientWithToken(c.env, auth.token)
 
   // Soft delete
-  const result = await c.env.DB.prepare(`
-    UPDATE produits SET deleted_at = ?, updated_at = ?
-    WHERE id = ? AND tenant_id = ? AND deleted_at IS NULL
-  `).bind(now, now, prodId, auth.tenant_id).run()
+  const { error, data } = await supabase
+    .from('produits')
+    .update({ deleted_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+    .eq('id', prodId)
+    .eq('tenant_id', auth.tenant_id)
+    .is('deleted_at', null)
+    .select('id')
 
-  if (result.meta.changes === 0) return c.json({ error: 'Produit introuvable.' }, 404)
+  if (error) return c.json({ error: 'Erreur suppression produit.', detail: error.message }, 500)
+  if (!data || data.length === 0) return c.json({ error: 'Produit introuvable.' }, 404)
 
   try { if (c.env.KV_CACHE) await c.env.KV_CACHE.delete(`menu:${auth.tenant_slug}`) } catch {}
 
   return c.json({ success: true })
 })
 
-// ---- GET/POST /api/v1/dashboard/livreurs ----
+// ---- GET /api/v1/dashboard/livreurs ----
 dashboardRouter.get('/livreurs', async (c) => {
   setSecurityHeaders(c)
   const auth = await verifyAuth(c)
   if (!auth) return c.json({ error: 'Non authentifié.' }, 401)
 
-  const livreurs = await c.env.DB
-    .prepare('SELECT id, nom, whatsapp_number, actif, created_at FROM livreurs WHERE tenant_id = ? ORDER BY nom ASC')
-    .bind(auth.tenant_id).all()
+  const supabase = createSupabaseClientWithToken(c.env, auth.token)
 
-  return c.json({ livreurs: livreurs.results })
+  const { data: livreurs, error } = await supabase
+    .from('livreurs')
+    .select('id, nom, whatsapp_number, actif, created_at')
+    .eq('tenant_id', auth.tenant_id)
+    .order('nom', { ascending: true })
+
+  if (error) return c.json({ error: 'Erreur récupération livreurs.', detail: error.message }, 500)
+
+  return c.json({ livreurs: livreurs ?? [] })
 })
 
+// ---- POST /api/v1/dashboard/livreurs ----
 dashboardRouter.post('/livreurs', async (c) => {
   setSecurityHeaders(c)
   const auth = await verifyAuth(c)
@@ -540,76 +633,110 @@ dashboardRouter.post('/livreurs', async (c) => {
     return c.json({ error: 'Numéro WhatsApp invalide.' }, 422)
   }
 
+  const supabase = createSupabaseClientWithToken(c.env, auth.token)
   const livId = crypto.randomUUID()
   const now = new Date().toISOString()
 
-  await c.env.DB.prepare(`
-    INSERT INTO livreurs (id, tenant_id, nom, whatsapp_number, actif, created_at, updated_at)
-    VALUES (?, ?, ?, ?, 1, ?, ?)
-  `).bind(livId, auth.tenant_id, body.nom.trim(), body.whatsapp_number.replace(/\s/g, ''), now, now).run()
+  const { error } = await supabase
+    .from('livreurs')
+    .insert({
+      id: livId,
+      tenant_id: auth.tenant_id,
+      nom: body.nom.trim(),
+      whatsapp_number: body.whatsapp_number.replace(/\s/g, ''),
+      actif: true,
+      created_at: now,
+      updated_at: now
+    })
+
+  if (error) return c.json({ error: 'Erreur création livreur.', detail: error.message }, 500)
 
   return c.json({ success: true, id: livId }, 201)
 })
 
+// ---- DELETE /api/v1/dashboard/livreurs/:id ----
 dashboardRouter.delete('/livreurs/:id', async (c) => {
   setSecurityHeaders(c)
   const auth = await verifyAuth(c)
   if (!auth) return c.json({ error: 'Non authentifié.' }, 401)
 
   const livId = c.req.param('id')
-  await c.env.DB.prepare('DELETE FROM livreurs WHERE id = ? AND tenant_id = ?')
-    .bind(livId, auth.tenant_id).run()
+  const supabase = createSupabaseClientWithToken(c.env, auth.token)
+
+  const { error } = await supabase
+    .from('livreurs')
+    .delete()
+    .eq('id', livId)
+    .eq('tenant_id', auth.tenant_id)
+
+  if (error) return c.json({ error: 'Erreur suppression livreur.', detail: error.message }, 500)
 
   return c.json({ success: true })
 })
 
-// ---- PATCH /api/v1/dashboard/livreurs/:id — Activer / désactiver un livreur ----
+// ---- PATCH /api/v1/dashboard/livreurs/:id — Activer / désactiver ----
 dashboardRouter.patch('/livreurs/:id', async (c) => {
   setSecurityHeaders(c)
   const auth = await verifyAuth(c)
   if (!auth) return c.json({ error: 'Non authentifié.' }, 401)
 
   const livId = c.req.param('id')
-  let body: { actif?: number }
+  let body: { actif?: number | boolean }
   try { body = await c.req.json() } catch { return c.json({ error: 'JSON invalide.' }, 400) }
 
-  if (body.actif === undefined || ![0, 1].includes(body.actif)) {
-    return c.json({ error: 'Champ actif requis (0 ou 1).' }, 422)
+  if (body.actif === undefined) {
+    return c.json({ error: 'Champ actif requis (0/1 ou true/false).' }, 422)
   }
 
+  // Normaliser actif en boolean
+  const actifBool = body.actif === 1 || body.actif === true
+
+  const supabase = createSupabaseClientWithToken(c.env, auth.token)
+
   // Vérifier appartenance au tenant
-  const livreur = await c.env.DB
-    .prepare('SELECT id FROM livreurs WHERE id = ? AND tenant_id = ?')
-    .bind(livId, auth.tenant_id).first()
+  const { data: livreur } = await supabase
+    .from('livreurs')
+    .select('id')
+    .eq('id', livId)
+    .eq('tenant_id', auth.tenant_id)
+    .single()
 
   if (!livreur) return c.json({ error: 'Livreur introuvable.' }, 404)
 
-  const now = new Date().toISOString()
-  await c.env.DB.prepare('UPDATE livreurs SET actif = ?, updated_at = ? WHERE id = ? AND tenant_id = ?')
-    .bind(body.actif, now, livId, auth.tenant_id).run()
+  const { error } = await supabase
+    .from('livreurs')
+    .update({ actif: actifBool, updated_at: new Date().toISOString() })
+    .eq('id', livId)
+    .eq('tenant_id', auth.tenant_id)
 
-  return c.json({ success: true, actif: body.actif })
+  if (error) return c.json({ error: 'Erreur mise à jour livreur.', detail: error.message }, 500)
+
+  return c.json({ success: true, actif: actifBool ? 1 : 0 })
 })
 
-// ---- GET /api/v1/dashboard/pdv — Récupérer point de vente ----
+// ---- GET /api/v1/dashboard/pdv ----
 dashboardRouter.get('/pdv', async (c) => {
   setSecurityHeaders(c)
   const auth = await verifyAuth(c)
   if (!auth) return c.json({ error: 'Non authentifié.' }, 401)
 
-  const pdv = await c.env.DB.prepare(`
-    SELECT id, nom, adresse, latitude, longitude,
-           tarif_livraison_base, tarif_par_km, horaires, actif
-    FROM points_de_vente
-    WHERE tenant_id = ? AND actif = 1
-    ORDER BY created_at ASC
-    LIMIT 1
-  `).bind(auth.tenant_id).first<any>()
+  const supabase = createSupabaseClientWithToken(c.env, auth.token)
+
+  const { data: pdv, error } = await supabase
+    .from('points_de_vente')
+    .select('id, nom, adresse, latitude, longitude, tarif_livraison_base, tarif_par_km, horaires, actif')
+    .eq('tenant_id', auth.tenant_id)
+    .eq('actif', true)
+    .order('created_at', { ascending: true })
+    .limit(1)
+    .maybeSingle()
+
+  if (error) return c.json({ error: 'Erreur récupération PDV.', detail: error.message }, 500)
 
   return c.json({ pdv: pdv ?? null })
 })
 
-// ---- PATCH /api/v1/dashboard/pdv — Configurer point de vente ----
+// ---- PATCH /api/v1/dashboard/pdv ----
 dashboardRouter.patch('/pdv', async (c) => {
   setSecurityHeaders(c)
   const auth = await verifyAuth(c)
@@ -623,7 +750,6 @@ dashboardRouter.patch('/pdv', async (c) => {
   }
   try { body = await c.req.json() } catch { return c.json({ error: 'JSON invalide.' }, 400) }
 
-  // Valider coordonnées si fournies
   if (body.latitude !== undefined && body.latitude !== null) {
     if (typeof body.latitude !== 'number' || body.latitude < -90 || body.latitude > 90) {
       return c.json({ error: 'Latitude invalide (-90 à 90).' }, 422)
@@ -635,50 +761,57 @@ dashboardRouter.patch('/pdv', async (c) => {
     }
   }
 
+  const supabase = createSupabaseClientWithToken(c.env, auth.token)
   const now = new Date().toISOString()
 
   // Vérifier si PDV existe
-  const existingPdv = await c.env.DB
-    .prepare('SELECT id FROM points_de_vente WHERE tenant_id = ? LIMIT 1')
-    .bind(auth.tenant_id).first<{ id: string }>()
+  const { data: existingPdv } = await supabase
+    .from('points_de_vente')
+    .select('id')
+    .eq('tenant_id', auth.tenant_id)
+    .limit(1)
+    .maybeSingle()
 
   if (!existingPdv) {
     // Créer un nouveau PDV
     const pdvId = crypto.randomUUID()
-    await c.env.DB.prepare(`
-      INSERT INTO points_de_vente (id, tenant_id, nom, adresse, latitude, longitude,
-        tarif_livraison_base, tarif_par_km, horaires, actif, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
-    `).bind(
-      pdvId, auth.tenant_id,
-      body.nom ?? 'Mon restaurant', body.adresse ?? '',
-      body.latitude ?? null, body.longitude ?? null,
-      body.tarif_livraison_base ?? 500, body.tarif_par_km ?? 200,
-      body.horaires ?? null, now, now
-    ).run()
+    const { error } = await supabase
+      .from('points_de_vente')
+      .insert({
+        id: pdvId,
+        tenant_id: auth.tenant_id,
+        nom: body.nom ?? 'Mon restaurant',
+        adresse: body.adresse ?? '',
+        latitude: body.latitude ?? null,
+        longitude: body.longitude ?? null,
+        tarif_livraison_base: body.tarif_livraison_base ?? 500,
+        tarif_par_km: body.tarif_par_km ?? 200,
+        horaires: body.horaires ?? null,
+        actif: true,
+        created_at: now,
+        updated_at: now
+      })
 
-    // Mettre à jour la commande avec le PDV
+    if (error) return c.json({ error: 'Erreur création PDV.', detail: error.message }, 500)
     try { if (c.env.KV_CACHE) await c.env.KV_CACHE.delete(`tenant:${auth.tenant_slug}`) } catch {}
     return c.json({ success: true, pdv_id: pdvId, created: true })
   }
 
-  await c.env.DB.prepare(`
-    UPDATE points_de_vente SET
-      nom = COALESCE(?, nom),
-      adresse = COALESCE(?, adresse),
-      latitude = COALESCE(?, latitude),
-      longitude = COALESCE(?, longitude),
-      tarif_livraison_base = COALESCE(?, tarif_livraison_base),
-      tarif_par_km = COALESCE(?, tarif_par_km),
-      horaires = COALESCE(?, horaires),
-      updated_at = ?
-    WHERE tenant_id = ?
-  `).bind(
-    body.nom?.trim() ?? null, body.adresse?.trim() ?? null,
-    body.latitude ?? null, body.longitude ?? null,
-    body.tarif_livraison_base ?? null, body.tarif_par_km ?? null,
-    body.horaires ?? null, now, auth.tenant_id
-  ).run()
+  const updateData: any = { updated_at: now }
+  if (body.nom !== undefined) updateData.nom = body.nom.trim()
+  if (body.adresse !== undefined) updateData.adresse = body.adresse.trim()
+  if (body.latitude !== undefined) updateData.latitude = body.latitude
+  if (body.longitude !== undefined) updateData.longitude = body.longitude
+  if (body.tarif_livraison_base !== undefined) updateData.tarif_livraison_base = body.tarif_livraison_base
+  if (body.tarif_par_km !== undefined) updateData.tarif_par_km = body.tarif_par_km
+  if (body.horaires !== undefined) updateData.horaires = body.horaires
+
+  const { error } = await supabase
+    .from('points_de_vente')
+    .update(updateData)
+    .eq('tenant_id', auth.tenant_id)
+
+  if (error) return c.json({ error: 'Erreur mise à jour PDV.', detail: error.message }, 500)
 
   try { if (c.env.KV_CACHE) await c.env.KV_CACHE.delete(`tenant:${auth.tenant_slug}`) } catch {}
 
@@ -702,21 +835,21 @@ dashboardRouter.patch('/apparence', async (c) => {
     return c.json({ error: 'Couleur secondaire invalide (format #RRGGBB).' }, 422)
   }
 
-  const now = new Date().toISOString()
-  await c.env.DB.prepare(`
-    UPDATE tenants SET
-      couleur_primaire = COALESCE(?, couleur_primaire),
-      couleur_secondaire = COALESCE(?, couleur_secondaire),
-      logo_url = COALESCE(?, logo_url),
-      banniere_url = COALESCE(?, banniere_url),
-      updated_at = ?
-    WHERE id = ?
-  `).bind(
-    body.couleur_primaire ?? null, body.couleur_secondaire ?? null,
-    body.logo_url !== undefined ? body.logo_url : null,
-    body.banniere_url !== undefined ? body.banniere_url : null,
-    now, auth.tenant_id
-  ).run()
+  const supabase = createSupabaseClientWithToken(c.env, auth.token)
+
+  const updateData: any = { updated_at: new Date().toISOString() }
+  if (body.couleur_primaire !== undefined) updateData.couleur_primaire = body.couleur_primaire
+  if (body.couleur_secondaire !== undefined) updateData.couleur_secondaire = body.couleur_secondaire
+  if (body.logo_url !== undefined) updateData.logo_url = body.logo_url
+  if (body.banniere_url !== undefined) updateData.banniere_url = body.banniere_url
+
+  // SUPABASE — mise à jour tenants (APPLICATION DATA)
+  const { error } = await supabase
+    .from('tenants')
+    .update(updateData)
+    .eq('id', auth.tenant_id)
+
+  if (error) return c.json({ error: 'Erreur mise à jour apparence.', detail: error.message }, 500)
 
   try { if (c.env.KV_CACHE) await c.env.KV_CACHE.delete(`tenant:${auth.tenant_slug}`) } catch {}
 
@@ -737,74 +870,105 @@ dashboardRouter.patch('/parametres', async (c) => {
     return c.json({ error: 'Numéro WhatsApp invalide.' }, 422)
   }
 
-  const now = new Date().toISOString()
-  await c.env.DB.prepare(`
-    UPDATE tenants SET
-      nom = ?,
-      whatsapp_number = COALESCE(?, whatsapp_number),
-      domaine_perso = COALESCE(?, domaine_perso),
-      updated_at = ?
-    WHERE id = ?
-  `).bind(body.nom.trim(), body.whatsapp_number ?? null, body.domaine_perso ?? null, now, auth.tenant_id).run()
+  const supabase = createSupabaseClientWithToken(c.env, auth.token)
+
+  const updateData: any = { nom: body.nom.trim(), updated_at: new Date().toISOString() }
+  if (body.whatsapp_number !== undefined) updateData.whatsapp_number = body.whatsapp_number
+  if (body.domaine_perso !== undefined) updateData.domaine_perso = body.domaine_perso
+
+  // SUPABASE — mise à jour tenants (APPLICATION DATA)
+  const { error } = await supabase
+    .from('tenants')
+    .update(updateData)
+    .eq('id', auth.tenant_id)
+
+  if (error) return c.json({ error: 'Erreur mise à jour paramètres.', detail: error.message }, 500)
 
   try { if (c.env.KV_CACHE) await c.env.KV_CACHE.delete(`tenant:${auth.tenant_slug}`) } catch {}
 
   return c.json({ success: true })
 })
 
-// ---- GET /api/v1/dashboard/profil — Info tenant + plan actuel ----
+// ---- GET /api/v1/dashboard/profil ----
 dashboardRouter.get('/profil', async (c) => {
   setSecurityHeaders(c)
   const auth = await verifyAuth(c)
   if (!auth) return c.json({ error: 'Non authentifié.' }, 401)
 
-  const tenant = await c.env.DB.prepare(`
-    SELECT t.id, t.nom, t.slug, t.logo_url, t.banniere_url,
-           t.couleur_primaire, t.couleur_secondaire,
-           t.whatsapp_number, t.domaine_perso, t.statut, t.created_at,
-           pl.nom as plan_nom, pl.fonctionnalites as plan_features,
-           pl.commandes_incluses, pl.prix_mensuel,
-           pdv.id as pdv_id, pdv.nom as pdv_nom, pdv.adresse as pdv_adresse,
-           pdv.latitude as pdv_latitude, pdv.longitude as pdv_longitude
-    FROM tenants t
-    LEFT JOIN plans pl ON pl.id = t.plan_id
-    LEFT JOIN points_de_vente pdv ON pdv.tenant_id = t.id AND pdv.actif = 1
-    WHERE t.id = ?
-  `).bind(auth.tenant_id).first<any>()
+  const supabase = createSupabaseClientWithToken(c.env, auth.token)
 
-  if (!tenant) return c.json({ error: 'Restaurant introuvable.' }, 404)
+  // SUPABASE — tenant info (APPLICATION DATA)
+  const { data: tenant, error: tenantError } = await supabase
+    .from('tenants')
+    .select('id, nom, slug, logo_url, banniere_url, couleur_primaire, couleur_secondaire, whatsapp_number, domaine_perso, statut, created_at, plan_id')
+    .eq('id', auth.tenant_id)
+    .single()
 
-  // Stats rapides
-  const stats = await c.env.DB.prepare(`
-    SELECT COUNT(*) as total_commandes
-    FROM commandes WHERE tenant_id = ? AND deleted_at IS NULL
-  `).bind(auth.tenant_id).first<{ total_commandes: number }>()
+  if (tenantError || !tenant) return c.json({ error: 'Restaurant introuvable.' }, 404)
+
+  // D1 — plan info (SITE WEB DATA — plans table)
+  let planInfo: any = null
+  if (tenant.plan_id) {
+    try {
+      planInfo = await c.env.DB
+        .prepare('SELECT nom, fonctionnalites, commandes_incluses, prix_mensuel FROM plans WHERE id = ?')
+        .bind(tenant.plan_id)
+        .first()
+    } catch { /* plans table may not exist yet */ }
+  }
+
+  // SUPABASE — PDV info (APPLICATION DATA)
+  const { data: pdv } = await supabase
+    .from('points_de_vente')
+    .select('id, nom, adresse, latitude, longitude')
+    .eq('tenant_id', auth.tenant_id)
+    .eq('actif', true)
+    .limit(1)
+    .maybeSingle()
+
+  // SUPABASE — stats commandes (APPLICATION DATA)
+  const { count: totalCommandes } = await supabase
+    .from('commandes')
+    .select('id', { count: 'exact', head: true })
+    .eq('tenant_id', auth.tenant_id)
+    .is('deleted_at', null)
 
   return c.json({
     ...tenant,
+    plan_nom: planInfo?.nom ?? null,
+    plan_features: planInfo?.fonctionnalites ?? null,
+    commandes_incluses: planInfo?.commandes_incluses ?? null,
+    prix_mensuel: planInfo?.prix_mensuel ?? null,
+    pdv_id: pdv?.id ?? null,
+    pdv_nom: pdv?.nom ?? null,
+    pdv_adresse: pdv?.adresse ?? null,
+    pdv_latitude: pdv?.latitude ?? null,
+    pdv_longitude: pdv?.longitude ?? null,
     boutique_url: `https://monmenu.app/${tenant.slug}`,
-    total_commandes: stats?.total_commandes ?? 0
+    total_commandes: totalCommandes ?? 0
   })
 })
 
-// ---- GET /api/v1/dashboard/codes-promo — Liste codes promo ----
+// ---- GET /api/v1/dashboard/codes-promo ----
 dashboardRouter.get('/codes-promo', async (c) => {
   setSecurityHeaders(c)
   const auth = await verifyAuth(c)
   if (!auth) return c.json({ error: 'Non authentifié.' }, 401)
 
-  const codes = await c.env.DB.prepare(`
-    SELECT id, code, type, valeur, date_debut, date_fin,
-           usage_max, usage_actuel, actif, created_at
-    FROM codes_promo
-    WHERE tenant_id = ?
-    ORDER BY created_at DESC
-  `).bind(auth.tenant_id).all<any>()
+  const supabase = createSupabaseClientWithToken(c.env, auth.token)
 
-  return c.json({ codes: codes.results })
+  const { data: codes, error } = await supabase
+    .from('codes_promo')
+    .select('id, code, type, valeur, date_debut, date_fin, usage_max, usage_actuel, actif, created_at')
+    .eq('tenant_id', auth.tenant_id)
+    .order('created_at', { ascending: false })
+
+  if (error) return c.json({ error: 'Erreur récupération codes promo.', detail: error.message }, 500)
+
+  return c.json({ codes: codes ?? [] })
 })
 
-// ---- POST /api/v1/dashboard/codes-promo — Créer un code promo ----
+// ---- POST /api/v1/dashboard/codes-promo ----
 dashboardRouter.post('/codes-promo', async (c) => {
   setSecurityHeaders(c)
   const auth = await verifyAuth(c)
@@ -826,20 +990,38 @@ dashboardRouter.post('/codes-promo', async (c) => {
     return c.json({ error: 'Pourcentage ne peut dépasser 100.' }, 422)
   }
 
-  // Vérifier unicité
-  const existing = await c.env.DB
-    .prepare('SELECT id FROM codes_promo WHERE tenant_id = ? AND code = ?')
-    .bind(auth.tenant_id, body.code.toUpperCase()).first()
+  const supabase = createSupabaseClientWithToken(c.env, auth.token)
+
+  // Vérifier unicité du code
+  const { data: existing } = await supabase
+    .from('codes_promo')
+    .select('id')
+    .eq('tenant_id', auth.tenant_id)
+    .eq('code', body.code.toUpperCase())
+    .maybeSingle()
+
   if (existing) return c.json({ error: 'Ce code promo existe déjà.' }, 409)
 
   const promoId = crypto.randomUUID()
   const now = new Date().toISOString()
 
-  await c.env.DB.prepare(`
-    INSERT INTO codes_promo (id, tenant_id, code, type, valeur, date_debut, date_fin, usage_max, usage_actuel, actif, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 1, ?)
-  `).bind(promoId, auth.tenant_id, body.code.toUpperCase(), body.type, body.valeur,
-    now, body.date_fin ?? null, body.usage_max ?? null, now).run()
+  const { error } = await supabase
+    .from('codes_promo')
+    .insert({
+      id: promoId,
+      tenant_id: auth.tenant_id,
+      code: body.code.toUpperCase(),
+      type: body.type,
+      valeur: body.valeur,
+      date_debut: now,
+      date_fin: body.date_fin ?? null,
+      usage_max: body.usage_max ?? null,
+      usage_actuel: 0,
+      actif: true,
+      created_at: now
+    })
+
+  if (error) return c.json({ error: 'Erreur création code promo.', detail: error.message }, 500)
 
   return c.json({ success: true, id: promoId, code: body.code.toUpperCase() }, 201)
 })
@@ -851,13 +1033,20 @@ dashboardRouter.delete('/codes-promo/:id', async (c) => {
   if (!auth) return c.json({ error: 'Non authentifié.' }, 401)
 
   const promoId = c.req.param('id')
-  await c.env.DB.prepare('DELETE FROM codes_promo WHERE id = ? AND tenant_id = ?')
-    .bind(promoId, auth.tenant_id).run()
+  const supabase = createSupabaseClientWithToken(c.env, auth.token)
+
+  const { error } = await supabase
+    .from('codes_promo')
+    .delete()
+    .eq('id', promoId)
+    .eq('tenant_id', auth.tenant_id)
+
+  if (error) return c.json({ error: 'Erreur suppression code promo.', detail: error.message }, 500)
 
   return c.json({ success: true })
 })
 
-// ---- POST /api/v1/dashboard/upload-image — Upload image vers R2 ----
+// ---- POST /api/v1/dashboard/upload-image — Upload vers R2 ----
 dashboardRouter.post('/upload-image', async (c) => {
   setSecurityHeaders(c)
   const auth = await verifyAuth(c)
@@ -867,7 +1056,6 @@ dashboardRouter.post('/upload-image', async (c) => {
     return c.json({ error: 'Stockage médias non configuré.' }, 503)
   }
 
-  // Rate limit upload : 20/heure par tenant
   const rateLimit = await checkRateLimit(`upload:${auth.tenant_id}`, 20, 3600000)
   if (!rateLimit.allowed) return c.json({ error: 'Trop de téléversements. Réessayez dans une heure.' }, 429)
 
@@ -881,13 +1069,11 @@ dashboardRouter.post('/upload-image', async (c) => {
   const file = formData.get('file') as File | null
   if (!file) return c.json({ error: 'Fichier manquant (champ "file" requis).' }, 400)
 
-  // Validation type MIME
   const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif']
   if (!allowedTypes.includes(file.type)) {
     return c.json({ error: 'Format non supporté. Utilisez JPEG, PNG, WebP ou GIF.' }, 415)
   }
 
-  // Taille max : 5 MB
   const MAX_SIZE = 5 * 1024 * 1024
   if (file.size > MAX_SIZE) {
     return c.json({ error: 'Fichier trop volumineux (max 5 MB).' }, 413)
@@ -895,7 +1081,6 @@ dashboardRouter.post('/upload-image', async (c) => {
 
   const ext = file.type.split('/')[1].replace('jpeg', 'jpg')
   const key = `${auth.tenant_id}/${Date.now()}-${crypto.randomUUID().slice(0, 8)}.${ext}`
-
   const buffer = await file.arrayBuffer()
 
   await c.env.R2_MEDIA.put(key, buffer, {
@@ -903,26 +1088,30 @@ dashboardRouter.post('/upload-image', async (c) => {
     customMetadata: { tenant_id: auth.tenant_id, uploaded_at: new Date().toISOString() }
   })
 
-  // URL publique (configure ton domaine R2 ou utilise l'API publique)
   const publicUrl = `https://media.monmenu.app/${key}`
 
   return c.json({ success: true, url: publicUrl, key }, 201)
 })
 
-// ---- GET /api/v1/dashboard/qrcode — Info QR code avec URL publique ----
+// ---- GET /api/v1/dashboard/qrcode ----
 dashboardRouter.get('/qrcode', async (c) => {
   setSecurityHeaders(c)
   const auth = await verifyAuth(c)
   if (!auth) return c.json({ error: 'Non authentifié.' }, 401)
 
-  const tenant = await c.env.DB.prepare(`
-    SELECT nom, slug, couleur_primaire FROM tenants WHERE id = ?
-  `).bind(auth.tenant_id).first<{ nom: string; slug: string; couleur_primaire: string }>()
+  const supabase = createSupabaseClientWithToken(c.env, auth.token)
 
-  if (!tenant) return c.json({ error: 'Restaurant introuvable.' }, 404)
+  // SUPABASE — tenant info (APPLICATION DATA)
+  const { data: tenant, error } = await supabase
+    .from('tenants')
+    .select('nom, slug, couleur_primaire')
+    .eq('id', auth.tenant_id)
+    .single()
+
+  if (error || !tenant) return c.json({ error: 'Restaurant introuvable.' }, 404)
 
   const boutiqueUrl = `https://monmenu.app/${tenant.slug}`
-  const color = tenant.couleur_primaire.replace('#', '')
+  const color = (tenant.couleur_primaire ?? '#DC2626').replace('#', '')
 
   return c.json({
     boutique_url: boutiqueUrl,

@@ -1,7 +1,12 @@
 // API Tenants (Restaurants) — gestion publique + dashboard
+// ARCHITECTURE :
+//   • D1 (Cloudflare) → SITE WEB uniquement : config_globale, pays, plans
+//   • Supabase (PostgreSQL) → APPLICATION : tenants, menu, points_de_vente, etc.
+
 import { Hono } from 'hono'
-import type { Env, Tenant, Produit, CategorieMenu } from '../types/database'
+import type { Env } from '../types/database'
 import { setSecurityHeaders } from '../lib/security'
+import { createSupabaseAdminClient } from '../lib/supabase'
 
 const tenantsRouter = new Hono<{ Bindings: Env }>()
 
@@ -22,31 +27,67 @@ tenantsRouter.get('/:slug', async (c) => {
     }
   } catch { /* KV non disponible en local dev */ }
 
-  const tenant = await c.env.DB
-    .prepare(`
-      SELECT t.id, t.nom, t.slug, t.logo_url, t.banniere_url,
-             t.couleur_primaire, t.couleur_secondaire,
-             t.whatsapp_number, t.metadata, t.statut,
-             p.nom as pays_nom, p.devise, p.symbole_devise,
-             pdv.id as pdv_id, pdv.nom as pdv_nom, pdv.adresse as pdv_adresse,
-             pdv.latitude as pdv_latitude, pdv.longitude as pdv_longitude
-      FROM tenants t
-      LEFT JOIN pays p ON p.id = t.pays_id
-      LEFT JOIN points_de_vente pdv ON pdv.tenant_id = t.id AND pdv.actif = 1
-      WHERE t.slug = ? AND t.statut IN ('actif', 'essai') AND t.deleted_at IS NULL
-      LIMIT 1
+  // SUPABASE — tenant info (APPLICATION DATA)
+  const adminClient = createSupabaseAdminClient(c.env)
+
+  const { data: tenant, error } = await adminClient
+    .from('tenants')
+    .select(`
+      id, nom, slug, logo_url, banniere_url,
+      couleur_primaire, couleur_secondaire,
+      whatsapp_number, metadata, statut, pays_id,
+      points_de_vente!inner(id, nom, adresse, latitude, longitude)
     `)
-    .bind(slug)
-    .first()
+    .eq('slug', slug)
+    .in('statut', ['actif', 'essai'])
+    .is('deleted_at', null)
+    .limit(1)
+    .maybeSingle()
 
   if (!tenant) {
     return c.json({ error: 'Restaurant introuvable.' }, 404)
   }
 
-  // Mettre en cache 5 minutes (graceful fallback)
-  try { if (c.env.KV_CACHE) await c.env.KV_CACHE.put(cacheKey, JSON.stringify(tenant), { expirationTtl: 300 }) } catch {}
+  // D1 — info pays (SITE WEB DATA — pays table)
+  let paysInfo: any = null
+  if (tenant.pays_id) {
+    try {
+      paysInfo = await c.env.DB
+        .prepare('SELECT nom, devise, symbole_devise FROM pays WHERE id = ?')
+        .bind(tenant.pays_id)
+        .first()
+    } catch { /* pays table may not exist yet */ }
+  }
 
-  return c.json(tenant)
+  const pdv = Array.isArray(tenant.points_de_vente)
+    ? tenant.points_de_vente[0]
+    : tenant.points_de_vente
+
+  const result = {
+    id: tenant.id,
+    nom: tenant.nom,
+    slug: tenant.slug,
+    logo_url: tenant.logo_url,
+    banniere_url: tenant.banniere_url,
+    couleur_primaire: tenant.couleur_primaire,
+    couleur_secondaire: tenant.couleur_secondaire,
+    whatsapp_number: tenant.whatsapp_number,
+    metadata: tenant.metadata,
+    statut: tenant.statut,
+    pays_nom: paysInfo?.nom ?? null,
+    devise: paysInfo?.devise ?? 'XOF',
+    symbole_devise: paysInfo?.symbole_devise ?? 'FCFA',
+    pdv_id: pdv?.id ?? null,
+    pdv_nom: pdv?.nom ?? null,
+    pdv_adresse: pdv?.adresse ?? null,
+    pdv_latitude: pdv?.latitude ?? null,
+    pdv_longitude: pdv?.longitude ?? null
+  }
+
+  // Mettre en cache 5 minutes
+  try { if (c.env.KV_CACHE) await c.env.KV_CACHE.put(cacheKey, JSON.stringify(result), { expirationTtl: 300 }) } catch {}
+
+  return c.json(result)
 })
 
 // GET /api/v1/tenants/:slug/menu — Menu public complet
@@ -62,54 +103,56 @@ tenantsRouter.get('/:slug/menu', async (c) => {
     }
   } catch {}
 
-  // Récupérer tenant_id depuis le slug
-  const tenantRow = await c.env.DB
-    .prepare('SELECT id FROM tenants WHERE slug = ? AND statut IN (\'actif\', \'essai\') AND deleted_at IS NULL')
-    .bind(slug)
-    .first<{ id: string }>()
+  // SUPABASE — lookup tenant_id depuis le slug (APPLICATION DATA)
+  const adminClient = createSupabaseAdminClient(c.env)
 
-  if (!tenantRow) {
+  const { data: tenantRow, error: tenantError } = await adminClient
+    .from('tenants')
+    .select('id')
+    .eq('slug', slug)
+    .in('statut', ['actif', 'essai'])
+    .is('deleted_at', null)
+    .single()
+
+  if (tenantError || !tenantRow) {
     return c.json({ error: 'Restaurant introuvable.' }, 404)
   }
 
-  // Catégories + produits en une requête
-  const categories = await c.env.DB
-    .prepare(`
-      SELECT id, nom, description, ordre_affichage
-      FROM categories_menu
-      WHERE tenant_id = ? AND actif = 1
-      ORDER BY ordre_affichage ASC
-    `)
-    .bind(tenantRow.id)
-    .all<CategorieMenu>()
+  // SUPABASE — catégories + produits (APPLICATION DATA)
+  const [{ data: categories, error: catError }, { data: produits, error: prodError }] = await Promise.all([
+    adminClient
+      .from('categories_menu')
+      .select('id, nom, description, ordre_affichage')
+      .eq('tenant_id', tenantRow.id)
+      .eq('actif', true)
+      .order('ordre_affichage', { ascending: true }),
 
-  const produits = await c.env.DB
-    .prepare(`
-      SELECT id, categorie_id, nom, description, prix, photo_url,
-             disponible, ordre_affichage
-      FROM produits
-      WHERE tenant_id = ? AND deleted_at IS NULL
-      ORDER BY ordre_affichage ASC
-    `)
-    .bind(tenantRow.id)
-    .all<Produit>()
+    adminClient
+      .from('produits')
+      .select('id, categorie_id, nom, description, prix, photo_url, disponible, ordre_affichage')
+      .eq('tenant_id', tenantRow.id)
+      .is('deleted_at', null)
+      .order('ordre_affichage', { ascending: true })
+  ])
+
+  if (catError) return c.json({ error: 'Erreur récupération menu.', detail: catError.message }, 500)
 
   // Regrouper produits par catégorie
-  const produitsByCategorie = new Map<string, Produit[]>()
-  for (const produit of produits.results) {
+  const produitsByCategorie = new Map<string, any[]>()
+  for (const produit of (produits ?? [])) {
     const list = produitsByCategorie.get(produit.categorie_id) ?? []
     list.push(produit)
     produitsByCategorie.set(produit.categorie_id, list)
   }
 
-  const menu = categories.results.map((cat) => ({
+  const menu = (categories ?? []).map((cat) => ({
     ...cat,
     produits: produitsByCategorie.get(cat.id) ?? []
   }))
 
   const result = { categories: menu }
 
-  // Cache 2 minutes (graceful fallback)
+  // Cache 2 minutes
   try { if (c.env.KV_CACHE) await c.env.KV_CACHE.put(cacheKey, JSON.stringify(result), { expirationTtl: 120 }) } catch {}
 
   return c.json(result)
@@ -120,25 +163,34 @@ tenantsRouter.get('/:slug/qrcode', async (c) => {
   setSecurityHeaders(c)
   const slug = c.req.param('slug')
 
-  const tenant = await c.env.DB
-    .prepare('SELECT id, nom, slug, couleur_primaire FROM tenants WHERE slug = ? AND deleted_at IS NULL')
-    .bind(slug)
-    .first<Pick<Tenant, 'id' | 'nom' | 'slug' | 'couleur_primaire'>>()
+  // SUPABASE — tenant info (APPLICATION DATA)
+  const adminClient = createSupabaseAdminClient(c.env)
 
-  if (!tenant) {
+  const { data: tenant, error } = await adminClient
+    .from('tenants')
+    .select('id, nom, slug, couleur_primaire')
+    .eq('slug', slug)
+    .is('deleted_at', null)
+    .single()
+
+  if (error || !tenant) {
     return c.json({ error: 'Restaurant introuvable.' }, 404)
   }
 
   const url = `https://monmenu.app/${slug}`
+  const color = (tenant.couleur_primaire ?? '#DC2626').replace('#', '')
+
   return c.json({
     url,
     nom: tenant.nom,
     couleur: tenant.couleur_primaire,
-    qr_api_url: `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(url)}&color=${tenant.couleur_primaire.replace('#', '')}&bgcolor=ffffff`
+    qr_api_url: `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(url)}&color=${color}&bgcolor=ffffff`
   })
 })
 
 // POST /api/v1/tenants — Créer un tenant (inscription restaurant)
+// NOTE: Ce endpoint est conservé pour compatibilité mais l'inscription principale
+//       passe par api-auth.ts (POST /api/v1/auth/register) qui crée Supabase Auth + tenant
 tenantsRouter.post('/', async (c) => {
   setSecurityHeaders(c)
 
@@ -162,52 +214,63 @@ tenantsRouter.post('/', async (c) => {
   }
 
   const data = parseResult.data
+  const adminClient = createSupabaseAdminClient(c.env)
 
-  // Vérifier unicité du slug
-  const existingSlug = await c.env.DB
-    .prepare('SELECT id FROM tenants WHERE slug = ?')
-    .bind(data.slug)
-    .first()
+  // SUPABASE — Vérifier unicité du slug (APPLICATION DATA)
+  const { data: existingSlug } = await adminClient
+    .from('tenants')
+    .select('id')
+    .eq('slug', data.slug)
+    .maybeSingle()
 
   if (existingSlug) {
     return c.json({ error: 'Ce nom de boutique est déjà utilisé.' }, 409)
   }
 
-  // Plan gratuit par défaut
-  const planGratuit = await c.env.DB
-    .prepare('SELECT id FROM plans WHERE nom = \'Gratuit\' OR ordre_affichage = 0 LIMIT 1')
-    .first<{ id: string }>()
+  // D1 — Plan gratuit par défaut (SITE WEB DATA — plans table)
+  let planId: string | null = null
+  let paysId: string | null = null
+  try {
+    const planGratuit = await c.env.DB
+      .prepare("SELECT id FROM plans WHERE nom = 'Gratuit' OR ordre_affichage = 0 LIMIT 1")
+      .first<{ id: string }>()
+    planId = planGratuit?.id ?? null
+  } catch { /* plans table may not exist yet */ }
 
-  // Pays Burkina Faso par défaut
-  const pays = await c.env.DB
-    .prepare('SELECT id FROM pays WHERE code_iso = \'BF\' LIMIT 1')
-    .first<{ id: string }>()
+  // D1 — Pays Burkina Faso par défaut (SITE WEB DATA — pays table)
+  try {
+    const pays = await c.env.DB
+      .prepare("SELECT id FROM pays WHERE code_iso = 'BF' LIMIT 1")
+      .first<{ id: string }>()
+    paysId = pays?.id ?? null
+  } catch { /* pays table may not exist yet */ }
 
   const tenantId = crypto.randomUUID()
   const now = new Date().toISOString()
 
-  await c.env.DB.prepare(`
-    INSERT INTO tenants (
-      id, pays_id, nom, slug, whatsapp_number,
-      couleur_primaire, couleur_secondaire,
-      statut, plan_id, metadata, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'essai', ?, '{}', ?, ?)
-  `)
-    .bind(
-      tenantId,
-      pays?.id ?? null,
-      data.nom,
-      data.slug,
-      data.whatsapp_number,
-      data.couleur_primaire,
-      data.couleur_secondaire,
-      planGratuit?.id ?? null,
-      now,
-      now
-    )
-    .run()
+  // SUPABASE — Créer le tenant (APPLICATION DATA)
+  const { error: insertError } = await adminClient
+    .from('tenants')
+    .insert({
+      id: tenantId,
+      pays_id: paysId,
+      nom: data.nom,
+      slug: data.slug,
+      whatsapp_number: data.whatsapp_number,
+      couleur_primaire: data.couleur_primaire,
+      couleur_secondaire: data.couleur_secondaire,
+      statut: 'essai',
+      plan_id: planId,
+      metadata: '{}',
+      created_at: now,
+      updated_at: now
+    })
 
-  // Invalider cache (graceful fallback)
+  if (insertError) {
+    return c.json({ error: 'Erreur création restaurant.', detail: insertError.message }, 500)
+  }
+
+  // Invalider cache
   try { if (c.env.KV_CACHE) await c.env.KV_CACHE.delete(`tenant:${data.slug}`) } catch {}
 
   return c.json({ success: true, tenant_id: tenantId, slug: data.slug }, 201)

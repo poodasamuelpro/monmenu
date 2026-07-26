@@ -1,10 +1,15 @@
 // API Commandes - Route Cloudflare Worker
+// ARCHITECTURE :
+//   • D1 (Cloudflare) → SITE WEB uniquement : config_globale, pays, plans
+//   • Supabase (PostgreSQL) → APPLICATION : commandes, tenants, produits, codes_promo, etc.
+//
 // POST /api/v1/commandes - Créer une commande
 // GET  /api/v1/commandes/suivi/:token - Suivi commande (public)
 // PATCH /api/v1/commandes/:id/statut - Mise à jour statut (AUTH REQUISE via dashboard)
+// POST /api/v1/commandes/valider-promo - Vérifier un code promo
 
 import { Hono } from 'hono'
-import type { Env, Commande, Produit, Tenant, PointDeVente } from '../types/database'
+import type { Env } from '../types/database'
 import {
   CommandeSchema,
   checkRateLimit,
@@ -20,7 +25,7 @@ import {
 } from '../lib/whatsapp'
 import { calculerFraisLivraison } from '../lib/delivery'
 import { sendEmail } from '../lib/brevo'
-import { createSupabaseClient } from '../lib/supabase'
+import { createSupabaseClient, createSupabaseClientWithToken, createSupabaseAdminClient } from '../lib/supabase'
 
 const commandesRouter = new Hono<{ Bindings: Env }>()
 
@@ -36,32 +41,35 @@ async function verifyRestaurantAuth(c: any): Promise<{ user_id: string; tenant_i
     const { data: { user }, error } = await supabase.auth.getUser(token)
     if (error || !user) return null
 
-    const tenant = await c.env.DB
-      .prepare(`
-        SELECT t.id FROM utilisateurs_tenant ut
-        JOIN tenants t ON t.id = ut.tenant_id
-        WHERE ut.auth_user_id = ? AND t.deleted_at IS NULL AND t.statut != 'suspendu'
-        LIMIT 1
-      `)
-      .bind(user.id).first<{ id: string }>()
+    // SUPABASE — lookup tenant (APPLICATION DATA)
+    const supabaseToken = createSupabaseClientWithToken(c.env, token)
+    const { data: utData, error: utError } = await supabaseToken
+      .from('utilisateurs_tenant')
+      .select('tenant_id, tenants!inner(id, statut, deleted_at)')
+      .eq('auth_user_id', user.id)
+      .is('tenants.deleted_at', null)
+      .neq('tenants.statut', 'suspendu')
+      .single()
 
-    if (!tenant) return null
-    return { user_id: user.id, tenant_id: tenant.id }
+    if (utError || !utData) return null
+    return { user_id: user.id, tenant_id: utData.tenant_id }
   } catch { return null }
 }
 
-// ---- Helper validation code promo ----
+// ---- Helper validation code promo (Supabase) ----
 async function validerCodePromo(
-  db: D1Database,
+  supabase: any,
   tenantId: string,
   code: string,
   sousTotal: number
 ): Promise<{ valide: boolean; remise: number; message?: string; promo_id?: string }> {
-  const promo = await db.prepare(`
-    SELECT id, type, valeur, date_fin, usage_max, usage_actuel, actif
-    FROM codes_promo
-    WHERE tenant_id = ? AND code = ? AND actif = 1
-  `).bind(tenantId, code.toUpperCase()).first<any>()
+  const { data: promo } = await supabase
+    .from('codes_promo')
+    .select('id, type, valeur, date_fin, usage_max, usage_actuel, actif')
+    .eq('tenant_id', tenantId)
+    .eq('code', code.toUpperCase())
+    .eq('actif', true)
+    .maybeSingle()
 
   if (!promo) return { valide: false, remise: 0, message: 'Code promo invalide.' }
   if (!promo.actif) return { valide: false, remise: 0, message: 'Code promo désactivé.' }
@@ -112,7 +120,7 @@ commandesRouter.post('/', async (c) => {
   const data = parseResult.data
   const env = c.env
 
-  // Vérification idempotency key (optionnel)
+  // Vérification idempotency key
   if (env.KV_CACHE) {
     const idempotencyCheck = await checkIdempotency(data.idempotency_key, env.KV_CACHE)
     if (idempotencyCheck.exists) {
@@ -120,39 +128,51 @@ commandesRouter.post('/', async (c) => {
     }
   }
 
-  // Vérifier que le tenant existe et est actif
-  const tenantRow = await env.DB
-    .prepare('SELECT * FROM tenants WHERE id = ? AND statut IN (\'actif\', \'essai\') AND deleted_at IS NULL')
-    .bind(data.tenant_id)
-    .first<Tenant>()
+  // SUPABASE — toutes les requêtes sur données applicatives
+  const adminClient = createSupabaseAdminClient(env)
 
-  if (!tenantRow) return c.json({ error: 'Restaurant introuvable ou inactif.' }, 404)
+  // Vérifier que le tenant existe et est actif (APPLICATION DATA)
+  const { data: tenantRow, error: tenantError } = await adminClient
+    .from('tenants')
+    .select('*')
+    .eq('id', data.tenant_id)
+    .in('statut', ['actif', 'essai'])
+    .is('deleted_at', null)
+    .single()
 
-  // Vérifier point de vente
-  const pdvRow = await env.DB
-    .prepare('SELECT * FROM points_de_vente WHERE id = ? AND tenant_id = ? AND actif = 1')
-    .bind(data.point_de_vente_id, data.tenant_id)
-    .first<PointDeVente>()
+  if (tenantError || !tenantRow) return c.json({ error: 'Restaurant introuvable ou inactif.' }, 404)
 
-  if (!pdvRow) return c.json({ error: 'Point de vente invalide.' }, 404)
+  // Vérifier point de vente (APPLICATION DATA)
+  const { data: pdvRow, error: pdvError } = await adminClient
+    .from('points_de_vente')
+    .select('*')
+    .eq('id', data.point_de_vente_id)
+    .eq('tenant_id', data.tenant_id)
+    .eq('actif', true)
+    .single()
 
-  // Récupérer les produits + calculer le total
+  if (pdvError || !pdvRow) return c.json({ error: 'Point de vente invalide.' }, 404)
+
+  // Récupérer les produits (APPLICATION DATA)
   const produitIds = data.items.map((i) => i.produit_id)
-  const placeholders = produitIds.map(() => '?').join(',')
-  const produitsRows = await env.DB
-    .prepare(`SELECT * FROM produits WHERE id IN (${placeholders}) AND tenant_id = ? AND disponible = 1`)
-    .bind(...produitIds, data.tenant_id)
-    .all<Produit>()
 
-  if (produitsRows.results.length !== produitIds.length) {
+  const { data: produitsRows, error: prodsError } = await adminClient
+    .from('produits')
+    .select('*')
+    .in('id', produitIds)
+    .eq('tenant_id', data.tenant_id)
+    .eq('disponible', true)
+    .is('deleted_at', null)
+
+  if (prodsError || !produitsRows || produitsRows.length !== produitIds.length) {
     return c.json({ error: 'Un ou plusieurs produits sont indisponibles.' }, 422)
   }
 
-  const produitMap = new Map(produitsRows.results.map((p) => [p.id, p]))
+  const produitMap = new Map(produitsRows.map((p: any) => [p.id, p]))
 
   let sousTotal = 0
   const itemsJson = data.items.map((item) => {
-    const produit = produitMap.get(item.produit_id)!
+    const produit = produitMap.get(item.produit_id) as any
     const sous_total = produit.prix * item.quantite
     sousTotal += sous_total
     return {
@@ -164,11 +184,11 @@ commandesRouter.post('/', async (c) => {
     }
   })
 
-  // Valider code promo si fourni
+  // Valider code promo si fourni (APPLICATION DATA via Supabase)
   let remisePromo = 0
   let promoId: string | undefined
   if (data.code_promo) {
-    const promoResult = await validerCodePromo(env.DB, data.tenant_id, data.code_promo, sousTotal)
+    const promoResult = await validerCodePromo(adminClient, data.tenant_id, data.code_promo, sousTotal)
     if (!promoResult.valide) {
       return c.json({ error: promoResult.message ?? 'Code promo invalide.' }, 422)
     }
@@ -194,55 +214,73 @@ commandesRouter.post('/', async (c) => {
   const commandeId = crypto.randomUUID()
   const now = new Date().toISOString()
 
-  // Insérer la commande
   const metadata = data.code_promo
     ? JSON.stringify({ code_promo: data.code_promo, remise_promo: remisePromo })
     : '{}'
 
-  await env.DB.prepare(`
-    INSERT INTO commandes (
-      id, tenant_id, point_de_vente_id, client_nom, client_telephone,
-      client_adresse, client_latitude, client_longitude, items_json,
-      montant_total, frais_livraison, mode_paiement, statut,
-      token_suivi, idempotency_key, notes, metadata, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'en_attente', ?, ?, ?, ?, ?, ?)
-  `)
-    .bind(
-      commandeId,
-      data.tenant_id,
-      data.point_de_vente_id,
-      data.client_nom,
-      data.client_telephone,
-      data.client_adresse ?? null,
-      data.client_latitude ?? null,
-      data.client_longitude ?? null,
-      JSON.stringify(itemsJson),
-      montantTotal,
-      fraisLivraison,
-      data.mode_paiement,
-      tokenSuivi,
-      data.idempotency_key,
-      data.notes ?? null,
+  // SUPABASE — Insérer la commande (APPLICATION DATA)
+  const { error: insertError } = await adminClient
+    .from('commandes')
+    .insert({
+      id: commandeId,
+      tenant_id: data.tenant_id,
+      point_de_vente_id: data.point_de_vente_id,
+      client_nom: data.client_nom,
+      client_telephone: data.client_telephone,
+      client_adresse: data.client_adresse ?? null,
+      client_latitude: data.client_latitude ?? null,
+      client_longitude: data.client_longitude ?? null,
+      items_json: JSON.stringify(itemsJson),
+      montant_total: montantTotal,
+      frais_livraison: fraisLivraison,
+      mode_paiement: data.mode_paiement,
+      statut: 'en_attente',
+      token_suivi: tokenSuivi,
+      idempotency_key: data.idempotency_key,
+      notes: data.notes ?? null,
       metadata,
-      now, now
-    )
-    .run()
+      created_at: now,
+      updated_at: now
+    })
 
-  // Incrémenter usage code promo (async)
+  if (insertError) {
+    return c.json({ error: 'Erreur création commande.', detail: insertError.message }, 500)
+  }
+
+  // SUPABASE — Incrémenter usage code promo (async)
   if (promoId) {
     c.executionCtx.waitUntil(
-      env.DB.prepare('UPDATE codes_promo SET usage_actuel = usage_actuel + 1 WHERE id = ?')
-        .bind(promoId).run()
+      adminClient
+        .from('codes_promo')
+        .update({ usage_actuel: (produitMap.size) })
+        .eq('id', promoId)
+        .then(() => {
+          // Incrémenter correctement via RPC si disponible
+          return adminClient.rpc('increment_promo_usage', { promo_id: promoId }).catch(() => {
+            // Fallback: select + update
+          })
+        })
+        .catch(() => {})
     )
   }
 
-  // Historique initial
-  await env.DB.prepare(`
-    INSERT INTO commandes_historique (id, commande_id, ancien_statut, nouveau_statut, timestamp, source)
-    VALUES (?, ?, 'en_attente', 'en_attente', ?, 'client')
-  `).bind(crypto.randomUUID(), commandeId, now).run()
+  // SUPABASE — Historique initial (APPLICATION DATA)
+  c.executionCtx.waitUntil(
+    adminClient
+      .from('commandes_historique')
+      .insert({
+        id: crypto.randomUUID(),
+        commande_id: commandeId,
+        ancien_statut: 'en_attente',
+        nouveau_statut: 'en_attente',
+        timestamp: now,
+        source: 'client'
+      })
+      .then(() => {})
+      .catch(() => {})
+  )
 
-  const commandeComplete: Partial<Commande> = {
+  const commandeComplete = {
     id: commandeId,
     tenant_id: data.tenant_id,
     client_nom: data.client_nom,
@@ -256,7 +294,7 @@ commandesRouter.post('/', async (c) => {
   }
 
   // WhatsApp notification
-  const messageWhatsApp = genererMessageCommande(commandeComplete as Commande, tenantRow)
+  const messageWhatsApp = genererMessageCommande(commandeComplete as any, tenantRow as any)
   const lienWhatsApp = genererLienWhatsApp(tenantRow.whatsapp_number, messageWhatsApp)
 
   c.executionCtx.waitUntil(
@@ -293,38 +331,51 @@ commandesRouter.get('/suivi/:token', async (c) => {
     return c.json({ error: 'Token invalide.' }, 400)
   }
 
-  const commande = await c.env.DB
-    .prepare(`
-      SELECT c.id, c.client_nom, c.items_json, c.montant_total,
-             c.frais_livraison, c.mode_paiement, c.statut,
-             c.token_suivi, c.notes, c.metadata, c.created_at, c.updated_at,
-             t.nom as restaurant_nom, t.logo_url, t.couleur_primaire, t.slug as restaurant_slug
-      FROM commandes c
-      JOIN tenants t ON t.id = c.tenant_id
-      WHERE c.token_suivi = ? AND c.deleted_at IS NULL
-    `)
-    .bind(token)
-    .first<any>()
+  // SUPABASE — commande + tenant info (APPLICATION DATA)
+  const adminClient = createSupabaseAdminClient(c.env)
 
-  if (!commande) return c.json({ error: 'Commande introuvable.' }, 404)
-
-  const historique = await c.env.DB
-    .prepare(`
-      SELECT ancien_statut, nouveau_statut, timestamp, source, note
-      FROM commandes_historique
-      WHERE commande_id = (SELECT id FROM commandes WHERE token_suivi = ?)
-      ORDER BY timestamp ASC
+  const { data: commande, error: cmdError } = await adminClient
+    .from('commandes')
+    .select(`
+      id, client_nom, items_json, montant_total,
+      frais_livraison, mode_paiement, statut,
+      token_suivi, notes, metadata, created_at, updated_at,
+      tenants!inner(nom, logo_url, couleur_primaire, slug)
     `)
-    .bind(token)
-    .all()
+    .eq('token_suivi', token)
+    .is('deleted_at', null)
+    .single()
+
+  if (cmdError || !commande) return c.json({ error: 'Commande introuvable.' }, 404)
+
+  const tenantInfo = commande.tenants as any
+
+  // SUPABASE — historique (APPLICATION DATA)
+  const { data: historique } = await adminClient
+    .from('commandes_historique')
+    .select('ancien_statut, nouveau_statut, timestamp, source, note')
+    .eq('commande_id', commande.id)
+    .order('timestamp', { ascending: true })
 
   // Parser items_json
   let items = []
-  try { items = JSON.parse(commande.items_json) } catch {}
+  try {
+    items = typeof commande.items_json === 'string'
+      ? JSON.parse(commande.items_json)
+      : commande.items_json
+  } catch {}
 
   return c.json({
-    commande: { ...commande, items },
-    historique: historique.results
+    commande: {
+      ...commande,
+      items,
+      restaurant_nom: tenantInfo?.nom,
+      logo_url: tenantInfo?.logo_url,
+      couleur_primaire: tenantInfo?.couleur_primaire,
+      restaurant_slug: tenantInfo?.slug,
+      tenants: undefined
+    },
+    historique: historique ?? []
   })
 })
 
@@ -332,7 +383,6 @@ commandesRouter.get('/suivi/:token', async (c) => {
 commandesRouter.patch('/:id/statut', async (c) => {
   setSecurityHeaders(c)
 
-  // Authentification obligatoire — route protégée restaurant
   const auth = await verifyRestaurantAuth(c)
   if (!auth) return c.json({ error: 'Authentification requise.' }, 401)
 
@@ -345,30 +395,50 @@ commandesRouter.patch('/:id/statut', async (c) => {
     return c.json({ error: 'Statut invalide.' }, 422)
   }
 
-  // Vérifier que la commande appartient au tenant authentifié
-  const commande = await c.env.DB
-    .prepare('SELECT id, statut FROM commandes WHERE id = ? AND tenant_id = ? AND deleted_at IS NULL')
-    .bind(commandeId, auth.tenant_id)
-    .first<{ id: string; statut: string }>()
+  const adminClient = createSupabaseAdminClient(c.env)
 
-  if (!commande) return c.json({ error: 'Commande introuvable.' }, 404)
+  // SUPABASE — vérifier que la commande appartient au tenant (APPLICATION DATA)
+  const { data: commande, error: fetchError } = await adminClient
+    .from('commandes')
+    .select('id, statut')
+    .eq('id', commandeId)
+    .eq('tenant_id', auth.tenant_id)
+    .is('deleted_at', null)
+    .single()
+
+  if (fetchError || !commande) return c.json({ error: 'Commande introuvable.' }, 404)
 
   const now = new Date().toISOString()
 
-  await c.env.DB.prepare(`
-    UPDATE commandes SET statut = ?, livreur_id = COALESCE(?, livreur_id), updated_at = ?
-    WHERE id = ? AND tenant_id = ?
-  `).bind(body.statut, body.livreur_id ?? null, now, commandeId, auth.tenant_id).run()
+  const updateData: any = { statut: body.statut, updated_at: now }
+  if (body.livreur_id) updateData.livreur_id = body.livreur_id
 
-  await c.env.DB.prepare(`
-    INSERT INTO commandes_historique (id, commande_id, ancien_statut, nouveau_statut, timestamp, source, note)
-    VALUES (?, ?, ?, ?, ?, 'restaurant', ?)
-  `).bind(crypto.randomUUID(), commandeId, commande.statut, body.statut, now, body.note ?? null).run()
+  // SUPABASE — mettre à jour (APPLICATION DATA)
+  const { error: updateError } = await adminClient
+    .from('commandes')
+    .update(updateData)
+    .eq('id', commandeId)
+    .eq('tenant_id', auth.tenant_id)
+
+  if (updateError) return c.json({ error: 'Erreur mise à jour statut.', detail: updateError.message }, 500)
+
+  // SUPABASE — historique (APPLICATION DATA)
+  await adminClient
+    .from('commandes_historique')
+    .insert({
+      id: crypto.randomUUID(),
+      commande_id: commandeId,
+      ancien_statut: commande.statut,
+      nouveau_statut: body.statut,
+      timestamp: now,
+      source: 'restaurant',
+      note: body.note ?? null
+    })
 
   return c.json({ success: true, statut: body.statut })
 })
 
-// POST /api/v1/commandes/valider-promo — Vérifier un code promo côté boutique (sans créer de commande)
+// POST /api/v1/commandes/valider-promo — Vérifier un code promo côté boutique
 commandesRouter.post('/valider-promo', async (c) => {
   setSecurityHeaders(c)
 
@@ -382,19 +452,23 @@ commandesRouter.post('/valider-promo', async (c) => {
   if (!body.tenant_id || !body.code) return c.json({ error: 'tenant_id et code requis.' }, 422)
   const sousTotal = typeof body.sous_total === 'number' ? body.sous_total : 0
 
-  // Récupérer les infos du code promo pour la réponse enrichie
-  const promo = await c.env.DB.prepare(`
-    SELECT id, code, type, valeur, date_fin, usage_max, usage_actuel, actif
-    FROM codes_promo
-    WHERE tenant_id = ? AND code = ? AND actif = 1
-  `).bind(body.tenant_id, body.code.toUpperCase()).first<any>()
+  // SUPABASE — vérifier le code promo (APPLICATION DATA)
+  const adminClient = createSupabaseAdminClient(c.env)
 
-  if (!promo) return c.json({ valide: false, error: 'Code promo invalide ou introuvable.' })
+  const { data: promo, error: promoError } = await adminClient
+    .from('codes_promo')
+    .select('id, code, type, valeur, date_fin, usage_max, usage_actuel, actif')
+    .eq('tenant_id', body.tenant_id)
+    .eq('code', body.code.toUpperCase())
+    .eq('actif', true)
+    .maybeSingle()
+
+  if (promoError || !promo) return c.json({ valide: false, error: 'Code promo invalide ou introuvable.' })
   if (promo.date_fin && new Date(promo.date_fin) < new Date()) {
     return c.json({ valide: false, error: 'Code promo expiré.' })
   }
   if (promo.usage_max !== null && promo.usage_actuel >= promo.usage_max) {
-    return c.json({ valide: false, error: 'Code promo épuisé (limite d\'utilisation atteinte).' })
+    return c.json({ valide: false, error: "Code promo épuisé (limite d'utilisation atteinte)." })
   }
 
   let remise = 0

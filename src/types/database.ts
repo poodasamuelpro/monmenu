@@ -210,20 +210,28 @@ export interface AuditLog {
 }
 
 // Contexte Cloudflare Workers
+// ARCHITECTURE BASE DE DONNÉES :
+//   DB (D1)    → SITE WEB UNIQUEMENT : config_globale, pays, plans
+//   Supabase   → APPLICATION : tenants, commandes, menu, livreurs, codes_promo, etc.
 export type Env = {
-  DB: D1Database
-  KV_CACHE?: KVNamespace        // Optionnel — non provisionné en dev local
-  R2_MEDIA?: R2Bucket           // Optionnel — non requis pour le MVP
+  // ---- D1 Cloudflare : SITE WEB uniquement ----
+  DB: D1Database                // Tables: config_globale, pays, plans UNIQUEMENT
+  KV_CACHE?: KVNamespace        // Cache optionnel
+  R2_MEDIA?: R2Bucket           // Stockage médias (logos, photos plats)
+  ASSETS?: Fetcher              // Assets statiques (Workers assets binding)
+  // ---- Supabase : APPLICATION (tenants, commandes, menu...) ----
   SUPABASE_URL: string
   SUPABASE_ANON_KEY: string
-  WHATSAPP_API_TOKEN: string
-  WHATSAPP_PHONE_ID: string
-  BREVO_API_KEY_1: string
-  BREVO_API_KEY_2: string
-  BREVO_API_KEY_3: string
-  MAPBOX_TOKEN: string
-  OPENWEATHER_API_KEY: string
-  ENVIRONMENT: 'development' | 'production'
+  SUPABASE_SERVICE_ROLE_KEY?: string  // Pour opérations admin côté serveur
+  // ---- Services tiers ----
+  WHATSAPP_API_TOKEN?: string
+  WHATSAPP_PHONE_ID?: string
+  BREVO_API_KEY_1?: string
+  BREVO_API_KEY_2?: string
+  BREVO_API_KEY_3?: string
+  MAPBOX_TOKEN?: string
+  OPENWEATHER_API_KEY?: string
+  ENVIRONMENT?: 'development' | 'production'
 }
 
 // Panier côté client (stocké en localStorage)

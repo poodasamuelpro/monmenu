@@ -1,8 +1,12 @@
 // API Calcul livraison
+// ARCHITECTURE :
+//   • D1 (Cloudflare) → SITE WEB uniquement : config_globale, pays, plans
+//   • Supabase (PostgreSQL) → APPLICATION : points_de_vente, tenants, etc.
 import { Hono } from 'hono'
 import type { Env } from '../types/database'
 import { calculerFraisLivraison } from '../lib/delivery'
 import { setSecurityHeaders } from '../lib/security'
+import { createSupabaseAdminClient } from '../lib/supabase'
 
 const livraisonRouter = new Hono<{ Bindings: Env }>()
 
@@ -20,12 +24,17 @@ livraisonRouter.post('/calcul', async (c) => {
     return c.json({ error: 'Paramètres manquants.' }, 400)
   }
 
-  const pdv = await c.env.DB
-    .prepare('SELECT latitude, longitude FROM points_de_vente WHERE id = ? AND actif = 1')
-    .bind(body.pdv_id)
-    .first<{ latitude: number; longitude: number }>()
+  // SUPABASE — points_de_vente (APPLICATION DATA)
+  const adminClient = createSupabaseAdminClient(c.env)
 
-  if (!pdv || !pdv.latitude || !pdv.longitude) {
+  const { data: pdv, error } = await adminClient
+    .from('points_de_vente')
+    .select('latitude, longitude')
+    .eq('id', body.pdv_id)
+    .eq('actif', true)
+    .single()
+
+  if (error || !pdv || !pdv.latitude || !pdv.longitude) {
     return c.json({ error: 'Point de vente introuvable.' }, 404)
   }
 

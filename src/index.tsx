@@ -10,7 +10,7 @@ import { plansRouter } from './routes/api-plans'
 import { authRouter } from './routes/api-auth'
 import { dashboardRouter } from './routes/api-dashboard'
 import { setSecurityHeaders } from './lib/security'
-import { getNomProjet } from './lib/supabase'
+import { getNomProjet, createSupabaseAdminClient } from './lib/supabase'
 
 const app = new Hono<{ Bindings: Env }>()
 
@@ -38,12 +38,17 @@ app.route('/api/v1/dashboard', dashboardRouter)
 
 // ---- Sitemap dynamique ----
 app.get('/sitemap.xml', async (c) => {
-  const tenants = await c.env.DB
-    .prepare("SELECT slug, updated_at FROM tenants WHERE statut = 'actif' AND deleted_at IS NULL")
-    .all<{ slug: string; updated_at: string }>()
+  // SUPABASE — liste des tenants actifs (APPLICATION DATA)
+  const adminClient = createSupabaseAdminClient(c.env)
+  const { data: tenantsData } = await adminClient
+    .from('tenants')
+    .select('slug, updated_at')
+    .eq('statut', 'actif')
+    .is('deleted_at', null)
+    .limit(500)
 
   const baseUrl = 'https://monmenu.app'
-  const restaurantUrls = tenants.results.map((t) =>
+  const restaurantUrls = (tenantsData ?? []).map((t: { slug: string; updated_at: string }) =>
     `  <url>
     <loc>${baseUrl}/${t.slug}</loc>
     <lastmod>${t.updated_at.split('T')[0]}</lastmod>
@@ -147,26 +152,48 @@ app.get('/:slug', async (c) => {
     return c.notFound()
   }
 
-  // Vérifier que le restaurant existe (+ PDV pour le footer)
-  const tenant = await c.env.DB
-    .prepare(`
-      SELECT t.id, t.nom, t.slug, t.logo_url, t.banniere_url,
-             t.couleur_primaire, t.couleur_secondaire, t.whatsapp_number,
-             pdv.nom as pdv_nom, pdv.adresse as pdv_adresse, pdv.horaires as pdv_horaires,
-             pdv.latitude as pdv_latitude, pdv.longitude as pdv_longitude
-      FROM tenants t
-      LEFT JOIN points_de_vente pdv ON pdv.tenant_id = t.id AND pdv.actif = 1
-      WHERE t.slug = ? AND t.statut IN ('actif', 'essai') AND t.deleted_at IS NULL
-      LIMIT 1
+  // SUPABASE — Vérifier que le restaurant existe + PDV pour le footer (APPLICATION DATA)
+  const adminClient = createSupabaseAdminClient(c.env)
+  const { data: tenantRaw } = await adminClient
+    .from('tenants')
+    .select(`
+      id, nom, slug, logo_url, banniere_url,
+      couleur_primaire, couleur_secondaire, whatsapp_number,
+      points_de_vente(nom, adresse, horaires, latitude, longitude, actif)
     `)
-    .bind(slug)
-    .first<{
-      id: string; nom: string; slug: string; logo_url: string | null
-      banniere_url: string | null; couleur_primaire: string; couleur_secondaire: string
-      whatsapp_number: string
-      pdv_nom: string | null; pdv_adresse: string | null; pdv_horaires: string | null
-      pdv_latitude: number | null; pdv_longitude: number | null
-    }>()
+    .eq('slug', slug)
+    .in('statut', ['actif', 'essai'])
+    .is('deleted_at', null)
+    .limit(1)
+    .maybeSingle()
+
+  let tenant: {
+    id: string; nom: string; slug: string; logo_url: string | null
+    banniere_url: string | null; couleur_primaire: string; couleur_secondaire: string
+    whatsapp_number: string
+    pdv_nom: string | null; pdv_adresse: string | null; pdv_horaires: string | null
+    pdv_latitude: number | null; pdv_longitude: number | null
+  } | null = null
+
+  if (tenantRaw) {
+    const pdvArr = Array.isArray(tenantRaw.points_de_vente) ? tenantRaw.points_de_vente : []
+    const pdv = pdvArr.find((p: any) => p.actif) ?? pdvArr[0] ?? null
+    tenant = {
+      id: tenantRaw.id,
+      nom: tenantRaw.nom,
+      slug: tenantRaw.slug,
+      logo_url: tenantRaw.logo_url,
+      banniere_url: tenantRaw.banniere_url,
+      couleur_primaire: tenantRaw.couleur_primaire,
+      couleur_secondaire: tenantRaw.couleur_secondaire,
+      whatsapp_number: tenantRaw.whatsapp_number,
+      pdv_nom: pdv?.nom ?? null,
+      pdv_adresse: pdv?.adresse ?? null,
+      pdv_horaires: pdv?.horaires ?? null,
+      pdv_latitude: pdv?.latitude ?? null,
+      pdv_longitude: pdv?.longitude ?? null
+    }
+  }
 
   if (!tenant) {
     return c.html(render404Page(), 404)

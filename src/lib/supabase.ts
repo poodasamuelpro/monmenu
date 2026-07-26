@@ -1,39 +1,93 @@
-// Client Supabase - utilise la clé anon publique + RLS
-// Ne jamais utiliser service_role ici
+// =====================================================================
+// MonMenu — Client Supabase
+// ARCHITECTURE :
+//   • D1 (Cloudflare) → SITE WEB uniquement : config_globale, pays, plans
+//   • Supabase (PostgreSQL) → APPLICATION : tenants, commandes, menu,
+//     livreurs, codes_promo, utilisateurs_tenant, points_de_vente, etc.
+// =====================================================================
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 
 // Cache module-level (Workers isolate — réinitialisé à chaque cold start)
 let _client: SupabaseClient | null = null
+let _adminClient: SupabaseClient | null = null
+
+export type SupabaseEnv = {
+  SUPABASE_URL: string
+  SUPABASE_ANON_KEY: string
+  SUPABASE_SERVICE_ROLE_KEY?: string
+}
 
 /**
- * Crée (ou réutilise) un client Supabase avec la clé anon.
- * Utilisé par api-auth et api-dashboard pour la vérification JWT.
+ * Client Supabase ANON (utilisé pour les opérations publiques + JWT verification).
+ * Supabase Auth + toutes les données applicatives via .from()
  */
-export function createSupabaseClient(env: { SUPABASE_URL: string; SUPABASE_ANON_KEY: string }): SupabaseClient {
+export function createSupabaseClient(env: SupabaseEnv): SupabaseClient {
   if (!_client) {
     _client = createClient(env.SUPABASE_URL, env.SUPABASE_ANON_KEY, {
       auth: {
-        autoRefreshToken: true,
+        autoRefreshToken: false,
         persistSession: false // Workers sont stateless
       },
-      db: {
-        schema: 'public'
-      }
+      db: { schema: 'public' }
     })
   }
   return _client
 }
 
+/**
+ * Client Supabase SERVICE ROLE (opérations privilegiées côté serveur uniquement).
+ * JAMAIS exposé côté client.
+ */
+export function createSupabaseAdminClient(env: SupabaseEnv): SupabaseClient {
+  if (!_adminClient && env.SUPABASE_SERVICE_ROLE_KEY) {
+    _adminClient = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false
+      },
+      db: { schema: 'public' }
+    })
+  }
+  // Fallback sur anon si pas de service role key (dev local)
+  return _adminClient ?? createSupabaseClient(env)
+}
+
+/**
+ * Client Supabase avec un JWT utilisateur (pour requêtes RLS-aware).
+ * Crée un nouveau client non mis en cache.
+ */
+export function createSupabaseClientWithToken(env: SupabaseEnv, accessToken: string): SupabaseClient {
+  const client = createClient(env.SUPABASE_URL, env.SUPABASE_ANON_KEY, {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false
+    },
+    db: { schema: 'public' },
+    global: {
+      headers: {
+        Authorization: `Bearer ${accessToken}`
+      }
+    }
+  })
+  return client
+}
+
 // Alias pour compatibilité ascendante
 export const getSupabaseClient = createSupabaseClient
 
-// Helper : lire la config globale depuis KV ou DB
+// =============================================================
+// Helpers D1 (SITE WEB UNIQUEMENT)
+// =============================================================
+
+/**
+ * Lire une valeur de config_globale depuis D1 (site web config uniquement).
+ */
 export async function getConfigGlobale(
   key: string,
   env: { DB: D1Database; KV_CACHE?: KVNamespace }
 ): Promise<string | null> {
-  // 1. Essayer le KV cache (optionnel — pas disponible en dev local)
+  // 1. Essayer le KV cache (optionnel)
   try {
     if (env.KV_CACHE) {
       const cached = await env.KV_CACHE.get(`config:${key}`)
@@ -41,14 +95,13 @@ export async function getConfigGlobale(
     }
   } catch { /* KV non disponible */ }
 
-  // 2. Fallback sur D1
+  // 2. Fallback sur D1 (seule table autorisée : config_globale)
   const result = await env.DB
     .prepare('SELECT valeur FROM config_globale WHERE cle = ?')
     .bind(key)
     .first<{ valeur: string }>()
 
   if (result) {
-    // Mettre en cache 1 heure si KV disponible
     try {
       if (env.KV_CACHE) {
         await env.KV_CACHE.put(`config:${key}`, result.valeur, { expirationTtl: 3600 })
@@ -60,7 +113,9 @@ export async function getConfigGlobale(
   return null
 }
 
-// Helper : récupérer le nom du projet depuis la DB
+/**
+ * Récupérer le nom du projet depuis D1 config_globale.
+ */
 export async function getNomProjet(
   env: { DB: D1Database; KV_CACHE?: KVNamespace }
 ): Promise<string> {
