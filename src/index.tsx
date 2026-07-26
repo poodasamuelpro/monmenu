@@ -7,6 +7,8 @@ import { commandesRouter } from './routes/api-commandes'
 import { tenantsRouter } from './routes/api-tenants'
 import { livraisonRouter } from './routes/api-livraison'
 import { plansRouter } from './routes/api-plans'
+import { authRouter } from './routes/api-auth'
+import { dashboardRouter } from './routes/api-dashboard'
 import { setSecurityHeaders } from './lib/security'
 import { getNomProjet } from './lib/supabase'
 
@@ -31,6 +33,8 @@ app.route('/api/v1/commandes', commandesRouter)
 app.route('/api/v1/tenants', tenantsRouter)
 app.route('/api/v1/livraison', livraisonRouter)
 app.route('/api/v1/plans', plansRouter)
+app.route('/api/v1/auth', authRouter)
+app.route('/api/v1/dashboard', dashboardRouter)
 
 // ---- Sitemap dynamique ----
 app.get('/sitemap.xml', async (c) => {
@@ -74,9 +78,34 @@ app.get('/sitemap.xml', async (c) => {
     <priority>0.6</priority>
   </url>
   <url>
+    <loc>${baseUrl}/inscription</loc>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
     <loc>${baseUrl}/blog</loc>
     <changefreq>weekly</changefreq>
     <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>${baseUrl}/legal/cgu</loc>
+    <changefreq>yearly</changefreq>
+    <priority>0.3</priority>
+  </url>
+  <url>
+    <loc>${baseUrl}/legal/confidentialite</loc>
+    <changefreq>yearly</changefreq>
+    <priority>0.3</priority>
+  </url>
+  <url>
+    <loc>${baseUrl}/legal/mentions</loc>
+    <changefreq>yearly</changefreq>
+    <priority>0.3</priority>
+  </url>
+  <url>
+    <loc>${baseUrl}/legal/cookies</loc>
+    <changefreq>yearly</changefreq>
+    <priority>0.3</priority>
   </url>
 ${restaurantUrls}
 </urlset>`
@@ -111,7 +140,10 @@ app.get('/:slug', async (c) => {
   setSecurityHeaders(c)
   const slug = c.req.param('slug')
 
-  if (['fr', 'en', 'blog', 'contact', 'tarifs', 'fonctionnalites', 'legal'].includes(slug)) {
+  const reservedSlugs = ['fr', 'en', 'blog', 'contact', 'tarifs', 'fonctionnalites', 
+    'legal', 'inscription', 'dashboard', 'api', 'static', 'suivi', 'sitemap.xml', 
+    'robots.txt', 'favicon.ico']
+  if (reservedSlugs.includes(slug)) {
     return c.notFound()
   }
 
@@ -169,6 +201,35 @@ app.get('/dashboard/*', async (c) => {
   setSecurityHeaders(c)
   const nomProjet = await getNomProjet(c.env)
   return c.html(renderDashboardPage(nomProjet))
+})
+
+// ---- Page inscription restaurant ----
+app.get('/inscription', async (c) => {
+  setSecurityHeaders(c)
+  const nomProjet = await getNomProjet(c.env)
+  return c.html(renderInscriptionPage(nomProjet))
+})
+
+// ---- Pages légales ----
+app.get('/legal/cgu', async (c) => {
+  setSecurityHeaders(c)
+  const nomProjet = await getNomProjet(c.env)
+  return c.html(renderLegalPage('cgu', nomProjet))
+})
+app.get('/legal/confidentialite', async (c) => {
+  setSecurityHeaders(c)
+  const nomProjet = await getNomProjet(c.env)
+  return c.html(renderLegalPage('confidentialite', nomProjet))
+})
+app.get('/legal/mentions', async (c) => {
+  setSecurityHeaders(c)
+  const nomProjet = await getNomProjet(c.env)
+  return c.html(renderLegalPage('mentions', nomProjet))
+})
+app.get('/legal/cookies', async (c) => {
+  setSecurityHeaders(c)
+  const nomProjet = await getNomProjet(c.env)
+  return c.html(renderLegalPage('cookies', nomProjet))
 })
 
 // ---- 404 ----
@@ -396,52 +457,46 @@ function renderHomePage(nomProjet: string): string {
         </div>
         
         <div class="relative">
-          <div class="bg-white rounded-2xl shadow-2xl border border-gray-100 overflow-hidden max-w-sm mx-auto lg:ml-auto">
-            <!-- Mockup boutique -->
-            <div class="h-2 bg-gradient-to-r from-red-500 to-orange-400"></div>
-            <div class="p-5">
-              <div class="flex items-center gap-3 mb-4">
-                <div class="w-12 h-12 bg-red-100 rounded-xl flex items-center justify-center">
-                  <i class="fa-solid fa-drumstick-bite text-red-600 text-lg"></i>
+          <!-- Image héro principale -->
+          <div class="relative rounded-2xl overflow-hidden shadow-2xl max-w-lg mx-auto lg:ml-auto">
+            <img src="/static/img/hero-illustration.jpg" 
+                 alt="Restaurant africain en ligne avec MonMenu" 
+                 class="w-full h-auto object-cover rounded-2xl"
+                 loading="eager">
+            <!-- Overlay card commande flottante -->
+            <div class="absolute bottom-4 left-4 right-4 bg-white/95 backdrop-blur-sm rounded-xl shadow-lg p-3 border border-white/50">
+              <div class="flex items-center gap-3 mb-2.5">
+                <div class="w-9 h-9 bg-red-100 rounded-lg flex items-center justify-center flex-shrink-0">
+                  <i class="fa-solid fa-drumstick-bite text-red-600 text-sm"></i>
                 </div>
-                <div>
-                  <div class="font-bold text-gray-900">Restaurant Chez Fatou</div>
+                <div class="flex-1 min-w-0">
+                  <div class="font-bold text-gray-900 text-sm truncate">Restaurant Chez Fatou</div>
                   <div class="text-xs text-green-600 flex items-center gap-1">
-                    <i class="fa-solid fa-circle text-xs"></i> Ouvert maintenant
+                    <i class="fa-solid fa-circle text-xs"></i> Ouvert · Commande sans inscription
                   </div>
                 </div>
               </div>
-              <!-- Item produit -->
-              <div class="bg-gray-50 rounded-xl p-3 mb-3">
-                <div class="flex justify-between items-start">
-                  <div>
-                    <div class="font-semibold text-sm text-gray-900">Thiéboudienne</div>
-                    <div class="text-xs text-gray-500 mt-0.5">Riz au poisson sénégalais</div>
-                    <div class="text-sm font-bold text-red-600 mt-1.5">2 500 FCFA</div>
-                  </div>
-                  <div class="w-14 h-14 bg-orange-100 rounded-lg flex items-center justify-center text-2xl">
-                    <i class="fa-solid fa-bowl-rice text-orange-500"></i>
-                  </div>
-                </div>
-                <button class="mt-2 w-full bg-red-600 text-white text-xs font-semibold py-1.5 rounded-lg flex items-center justify-center gap-1">
-                  <i class="fa-solid fa-plus text-xs"></i> Ajouter
-                </button>
+              <div class="flex items-center justify-between mb-2">
+                <span class="text-xs text-gray-500 font-medium">Panier • 2 articles</span>
+                <span class="text-sm font-bold text-gray-900">5 500 FCFA</span>
               </div>
-              <!-- Panier -->
-              <div class="bg-blue-50 border border-blue-100 rounded-xl p-3">
-                <div class="flex justify-between items-center mb-1">
-                  <span class="text-xs font-semibold text-blue-800">Votre panier (2 articles)</span>
-                  <span class="text-sm font-bold text-blue-900">5 500 FCFA</span>
-                </div>
-                <div class="text-xs text-blue-600 mb-2">+ 500 FCFA livraison</div>
-                <button class="w-full bg-blue-700 text-white text-xs font-semibold py-2 rounded-lg flex items-center justify-center gap-1">
-                  <i class="fa-brands fa-whatsapp"></i> Commander via WhatsApp
-                </button>
-              </div>
+              <button class="w-full bg-green-600 text-white text-xs font-bold py-2 rounded-lg flex items-center justify-center gap-1.5">
+                <i class="fa-brands fa-whatsapp text-sm"></i> Commander via WhatsApp
+              </button>
             </div>
           </div>
-          <div class="absolute -bottom-4 -right-4 w-24 h-24 bg-red-100 rounded-full opacity-50 -z-10"></div>
-          <div class="absolute -top-4 -left-4 w-16 h-16 bg-blue-100 rounded-full opacity-50 -z-10"></div>
+          <!-- Badge stats flottant -->
+          <div class="absolute -top-3 -right-3 bg-white rounded-xl shadow-lg border border-gray-100 p-3 flex items-center gap-2">
+            <div class="w-8 h-8 bg-green-100 rounded-lg flex items-center justify-center">
+              <i class="fa-solid fa-check text-green-600 text-sm"></i>
+            </div>
+            <div>
+              <div class="text-xs font-bold text-gray-900">0% commission</div>
+              <div class="text-xs text-gray-500">Sur vos ventes</div>
+            </div>
+          </div>
+          <div class="absolute -bottom-4 -right-4 w-24 h-24 bg-red-100 rounded-full opacity-40 -z-10"></div>
+          <div class="absolute -top-4 -left-4 w-16 h-16 bg-blue-100 rounded-full opacity-40 -z-10"></div>
         </div>
       </div>
     </div>
@@ -578,6 +633,98 @@ function renderHomePage(nomProjet: string): string {
             </div>
           </div>
         `).join('')}
+      </div>
+    </div>
+  </section>
+
+  <!-- SECTION RESTAURANT OWNER (social proof) -->
+  <section class="py-20 bg-white">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="grid lg:grid-cols-2 gap-12 items-center">
+        <div class="relative rounded-2xl overflow-hidden shadow-xl">
+          <img src="/static/img/restaurant-owner.jpg"
+               alt="Restaurateur africain utilisant MonMenu sur son téléphone"
+               class="w-full h-auto object-cover"
+               loading="lazy">
+        </div>
+        <div>
+          <div class="inline-flex items-center gap-2 bg-green-100 text-green-700 text-xs font-semibold px-3 py-1.5 rounded-full mb-6">
+            <i class="fa-solid fa-star"></i>
+            <span>Témoignage restaurateur</span>
+          </div>
+          <h2 class="text-3xl sm:text-4xl font-extrabold text-gray-900 mb-4">
+            « En 5 minutes, ma boutique était en ligne »
+          </h2>
+          <p class="text-lg text-gray-600 leading-relaxed mb-6">
+            Avec ${nomProjet}, j'ai créé mon menu en ligne le lundi, et dès le mardi mes clients commandaient via WhatsApp. Plus besoin de répondre aux appels pour prendre les commandes.
+          </p>
+          <div class="flex items-center gap-4 mb-8">
+            <div class="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center text-red-600 font-bold text-lg flex-shrink-0">F</div>
+            <div>
+              <div class="font-bold text-gray-900">Awa K.</div>
+              <div class="text-sm text-gray-500">Restaurant Chez Awa — Ouagadougou</div>
+            </div>
+          </div>
+          <div class="grid grid-cols-3 gap-4 text-center">
+            <div class="bg-gray-50 rounded-xl p-4">
+              <div class="text-2xl font-extrabold text-red-600">5 min</div>
+              <div class="text-xs text-gray-500 mt-1">Pour créer sa boutique</div>
+            </div>
+            <div class="bg-gray-50 rounded-xl p-4">
+              <div class="text-2xl font-extrabold text-red-600">0%</div>
+              <div class="text-xs text-gray-500 mt-1">De commission</div>
+            </div>
+            <div class="bg-gray-50 rounded-xl p-4">
+              <div class="text-2xl font-extrabold text-red-600">WhatsApp</div>
+              <div class="text-xs text-gray-500 mt-1">Commandes directes</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- SECTION DASHBOARD PREVIEW -->
+  <section class="py-20 bg-gray-50">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="grid lg:grid-cols-2 gap-12 items-center">
+        <div>
+          <div class="inline-flex items-center gap-2 bg-blue-100 text-blue-700 text-xs font-semibold px-3 py-1.5 rounded-full mb-6">
+            <i class="fa-solid fa-chart-bar"></i>
+            <span>Tableau de bord</span>
+          </div>
+          <h2 class="text-3xl sm:text-4xl font-extrabold text-gray-900 mb-4">
+            Gérez vos commandes en temps réel
+          </h2>
+          <p class="text-lg text-gray-600 leading-relaxed mb-6">
+            Votre tableau de bord centralise tout : commandes entrantes, historique, statistiques, gestion du menu et livreurs. Accessible depuis n'importe quel appareil.
+          </p>
+          <ul class="space-y-3">
+            ${[
+              { icon: 'fa-bell', text: 'Notification instantanée de chaque commande' },
+              { icon: 'fa-chart-line', text: 'Statistiques journalières et chiffre d\'affaires' },
+              { icon: 'fa-book-open', text: 'Éditeur de menu drag-and-drop' },
+              { icon: 'fa-motorcycle', text: 'Assignation livreur avec envoi WhatsApp' },
+            ].map(item => `
+              <li class="flex items-center gap-3">
+                <div class="w-8 h-8 bg-blue-50 rounded-lg flex items-center justify-center flex-shrink-0">
+                  <i class="fa-solid ${item.icon} text-blue-600 text-sm"></i>
+                </div>
+                <span class="text-gray-700 text-sm font-medium">${item.text}</span>
+              </li>
+            `).join('')}
+          </ul>
+          <a href="/inscription" class="inline-flex items-center gap-2 bg-blue-700 hover:bg-blue-800 text-white font-semibold px-6 py-3 rounded-xl transition-colors mt-8 text-sm">
+            <i class="fa-solid fa-store"></i>
+            Accéder à mon tableau de bord
+          </a>
+        </div>
+        <div class="relative rounded-2xl overflow-hidden shadow-2xl border border-gray-100">
+          <img src="/static/img/dashboard-preview.jpg"
+               alt="Tableau de bord MonMenu — gestion des commandes restaurant"
+               class="w-full h-auto object-cover"
+               loading="lazy">
+        </div>
       </div>
     </div>
   </section>
@@ -1213,7 +1360,13 @@ function renderDashboardLoginPage(nomProjet: string): string {
           body: JSON.stringify({ email, password })
         });
         const data = await res.json();
-        if (res.ok && data.success) { window.location.href = '/dashboard/commandes'; }
+        if (res.ok && data.success) {
+          // Sauvegarder token + données tenant pour le dashboard
+          localStorage.setItem('monmenu_auth_token', data.access_token);
+          localStorage.setItem('monmenu_refresh_token', data.refresh_token);
+          localStorage.setItem('monmenu_tenant', JSON.stringify(data.tenant));
+          window.location.href = '/dashboard/commandes';
+        }
         else { errEl.textContent = data.error || 'Identifiants incorrects.'; errEl.classList.remove('hidden'); }
       } catch { errEl.textContent = 'Erreur de connexion. Réessayez.'; errEl.classList.remove('hidden'); }
       finally { btn.disabled = false; btn.textContent = 'Se connecter'; }
@@ -1321,11 +1474,466 @@ function renderDashboardPage(nomProjet: string): string {
       sidebar.classList.toggle('-translate-x-full');
       overlay.classList.toggle('hidden');
     }
-    function logout() {
-      if (confirm('Se déconnecter ?')) window.location.href = '/dashboard';
+    async function logout() {
+      if (!confirm('Se déconnecter ?')) return;
+      const token = localStorage.getItem('monmenu_auth_token');
+      if (token) {
+        try {
+          await fetch('/api/v1/auth/logout', {
+            method: 'POST',
+            headers: { 'Authorization': 'Bearer ' + token }
+          });
+        } catch {}
+      }
+      localStorage.removeItem('monmenu_auth_token');
+      localStorage.removeItem('monmenu_refresh_token');
+      localStorage.removeItem('monmenu_tenant');
+      window.location.href = '/dashboard';
     }
     initDashboard();
   </script>
+</body>
+</html>`
+}
+
+// ==============================
+// PAGE INSCRIPTION RESTAURANT
+// ==============================
+function renderInscriptionPage(nomProjet: string): string {
+  return `${renderHead(
+    `Créer ma boutique gratuite — ${nomProjet}`,
+    `Inscrivez votre restaurant sur ${nomProjet} et commencez à recevoir des commandes en ligne. Gratuit, sans engagement, prêt en 5 minutes.`,
+    nomProjet,
+    `<meta name="robots" content="index, follow">`
+  )}
+<body class="font-sans bg-gray-50 min-h-screen">
+  ${renderNav(nomProjet, '')}
+  <section class="py-16">
+    <div class="max-w-lg mx-auto px-4">
+      <div class="text-center mb-8">
+        <div class="inline-flex items-center justify-center w-14 h-14 bg-red-100 rounded-2xl mb-4">
+          <i class="fa-solid fa-store text-red-600 text-2xl"></i>
+        </div>
+        <h1 class="text-3xl font-extrabold text-gray-900 mb-2">Créez votre boutique</h1>
+        <p class="text-gray-600">Gratuit le premier mois. Aucune carte bancaire requise.</p>
+      </div>
+
+      <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-8">
+        <form id="inscription-form" class="space-y-5" onsubmit="handleInscription(event)">
+          <div>
+            <label class="block text-sm font-semibold text-gray-700 mb-1.5">Nom du restaurant <span class="text-red-500">*</span></label>
+            <input id="reg-nom-restaurant" type="text" required minlength="2" maxlength="100"
+              class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200 focus:border-red-400 transition-colors"
+              placeholder="Chez Fatou, La Bonne Table...">
+          </div>
+
+          <div>
+            <label class="block text-sm font-semibold text-gray-700 mb-1.5">Votre prénom et nom <span class="text-red-500">*</span></label>
+            <input id="reg-nom-gerant" type="text" required minlength="2" maxlength="100"
+              class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200 focus:border-red-400 transition-colors"
+              placeholder="Fatou Traoré">
+          </div>
+
+          <div>
+            <label class="block text-sm font-semibold text-gray-700 mb-1.5">Numéro WhatsApp du restaurant <span class="text-red-500">*</span></label>
+            <input id="reg-whatsapp" type="tel" required
+              class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200 focus:border-red-400 transition-colors"
+              placeholder="+226 70 00 00 00">
+            <p class="text-xs text-gray-400 mt-1">Les commandes arriveront sur ce numéro WhatsApp.</p>
+          </div>
+
+          <div>
+            <label class="block text-sm font-semibold text-gray-700 mb-1.5">Email professionnel <span class="text-red-500">*</span></label>
+            <input id="reg-email" type="email" required
+              class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200 focus:border-red-400 transition-colors"
+              placeholder="contact@monrestaurant.com">
+          </div>
+
+          <div>
+            <label class="block text-sm font-semibold text-gray-700 mb-1.5">Mot de passe <span class="text-red-500">*</span></label>
+            <div class="relative">
+              <input id="reg-password" type="password" required minlength="8"
+                class="w-full border border-gray-200 rounded-xl px-4 py-3 pr-10 text-sm focus:outline-none focus:ring-2 focus:ring-red-200 focus:border-red-400 transition-colors"
+                placeholder="8 caractères minimum">
+              <button type="button" onclick="togglePwd()" class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+                <i id="reg-eye" class="fa-regular fa-eye text-sm"></i>
+              </button>
+            </div>
+          </div>
+
+          <!-- URL de la boutique preview -->
+          <div class="bg-gray-50 rounded-xl p-4">
+            <div class="text-xs font-semibold text-gray-500 mb-1">Votre URL de boutique</div>
+            <div class="text-sm font-bold text-gray-900">monmenu.app/<span id="slug-preview" class="text-red-600">votre-restaurant</span></div>
+          </div>
+
+          <div class="flex items-start gap-3">
+            <input id="reg-cgu" type="checkbox" required class="mt-0.5 rounded border-gray-300 text-red-600 focus:ring-red-200">
+            <label for="reg-cgu" class="text-xs text-gray-600">
+              J'accepte les <a href="/legal/cgu" target="_blank" class="text-red-600 hover:underline">Conditions Générales d'Utilisation</a> et la <a href="/legal/confidentialite" target="_blank" class="text-red-600 hover:underline">Politique de confidentialité</a>.
+            </label>
+          </div>
+
+          <p id="reg-error" class="text-xs text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2 hidden"></p>
+          <p id="reg-success" class="text-xs text-green-700 bg-green-50 border border-green-100 rounded-lg px-3 py-2 hidden"></p>
+
+          <button type="submit" id="reg-btn"
+            class="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3.5 rounded-xl transition-colors flex items-center justify-center gap-2">
+            <i class="fa-solid fa-store"></i>
+            <span>Créer ma boutique gratuitement</span>
+          </button>
+        </form>
+
+        <div class="mt-6 pt-6 border-t border-gray-100 text-center">
+          <p class="text-sm text-gray-600">Déjà un compte ? <a href="/dashboard" class="text-red-600 font-semibold hover:underline">Se connecter</a></p>
+        </div>
+      </div>
+
+      <!-- Garanties -->
+      <div class="grid grid-cols-3 gap-4 mt-6 text-center">
+        <div class="text-xs text-gray-500">
+          <i class="fa-solid fa-lock text-gray-400 text-base block mb-1"></i>
+          Données sécurisées
+        </div>
+        <div class="text-xs text-gray-500">
+          <i class="fa-solid fa-circle-check text-green-500 text-base block mb-1"></i>
+          Prêt en 5 min
+        </div>
+        <div class="text-xs text-gray-500">
+          <i class="fa-solid fa-xmark text-red-500 text-base block mb-1"></i>
+          Sans engagement
+        </div>
+      </div>
+    </div>
+  </section>
+  ${renderFooter(nomProjet)}
+  <script>
+    function togglePwd() {
+      const inp = document.getElementById('reg-password');
+      const icon = document.getElementById('reg-eye');
+      inp.type = inp.type === 'password' ? 'text' : 'password';
+      icon.className = inp.type === 'password' ? 'fa-regular fa-eye text-sm' : 'fa-regular fa-eye-slash text-sm';
+    }
+    
+    // Preview du slug en temps réel
+    document.getElementById('reg-nom-restaurant').addEventListener('input', function() {
+      const slug = this.value.toLowerCase()
+        .normalize('NFD').replace(/[\\u0300-\\u036f]/g, '')
+        .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 50);
+      document.getElementById('slug-preview').textContent = slug || 'votre-restaurant';
+    });
+    
+    async function handleInscription(e) {
+      e.preventDefault();
+      const btn = document.getElementById('reg-btn');
+      const errEl = document.getElementById('reg-error');
+      const successEl = document.getElementById('reg-success');
+      errEl.classList.add('hidden');
+      successEl.classList.add('hidden');
+      btn.disabled = true;
+      btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i><span>Création en cours...</span>';
+      
+      const payload = {
+        nom_restaurant: document.getElementById('reg-nom-restaurant').value.trim(),
+        nom_gerant: document.getElementById('reg-nom-gerant').value.trim(),
+        whatsapp_number: document.getElementById('reg-whatsapp').value.trim(),
+        email: document.getElementById('reg-email').value.trim(),
+        password: document.getElementById('reg-password').value
+      };
+      
+      try {
+        const res = await fetch('/api/v1/auth/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+          successEl.textContent = 'Compte créé ! Vérifiez votre email pour confirmer. Vous serez redirigé vers votre tableau de bord.';
+          successEl.classList.remove('hidden');
+          e.target.reset();
+          setTimeout(() => { window.location.href = '/dashboard'; }, 3000);
+        } else {
+          errEl.textContent = data.error || 'Erreur lors de la création du compte.';
+          errEl.classList.remove('hidden');
+        }
+      } catch {
+        errEl.textContent = 'Erreur de connexion. Réessayez.';
+        errEl.classList.remove('hidden');
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fa-solid fa-store"></i><span>Créer ma boutique gratuitement</span>';
+      }
+    }
+  </script>
+</body>
+</html>`
+}
+
+// ==============================
+// PAGES LÉGALES
+// ==============================
+function renderLegalPage(type: 'cgu' | 'confidentialite' | 'mentions' | 'cookies', nomProjet: string): string {
+  const year = new Date().getFullYear()
+  
+  const contents: Record<string, { title: string; body: string }> = {
+    cgu: {
+      title: 'Conditions Générales d\'Utilisation',
+      body: `
+<h2 class="text-xl font-bold text-gray-900 mt-8 mb-3">1. Objet</h2>
+<p>Les présentes Conditions Générales d'Utilisation (CGU) régissent l'utilisation de la plateforme <strong>${nomProjet}</strong>, accessible à l'adresse monmenu.app, opérée par l'équipe ${nomProjet}.</p>
+
+<h2 class="text-xl font-bold text-gray-900 mt-8 mb-3">2. Services proposés</h2>
+<p>${nomProjet} est une plateforme SaaS permettant aux restaurants et établissements de restauration d'Afrique de l'Ouest et Centrale de :</p>
+<ul class="list-disc pl-6 mt-2 space-y-1">
+  <li>Créer une boutique de commande en ligne accessible sans inscription pour leurs clients</li>
+  <li>Recevoir des notifications de commandes via WhatsApp</li>
+  <li>Gérer leur menu, leurs commandes et leurs statistiques via un tableau de bord</li>
+  <li>Générer des QR codes pour faciliter l'accès à leur boutique</li>
+</ul>
+
+<h2 class="text-xl font-bold text-gray-900 mt-8 mb-3">3. Accès au service</h2>
+<p>L'inscription est réservée aux professionnels de la restauration. Les clients finaux commandent sans créer de compte. Le restaurant s'engage à fournir des informations exactes lors de l'inscription.</p>
+
+<h2 class="text-xl font-bold text-gray-900 mt-8 mb-3">4. Responsabilités</h2>
+<p>Le restaurant est responsable :</p>
+<ul class="list-disc pl-6 mt-2 space-y-1">
+  <li>De l'exactitude des informations de son menu (prix, disponibilité)</li>
+  <li>De la traçabilité et du traitement des commandes reçues</li>
+  <li>Du respect des obligations légales locales (hygiène, TVA, etc.)</li>
+  <li>De la confidentialité de ses identifiants de connexion</li>
+</ul>
+<p class="mt-3">${nomProjet} est responsable de :</p>
+<ul class="list-disc pl-6 mt-2 space-y-1">
+  <li>La disponibilité de la plateforme (objectif SLA 99,5%)</li>
+  <li>La sécurité des données stockées</li>
+  <li>L'acheminement des notifications WhatsApp</li>
+</ul>
+
+<h2 class="text-xl font-bold text-gray-900 mt-8 mb-3">5. Tarification</h2>
+<p>Les tarifs sont ceux affichés sur la page <a href="/tarifs" class="text-red-600 hover:underline">Tarifs</a> au moment de l'inscription. Le premier mois est offert. L'abonnement est mensuel sans engagement, sauf mention contraire.</p>
+
+<h2 class="text-xl font-bold text-gray-900 mt-8 mb-3">6. Commission</h2>
+<p>${nomProjet} ne prélève aucune commission sur les ventes. Seul un abonnement mensuel fixe est facturé. Des frais fixes peuvent s'appliquer au-delà du quota de commandes incluses selon le plan souscrit.</p>
+
+<h2 class="text-xl font-bold text-gray-900 mt-8 mb-3">7. Résiliation</h2>
+<p>Le restaurant peut résilier son abonnement à tout moment depuis son tableau de bord ou en contactant le support. Les données sont conservées 30 jours après résiliation puis supprimées définitivement.</p>
+
+<h2 class="text-xl font-bold text-gray-900 mt-8 mb-3">8. Propriété intellectuelle</h2>
+<p>Le code, les designs et la marque ${nomProjet} sont la propriété exclusive de leurs auteurs. Le restaurant conserve la propriété de son contenu (menu, photos, informations).</p>
+
+<h2 class="text-xl font-bold text-gray-900 mt-8 mb-3">9. Droit applicable</h2>
+<p>Les présentes CGU sont soumises au droit burkinabè. Tout litige sera soumis aux tribunaux compétents de Ouagadougou, Burkina Faso.</p>
+
+<h2 class="text-xl font-bold text-gray-900 mt-8 mb-3">10. Modification</h2>
+<p>Ces CGU peuvent être modifiées. Les utilisateurs seront informés par email au moins 15 jours avant toute modification substantielle.</p>
+<p class="mt-4 text-sm text-gray-400">Dernière mise à jour : juillet ${year}</p>`
+    },
+    confidentialite: {
+      title: 'Politique de Confidentialité',
+      body: `
+<h2 class="text-xl font-bold text-gray-900 mt-8 mb-3">1. Responsable du traitement</h2>
+<p>Le responsable du traitement des données est l'équipe <strong>${nomProjet}</strong>, joignable à l'adresse <a href="mailto:support@monmenu.app" class="text-red-600 hover:underline">support@monmenu.app</a>.</p>
+
+<h2 class="text-xl font-bold text-gray-900 mt-8 mb-3">2. Données collectées</h2>
+<h3 class="font-semibold text-gray-800 mt-4 mb-2">Données des restaurants (tenants)</h3>
+<ul class="list-disc pl-6 space-y-1">
+  <li>Email et mot de passe (authentification Supabase Auth — haché)</li>
+  <li>Nom du restaurant, numéro WhatsApp, couleurs de boutique</li>
+  <li>Informations du menu (catégories, produits, prix)</li>
+</ul>
+<h3 class="font-semibold text-gray-800 mt-4 mb-2">Données des clients finaux (commandes)</h3>
+<ul class="list-disc pl-6 space-y-1">
+  <li>Prénom et nom (saisi librement)</li>
+  <li>Numéro de téléphone</li>
+  <li>Adresse de livraison et coordonnées GPS (si géolocalisation acceptée)</li>
+  <li>Contenu et montant de la commande</li>
+</ul>
+
+<h2 class="text-xl font-bold text-gray-900 mt-8 mb-3">3. Finalités du traitement</h2>
+<ul class="list-disc pl-6 space-y-1">
+  <li>Fournir le service de commande en ligne</li>
+  <li>Envoyer les notifications WhatsApp et email de commande</li>
+  <li>Calculer les frais de livraison (coordonnées GPS)</li>
+  <li>Permettre le suivi de commande</li>
+  <li>Établir des statistiques agrégées (non nominatives)</li>
+</ul>
+
+<h2 class="text-xl font-bold text-gray-900 mt-8 mb-3">4. Base légale</h2>
+<p>Les traitements reposent sur : l'exécution du contrat de service (restaurant), le consentement (géolocalisation), et l'intérêt légitime (sécurité, prévention de la fraude).</p>
+
+<h2 class="text-xl font-bold text-gray-900 mt-8 mb-3">5. Durée de conservation</h2>
+<ul class="list-disc pl-6 space-y-1">
+  <li>Données de commande : 24 mois</li>
+  <li>Données de compte restaurant : durée de l'abonnement + 30 jours</li>
+  <li>Logs de sécurité : 12 mois</li>
+</ul>
+
+<h2 class="text-xl font-bold text-gray-900 mt-8 mb-3">6. Sous-traitants</h2>
+<ul class="list-disc pl-6 space-y-1">
+  <li><strong>Cloudflare</strong> (hébergement, CDN, base de données D1, KV, R2) — USA/EU</li>
+  <li><strong>Supabase</strong> (authentification, base PostgreSQL) — EU</li>
+  <li><strong>Meta/WhatsApp</strong> (notifications) — USA</li>
+  <li><strong>Brevo</strong> (emails transactionnels) — France/EU</li>
+  <li><strong>Mapbox</strong> (cartographie livraison) — USA</li>
+</ul>
+
+<h2 class="text-xl font-bold text-gray-900 mt-8 mb-3">7. Sécurité</h2>
+<p>Les données sont chiffrées en transit (TLS 1.3) et au repos. Les mots de passe sont hachés par Supabase Auth (bcrypt). L'isolation multi-tenant est assurée par des politiques RLS sur toutes les tables. Aucune donnée d'un restaurant n'est accessible par un autre.</p>
+
+<h2 class="text-xl font-bold text-gray-900 mt-8 mb-3">8. Vos droits</h2>
+<p>Vous disposez des droits d'accès, rectification, effacement, portabilité et opposition. Pour exercer ces droits : <a href="mailto:support@monmenu.app" class="text-red-600 hover:underline">support@monmenu.app</a>.</p>
+<p class="mt-4 text-sm text-gray-400">Dernière mise à jour : juillet ${year}</p>`
+    },
+    mentions: {
+      title: 'Mentions Légales',
+      body: `
+<h2 class="text-xl font-bold text-gray-900 mt-8 mb-3">Éditeur du site</h2>
+<p><strong>${nomProjet}</strong><br>
+Plateforme de commande en ligne pour restaurants d'Afrique de l'Ouest et Centrale<br>
+Siège social : Ouagadougou, Burkina Faso<br>
+Email : <a href="mailto:contact@monmenu.app" class="text-red-600 hover:underline">contact@monmenu.app</a></p>
+
+<h2 class="text-xl font-bold text-gray-900 mt-8 mb-3">Hébergement</h2>
+<p><strong>Cloudflare, Inc.</strong><br>
+101 Townsend St, San Francisco, CA 94107, États-Unis<br>
+Déploiement via Cloudflare Pages et Workers (edge computing mondial).<br>
+Base de données D1 (SQLite distribuée), KV Store, R2 Object Storage.</p>
+
+<p class="mt-4"><strong>Supabase</strong><br>
+Authentification et base de données PostgreSQL hébergées sur serveurs EU.</p>
+
+<h2 class="text-xl font-bold text-gray-900 mt-8 mb-3">Propriété intellectuelle</h2>
+<p>L'ensemble du contenu de ce site (textes, code source, design, logo, iconographie) est protégé par le droit d'auteur. Toute reproduction, même partielle, sans autorisation écrite est interdite.</p>
+<p class="mt-3">Les icônes utilisées proviennent de <a href="https://fontawesome.com" target="_blank" rel="noopener" class="text-red-600 hover:underline">Font Awesome</a> (licence Free).</p>
+
+<h2 class="text-xl font-bold text-gray-900 mt-8 mb-3">Données personnelles</h2>
+<p>Voir notre <a href="/legal/confidentialite" class="text-red-600 hover:underline">Politique de Confidentialité</a>.</p>
+
+<h2 class="text-xl font-bold text-gray-900 mt-8 mb-3">Cookies</h2>
+<p>Voir notre <a href="/legal/cookies" class="text-red-600 hover:underline">Politique de Cookies</a>.</p>
+
+<h2 class="text-xl font-bold text-gray-900 mt-8 mb-3">Limitation de responsabilité</h2>
+<p>${nomProjet} s'efforce d'assurer la disponibilité et l'exactitude des informations publiées. Cependant, la responsabilité de ${nomProjet} ne saurait être engagée en cas d'erreur, d'omission ou d'interruption de service.</p>
+
+<h2 class="text-xl font-bold text-gray-900 mt-8 mb-3">Droit applicable</h2>
+<p>Le présent site est soumis au droit burkinabè. Tout litige sera soumis à la juridiction compétente de Ouagadougou.</p>
+<p class="mt-4 text-sm text-gray-400">Dernière mise à jour : juillet ${year}</p>`
+    },
+    cookies: {
+      title: 'Politique de Cookies',
+      body: `
+<h2 class="text-xl font-bold text-gray-900 mt-8 mb-3">Qu'est-ce qu'un cookie ?</h2>
+<p>Un cookie est un petit fichier texte déposé sur votre terminal (ordinateur, tablette, smartphone) lors de la visite d'un site web.</p>
+
+<h2 class="text-xl font-bold text-gray-900 mt-8 mb-3">Cookies utilisés par ${nomProjet}</h2>
+
+<h3 class="font-semibold text-gray-800 mt-5 mb-2">Cookies strictement nécessaires</h3>
+<div class="overflow-x-auto">
+  <table class="w-full text-sm border border-gray-100 rounded-xl overflow-hidden">
+    <thead class="bg-gray-50">
+      <tr>
+        <th class="text-left px-4 py-2 font-semibold text-gray-700">Nom</th>
+        <th class="text-left px-4 py-2 font-semibold text-gray-700">Finalité</th>
+        <th class="text-left px-4 py-2 font-semibold text-gray-700">Durée</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-gray-50">
+      <tr>
+        <td class="px-4 py-2 font-mono text-xs">monmenu_cookies</td>
+        <td class="px-4 py-2 text-gray-600">Mémoriser votre consentement cookies</td>
+        <td class="px-4 py-2 text-gray-500">12 mois</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<h3 class="font-semibold text-gray-800 mt-5 mb-2">Stockage local (localStorage) — pas des cookies</h3>
+<div class="overflow-x-auto">
+  <table class="w-full text-sm border border-gray-100 rounded-xl overflow-hidden">
+    <thead class="bg-gray-50">
+      <tr>
+        <th class="text-left px-4 py-2 font-semibold text-gray-700">Clé</th>
+        <th class="text-left px-4 py-2 font-semibold text-gray-700">Finalité</th>
+        <th class="text-left px-4 py-2 font-semibold text-gray-700">Durée</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-gray-50">
+      <tr>
+        <td class="px-4 py-2 font-mono text-xs">monmenu_cart_[slug]</td>
+        <td class="px-4 py-2 text-gray-600">Persistance du panier d'achat (côté client uniquement)</td>
+        <td class="px-4 py-2 text-gray-500">24 heures</td>
+      </tr>
+      <tr>
+        <td class="px-4 py-2 font-mono text-xs">monmenu_auth_token</td>
+        <td class="px-4 py-2 text-gray-600">Session du tableau de bord restaurant</td>
+        <td class="px-4 py-2 text-gray-500">1 heure</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<h2 class="text-xl font-bold text-gray-900 mt-8 mb-3">Cookies tiers</h2>
+<p>Des scripts tiers peuvent déposer leurs propres cookies :</p>
+<ul class="list-disc pl-6 mt-2 space-y-1">
+  <li><strong>Mapbox</strong> : cartographie lors de la saisie d'adresse de livraison</li>
+  <li><strong>Cloudflare</strong> : protection anti-bot (cf_clearance)</li>
+</ul>
+
+<h2 class="text-xl font-bold text-gray-900 mt-8 mb-3">Gérer vos préférences</h2>
+<p>Vous pouvez à tout moment modifier vos préférences en utilisant le bandeau cookies en bas de page, ou en paramétrant votre navigateur pour refuser les cookies. Notez que certaines fonctionnalités du site (notamment la carte de livraison) peuvent ne plus fonctionner correctement si vous désactivez les cookies.</p>
+
+<div class="flex gap-3 mt-6">
+  <button onclick="acceptCookies(); window.location.reload();" class="bg-red-600 text-white font-semibold px-5 py-2.5 rounded-xl text-sm hover:bg-red-700 transition-colors">Accepter les cookies</button>
+  <button onclick="rejectCookies(); window.location.reload();" class="border border-gray-300 text-gray-700 font-semibold px-5 py-2.5 rounded-xl text-sm hover:bg-gray-50 transition-colors">Refuser les cookies non essentiels</button>
+</div>
+<p class="mt-4 text-sm text-gray-400">Dernière mise à jour : juillet ${year}</p>`
+    }
+  }
+
+  const content = contents[type]
+
+  return `${renderHead(
+    `${content.title} — ${nomProjet}`,
+    `${content.title} de ${nomProjet}. Information sur vos droits et nos obligations.`,
+    nomProjet
+  )}
+<body class="font-sans bg-white text-gray-900">
+  ${renderNav(nomProjet, '')}
+  <main class="max-w-3xl mx-auto px-4 sm:px-6 py-16">
+    <nav class="text-xs text-gray-400 mb-8 flex items-center gap-2">
+      <a href="/" class="hover:text-gray-600 transition-colors">Accueil</a>
+      <i class="fa-solid fa-chevron-right text-gray-300"></i>
+      <span class="text-gray-600">${content.title}</span>
+    </nav>
+    <article class="prose prose-sm max-w-none text-gray-700 leading-relaxed">
+      <h1 class="text-3xl sm:text-4xl font-extrabold text-gray-900 mb-2">${content.title}</h1>
+      <p class="text-gray-400 text-sm mb-8">En vigueur à compter de juillet ${year}</p>
+      ${content.body}
+    </article>
+
+    <!-- Navigation entre pages légales -->
+    <nav class="mt-12 pt-8 border-t border-gray-100 grid grid-cols-2 gap-4">
+      <a href="/legal/cgu" class="p-4 border border-gray-100 rounded-xl hover:border-red-200 hover:bg-red-50 transition-colors group">
+        <div class="text-xs text-gray-400 mb-0.5 group-hover:text-red-400">Conditions</div>
+        <div class="text-sm font-semibold text-gray-900 group-hover:text-red-700">CGU</div>
+      </a>
+      <a href="/legal/confidentialite" class="p-4 border border-gray-100 rounded-xl hover:border-red-200 hover:bg-red-50 transition-colors group">
+        <div class="text-xs text-gray-400 mb-0.5 group-hover:text-red-400">Protection</div>
+        <div class="text-sm font-semibold text-gray-900 group-hover:text-red-700">Confidentialité</div>
+      </a>
+      <a href="/legal/mentions" class="p-4 border border-gray-100 rounded-xl hover:border-red-200 hover:bg-red-50 transition-colors group">
+        <div class="text-xs text-gray-400 mb-0.5 group-hover:text-red-400">Information</div>
+        <div class="text-sm font-semibold text-gray-900 group-hover:text-red-700">Mentions légales</div>
+      </a>
+      <a href="/legal/cookies" class="p-4 border border-gray-100 rounded-xl hover:border-red-200 hover:bg-red-50 transition-colors group">
+        <div class="text-xs text-gray-400 mb-0.5 group-hover:text-red-400">Données locales</div>
+        <div class="text-sm font-semibold text-gray-900 group-hover:text-red-700">Politique cookies</div>
+      </a>
+    </nav>
+  </main>
+  ${renderFooter(nomProjet)}
+  <script src="/static/js/main.js"></script>
 </body>
 </html>`
 }

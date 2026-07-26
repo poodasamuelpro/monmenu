@@ -10,13 +10,17 @@ tenantsRouter.get('/:slug', async (c) => {
   setSecurityHeaders(c)
   const slug = c.req.param('slug')
 
-  // Essayer le cache KV
+  // Essayer le cache KV (graceful fallback si KV non configuré)
   const cacheKey = `tenant:${slug}`
-  const cached = await c.env.KV_CACHE.get(cacheKey, 'json')
-  if (cached) {
-    c.header('X-Cache', 'HIT')
-    return c.json(cached)
-  }
+  try {
+    if (c.env.KV_CACHE) {
+      const cached = await c.env.KV_CACHE.get(cacheKey, 'json')
+      if (cached) {
+        c.header('X-Cache', 'HIT')
+        return c.json(cached)
+      }
+    }
+  } catch { /* KV non disponible en local dev */ }
 
   const tenant = await c.env.DB
     .prepare(`
@@ -39,8 +43,8 @@ tenantsRouter.get('/:slug', async (c) => {
     return c.json({ error: 'Restaurant introuvable.' }, 404)
   }
 
-  // Mettre en cache 5 minutes
-  await c.env.KV_CACHE.put(cacheKey, JSON.stringify(tenant), { expirationTtl: 300 })
+  // Mettre en cache 5 minutes (graceful fallback)
+  try { if (c.env.KV_CACHE) await c.env.KV_CACHE.put(cacheKey, JSON.stringify(tenant), { expirationTtl: 300 }) } catch {}
 
   return c.json(tenant)
 })
@@ -51,11 +55,12 @@ tenantsRouter.get('/:slug/menu', async (c) => {
   const slug = c.req.param('slug')
 
   const cacheKey = `menu:${slug}`
-  const cached = await c.env.KV_CACHE.get(cacheKey, 'json')
-  if (cached) {
-    c.header('X-Cache', 'HIT')
-    return c.json(cached)
-  }
+  try {
+    if (c.env.KV_CACHE) {
+      const cached = await c.env.KV_CACHE.get(cacheKey, 'json')
+      if (cached) { c.header('X-Cache', 'HIT'); return c.json(cached) }
+    }
+  } catch {}
 
   // Récupérer tenant_id depuis le slug
   const tenantRow = await c.env.DB
@@ -104,8 +109,8 @@ tenantsRouter.get('/:slug/menu', async (c) => {
 
   const result = { categories: menu }
 
-  // Cache 2 minutes
-  await c.env.KV_CACHE.put(cacheKey, JSON.stringify(result), { expirationTtl: 120 })
+  // Cache 2 minutes (graceful fallback)
+  try { if (c.env.KV_CACHE) await c.env.KV_CACHE.put(cacheKey, JSON.stringify(result), { expirationTtl: 120 }) } catch {}
 
   return c.json(result)
 })
@@ -202,8 +207,8 @@ tenantsRouter.post('/', async (c) => {
     )
     .run()
 
-  // Invalider cache
-  await c.env.KV_CACHE.delete(`tenant:${data.slug}`)
+  // Invalider cache (graceful fallback)
+  try { if (c.env.KV_CACHE) await c.env.KV_CACHE.delete(`tenant:${data.slug}`) } catch {}
 
   return c.json({ success: true, tenant_id: tenantId, slug: data.slug }, 201)
 })

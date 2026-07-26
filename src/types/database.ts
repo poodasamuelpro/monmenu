@@ -212,8 +212,8 @@ export interface AuditLog {
 // Contexte Cloudflare Workers
 export type Env = {
   DB: D1Database
-  KV_CACHE: KVNamespace
-  R2_MEDIA: R2Bucket
+  KV_CACHE?: KVNamespace        // Optionnel — non provisionné en dev local
+  R2_MEDIA?: R2Bucket           // Optionnel — non requis pour le MVP
   SUPABASE_URL: string
   SUPABASE_ANON_KEY: string
   WHATSAPP_API_TOKEN: string

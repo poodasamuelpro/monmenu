@@ -56,10 +56,12 @@ commandesRouter.post('/', async (c) => {
   const data = parseResult.data
   const env = c.env
 
-  // Vérification idempotency key
-  const idempotencyCheck = await checkIdempotency(data.idempotency_key, env.KV_CACHE)
-  if (idempotencyCheck.exists) {
-    return c.json(idempotencyCheck.data, 200) // Commande déjà créée
+  // Vérification idempotency key (optionnel — KV pas toujours disponible en dev)
+  if (env.KV_CACHE) {
+    const idempotencyCheck = await checkIdempotency(data.idempotency_key, env.KV_CACHE)
+    if (idempotencyCheck.exists) {
+      return c.json(idempotencyCheck.data, 200) // Commande déjà créée
+    }
   }
 
   // Vérifier que le tenant existe et est actif
@@ -205,9 +207,12 @@ commandesRouter.post('/', async (c) => {
     url_suivi: `/suivi/${tokenSuivi}`
   }
 
-  c.executionCtx.waitUntil(
-    storeIdempotency(data.idempotency_key, responseData, env.KV_CACHE)
-  )
+  // Stocker idempotency key si KV disponible
+  if (env.KV_CACHE) {
+    c.executionCtx.waitUntil(
+      storeIdempotency(data.idempotency_key, responseData, env.KV_CACHE)
+    )
+  }
 
   return c.json(responseData, 201)
 })

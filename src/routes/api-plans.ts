@@ -24,11 +24,16 @@ plansRouter.get('/', async (c) => {
   const deviseParam = c.req.query('devise') ?? 'FCFA'
   const cacheKey = `plans:${deviseParam}`
 
-  const cached = await c.env.KV_CACHE.get(cacheKey, 'json')
-  if (cached) {
-    c.header('X-Cache', 'HIT')
-    return c.json(cached)
-  }
+  // KV cache optionnel (non disponible en local dev)
+  try {
+    if (c.env.KV_CACHE) {
+      const cached = await c.env.KV_CACHE.get(cacheKey, 'json')
+      if (cached) {
+        c.header('X-Cache', 'HIT')
+        return c.json(cached)
+      }
+    }
+  } catch { /* KV non disponible */ }
 
   const plans = await c.env.DB
     .prepare('SELECT * FROM plans WHERE actif = 1 ORDER BY ordre_affichage ASC')
@@ -46,8 +51,12 @@ plansRouter.get('/', async (c) => {
 
   const result = { plans: plansConverted, devise: deviseParam }
 
-  // Cache 10 minutes
-  await c.env.KV_CACHE.put(cacheKey, JSON.stringify(result), { expirationTtl: 600 })
+  // Cache 10 minutes (optionnel)
+  try {
+    if (c.env.KV_CACHE) {
+      await c.env.KV_CACHE.put(cacheKey, JSON.stringify(result), { expirationTtl: 600 })
+    }
+  } catch { /* KV non disponible */ }
 
   return c.json(result)
 })
