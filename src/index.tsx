@@ -10,7 +10,7 @@ import { plansRouter } from './routes/api-plans'
 import { authRouter } from './routes/api-auth'
 import { dashboardRouter } from './routes/api-dashboard'
 import { setSecurityHeaders } from './lib/security'
-import { getNomProjet, createSupabaseAdminClient } from './lib/supabase'
+import { getNomProjet, getWhatsAppSupport, createSupabaseAdminClient } from './lib/supabase'
 
 const app = new Hono<{ Bindings: Env }>()
 
@@ -140,17 +140,92 @@ app.get('/suivi/:token', async (c) => {
   return c.html(renderSuiviPage(token, nomProjet))
 })
 
-// ---- Page boutique restaurant ----
+// ---- Page d'accueil ----
+app.get('/', async (c) => {
+  setSecurityHeaders(c)
+  const nomProjet = await getNomProjet(c.env)
+  return c.html(renderHomePage(nomProjet))
+})
+
+// ---- Pages institutionnelles ----
+// IMPORTANT : Ces routes DOIVENT être définies AVANT /:slug
+// sinon Hono capture tout avec le paramètre générique
+app.get('/fonctionnalites', async (c) => {
+  setSecurityHeaders(c)
+  const nomProjet = await getNomProjet(c.env)
+  return c.html(renderFonctionnalitesPage(nomProjet))
+})
+
+app.get('/tarifs', async (c) => {
+  setSecurityHeaders(c)
+  const nomProjet = await getNomProjet(c.env)
+  return c.html(renderTarifsPage(nomProjet))
+})
+
+app.get('/contact', async (c) => {
+  setSecurityHeaders(c)
+  const [nomProjet, whatsappSupport] = await Promise.all([
+    getNomProjet(c.env),
+    getWhatsAppSupport(c.env)
+  ])
+  return c.html(renderContactPage(nomProjet, whatsappSupport))
+})
+
+// ---- Page inscription restaurant ----
+app.get('/inscription', async (c) => {
+  setSecurityHeaders(c)
+  const nomProjet = await getNomProjet(c.env)
+  return c.html(renderInscriptionPage(nomProjet))
+})
+
+// ---- Page Blog ----
+app.get('/blog', async (c) => {
+  setSecurityHeaders(c)
+  const nomProjet = await getNomProjet(c.env)
+  return c.html(renderBlogPage(nomProjet))
+})
+
+// ---- Pages légales ----
+app.get('/legal/cgu', async (c) => {
+  setSecurityHeaders(c)
+  const nomProjet = await getNomProjet(c.env)
+  return c.html(renderLegalPage('cgu', nomProjet))
+})
+app.get('/legal/confidentialite', async (c) => {
+  setSecurityHeaders(c)
+  const nomProjet = await getNomProjet(c.env)
+  return c.html(renderLegalPage('confidentialite', nomProjet))
+})
+app.get('/legal/mentions', async (c) => {
+  setSecurityHeaders(c)
+  const nomProjet = await getNomProjet(c.env)
+  return c.html(renderLegalPage('mentions', nomProjet))
+})
+app.get('/legal/cookies', async (c) => {
+  setSecurityHeaders(c)
+  const nomProjet = await getNomProjet(c.env)
+  return c.html(renderLegalPage('cookies', nomProjet))
+})
+
+// ---- Dashboard ----
+app.get('/dashboard', async (c) => {
+  setSecurityHeaders(c)
+  const nomProjet = await getNomProjet(c.env)
+  return c.html(renderDashboardLoginPage(nomProjet))
+})
+
+app.get('/dashboard/*', async (c) => {
+  setSecurityHeaders(c)
+  const nomProjet = await getNomProjet(c.env)
+  return c.html(renderDashboardPage(nomProjet))
+})
+
+// ---- Page boutique restaurant (DOIT être EN DERNIER — route générique) ----
+// Cette route /:slug capture tout ce qui n'a pas été intercepté avant.
+// Elle cherche le slug dans Supabase — si non trouvé → 404
 app.get('/:slug', async (c) => {
   setSecurityHeaders(c)
   const slug = c.req.param('slug')
-
-  const reservedSlugs = ['fr', 'en', 'blog', 'contact', 'tarifs', 'fonctionnalites', 
-    'legal', 'inscription', 'dashboard', 'api', 'static', 'suivi', 'sitemap.xml', 
-    'robots.txt', 'favicon.ico']
-  if (reservedSlugs.includes(slug)) {
-    return c.notFound()
-  }
 
   // SUPABASE — Vérifier que le restaurant existe + PDV pour le footer (APPLICATION DATA)
   const adminClient = createSupabaseAdminClient(c.env)
@@ -201,80 +276,6 @@ app.get('/:slug', async (c) => {
 
   const nomProjet = await getNomProjet(c.env)
   return c.html(renderBoutiquePage(tenant, nomProjet))
-})
-
-// ---- Page d'accueil ----
-app.get('/', async (c) => {
-  setSecurityHeaders(c)
-  const nomProjet = await getNomProjet(c.env)
-  return c.html(renderHomePage(nomProjet))
-})
-
-// ---- Pages institutionnelles ----
-app.get('/fonctionnalites', async (c) => {
-  setSecurityHeaders(c)
-  const nomProjet = await getNomProjet(c.env)
-  return c.html(renderFonctionnalitesPage(nomProjet))
-})
-
-app.get('/tarifs', async (c) => {
-  setSecurityHeaders(c)
-  const nomProjet = await getNomProjet(c.env)
-  return c.html(renderTarifsPage(nomProjet))
-})
-
-app.get('/contact', async (c) => {
-  setSecurityHeaders(c)
-  const nomProjet = await getNomProjet(c.env)
-  return c.html(renderContactPage(nomProjet))
-})
-
-app.get('/dashboard', async (c) => {
-  setSecurityHeaders(c)
-  const nomProjet = await getNomProjet(c.env)
-  return c.html(renderDashboardLoginPage(nomProjet))
-})
-
-app.get('/dashboard/*', async (c) => {
-  setSecurityHeaders(c)
-  const nomProjet = await getNomProjet(c.env)
-  return c.html(renderDashboardPage(nomProjet))
-})
-
-// ---- Page inscription restaurant ----
-app.get('/inscription', async (c) => {
-  setSecurityHeaders(c)
-  const nomProjet = await getNomProjet(c.env)
-  return c.html(renderInscriptionPage(nomProjet))
-})
-
-// ---- Page Blog ----
-app.get('/blog', async (c) => {
-  setSecurityHeaders(c)
-  const nomProjet = await getNomProjet(c.env)
-  return c.html(renderBlogPage(nomProjet))
-})
-
-// ---- Pages légales ----
-app.get('/legal/cgu', async (c) => {
-  setSecurityHeaders(c)
-  const nomProjet = await getNomProjet(c.env)
-  return c.html(renderLegalPage('cgu', nomProjet))
-})
-app.get('/legal/confidentialite', async (c) => {
-  setSecurityHeaders(c)
-  const nomProjet = await getNomProjet(c.env)
-  return c.html(renderLegalPage('confidentialite', nomProjet))
-})
-app.get('/legal/mentions', async (c) => {
-  setSecurityHeaders(c)
-  const nomProjet = await getNomProjet(c.env)
-  return c.html(renderLegalPage('mentions', nomProjet))
-})
-app.get('/legal/cookies', async (c) => {
-  setSecurityHeaders(c)
-  const nomProjet = await getNomProjet(c.env)
-  return c.html(renderLegalPage('cookies', nomProjet))
 })
 
 // ---- 404 ----
@@ -391,16 +392,16 @@ function renderFooter(nomProjet: string): string {
         </a>
         <p class="text-sm text-gray-400 leading-relaxed">La plateforme de commande en ligne pour les restaurants d'Afrique de l'Ouest et Centrale.</p>
         <div class="flex gap-3 mt-4">
-          <a href="#" aria-label="Facebook" class="w-8 h-8 bg-gray-800 hover:bg-blue-600 rounded-lg flex items-center justify-center transition-colors">
+          <a href="https://facebook.com/monmenuapp" target="_blank" rel="noopener noreferrer" aria-label="Facebook" class="w-8 h-8 bg-gray-800 hover:bg-blue-600 rounded-lg flex items-center justify-center transition-colors">
             <i class="fa-brands fa-facebook-f text-xs"></i>
           </a>
-          <a href="#" aria-label="Instagram" class="w-8 h-8 bg-gray-800 hover:bg-pink-600 rounded-lg flex items-center justify-center transition-colors">
+          <a href="https://instagram.com/monmenuapp" target="_blank" rel="noopener noreferrer" aria-label="Instagram" class="w-8 h-8 bg-gray-800 hover:bg-pink-600 rounded-lg flex items-center justify-center transition-colors">
             <i class="fa-brands fa-instagram text-xs"></i>
           </a>
-          <a href="#" aria-label="WhatsApp" class="w-8 h-8 bg-gray-800 hover:bg-green-600 rounded-lg flex items-center justify-center transition-colors">
+          <a href="https://wa.me/22600000000" target="_blank" rel="noopener noreferrer" aria-label="WhatsApp" class="w-8 h-8 bg-gray-800 hover:bg-green-600 rounded-lg flex items-center justify-center transition-colors">
             <i class="fa-brands fa-whatsapp text-xs"></i>
           </a>
-          <a href="#" aria-label="LinkedIn" class="w-8 h-8 bg-gray-800 hover:bg-blue-700 rounded-lg flex items-center justify-center transition-colors">
+          <a href="https://linkedin.com/company/monmenuapp" target="_blank" rel="noopener noreferrer" aria-label="LinkedIn" class="w-8 h-8 bg-gray-800 hover:bg-blue-700 rounded-lg flex items-center justify-center transition-colors">
             <i class="fa-brands fa-linkedin-in text-xs"></i>
           </a>
         </div>
@@ -784,7 +785,7 @@ function renderHomePage(nomProjet: string): string {
           <i class="fa-solid fa-store"></i>
           <span>Créer ma boutique gratuitement</span>
         </a>
-        <a href="https://wa.me/226XXXXXXXX?text=Bonjour%2C%20je%20souhaite%20en%20savoir%20plus%20sur%20MonMenu" target="_blank" rel="noopener noreferrer" class="inline-flex items-center justify-center gap-2 bg-green-500 hover:bg-green-600 text-white font-bold px-8 py-4 rounded-xl transition-colors text-base">
+        <a href="https://wa.me/22600000000?text=Bonjour%2C%20je%20souhaite%20en%20savoir%20plus%20sur%20MonMenu" target="_blank" rel="noopener noreferrer" class="inline-flex items-center justify-center gap-2 bg-green-500 hover:bg-green-600 text-white font-bold px-8 py-4 rounded-xl transition-colors text-base">
           <i class="fa-brands fa-whatsapp"></i>
           <span>Contacter sur WhatsApp</span>
         </a>
@@ -1258,7 +1259,9 @@ function renderTarifsPage(nomProjet: string): string {
 // ==============================
 // PAGE CONTACT
 // ==============================
-function renderContactPage(nomProjet: string): string {
+function renderContactPage(nomProjet: string, whatsappSupport: string = ''): string {
+  const waNumber = whatsappSupport.replace(/[^0-9]/g, '')
+  const waLink = waNumber ? `https://wa.me/${waNumber}?text=Bonjour%20${encodeURIComponent(nomProjet)}` : '#'
   return `${renderHead(
     `Contact — ${nomProjet}`,
     `Contactez l'équipe ${nomProjet}. Support en français, réponse rapide par WhatsApp.`,
@@ -1273,7 +1276,7 @@ function renderContactPage(nomProjet: string): string {
         <p class="text-gray-600">Notre équipe répond en français. Délai habituel : moins de 24 heures.</p>
       </div>
       <div class="grid sm:grid-cols-2 gap-6 mb-10">
-        <a href="https://wa.me/226XXXXXXXX?text=Bonjour%20MonMenu" target="_blank" rel="noopener noreferrer" class="border border-green-200 bg-green-50 rounded-xl p-6 flex items-center gap-4 hover:shadow-md transition-shadow group">
+        <a href="${waLink}" target="_blank" rel="noopener noreferrer" class="border border-green-200 bg-green-50 rounded-xl p-6 flex items-center gap-4 hover:shadow-md transition-shadow group">
           <div class="w-12 h-12 bg-green-500 rounded-xl flex items-center justify-center text-white flex-shrink-0">
             <i class="fa-brands fa-whatsapp text-2xl"></i>
           </div>

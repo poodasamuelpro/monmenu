@@ -61,7 +61,9 @@ INSERT OR IGNORE INTO config_globale (cle, valeur, description) VALUES
   ('max_tenants_gratuit', '50', 'Nombre max de restaurants en plan gratuit'),
   ('meta_description', 'MonMenu — La plateforme de commande en ligne pour les restaurants africains. Créez votre boutique en ligne en 5 minutes.', 'Description meta du site web'),
   ('whatsapp_support', '+22600000000', 'Numéro WhatsApp du support MonMenu'),
-  ('twitter_handle', '@monmenuapp', 'Compte Twitter MonMenu'),
+  ('instagram_url', 'https://instagram.com/monmenuapp', 'URL Instagram MonMenu'),
+  ('facebook_url', 'https://facebook.com/monmenuapp', 'URL Facebook MonMenu'),
+  ('linkedin_url', 'https://linkedin.com/company/monmenuapp', 'URL LinkedIn MonMenu'),
   ('pays_defaut', 'BF', 'Pays par défaut pour les nouvelles inscriptions (code ISO)');
 
 -- TABLE : plans (offres tarifaires affichées sur la page tarifs du site web)
