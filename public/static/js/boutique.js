@@ -1,0 +1,392 @@
+// MonMenu — Boutique restaurant (JS côté client)
+'use strict';
+
+let tenantId = '';
+let tenantSlug = '';
+let cart = { items: [], tenant_id: '', slug: '' };
+let tenantData = null;
+let menuData = null;
+let pdvData = null;
+let fraisLivraison = 0;
+let clientLat = null;
+let clientLon = null;
+
+// Devises
+const DEVISE = 'FCFA';
+
+// ---- Init ----
+async function initBoutique(tid, slug) {
+  tenantId = tid;
+  tenantSlug = slug;
+  loadCart();
+  await Promise.all([loadTenant(), loadMenu()]);
+  renderMenu();
+  updateCartUI();
+}
+
+// ---- Panier (localStorage) ----
+function loadCart() {
+  try {
+    const stored = localStorage.getItem('monmenu_cart_' + tenantSlug);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      // Invalider si > 24h
+      if (parsed.updated_at && Date.now() - new Date(parsed.updated_at).getTime() < 86400000) {
+        cart = parsed;
+      }
+    }
+  } catch (e) { cart = { items: [], tenant_id: tenantId, slug: tenantSlug }; }
+}
+
+function saveCart() {
+  cart.updated_at = new Date().toISOString();
+  cart.tenant_id = tenantId;
+  cart.slug = tenantSlug;
+  localStorage.setItem('monmenu_cart_' + tenantSlug, JSON.stringify(cart));
+}
+
+function getCartTotal() {
+  return cart.items.reduce((sum, item) => sum + (item.prix + (item.prix_supplement || 0)) * item.quantite, 0);
+}
+
+function getCartCount() {
+  return cart.items.reduce((sum, item) => sum + item.quantite, 0);
+}
+
+// ---- Chargement données ----
+async function loadTenant() {
+  try {
+    const res = await fetch('/api/v1/tenants/' + tenantSlug);
+    if (res.ok) tenantData = await res.json();
+    if (tenantData && tenantData.pdv_id) {
+      pdvData = { id: tenantData.pdv_id, lat: tenantData.pdv_latitude, lon: tenantData.pdv_longitude };
+    }
+  } catch (e) { console.error('loadTenant', e); }
+}
+
+async function loadMenu() {
+  try {
+    const res = await fetch('/api/v1/tenants/' + tenantSlug + '/menu');
+    if (res.ok) menuData = await res.json();
+  } catch (e) { console.error('loadMenu', e); }
+}
+
+// ---- Rendu menu ----
+function renderMenu() {
+  const skeleton = document.getElementById('menu-skeleton');
+  const menuContent = document.getElementById('menu-content');
+  const categoriesNav = document.getElementById('categories-nav');
+
+  if (!menuData || !menuData.categories) {
+    if (skeleton) skeleton.innerHTML = '<p class="text-gray-500 text-sm text-center py-8">Menu non disponible</p>';
+    return;
+  }
+
+  // Navigation catégories
+  if (categoriesNav) {
+    categoriesNav.innerHTML = menuData.categories.map((cat, i) =>
+      `<a href="#cat-${cat.id}" class="whitespace-nowrap px-3 py-1.5 rounded-lg text-sm font-medium ${i === 0 ? 'bg-red-600 text-white' : 'text-gray-600 hover:bg-gray-100'} transition-colors">${escHtml(cat.nom)}</a>`
+    ).join('');
+  }
+
+  // Menu complet
+  let html = '';
+  for (const categorie of menuData.categories) {
+    if (!categorie.produits || categorie.produits.length === 0) continue;
+    html += `<section id="cat-${categorie.id}" class="mb-8">`;
+    html += `<h2 class="font-bold text-lg text-gray-900 mb-4 px-0">${escHtml(categorie.nom)}</h2>`;
+    html += `<div class="space-y-3">`;
+    for (const produit of categorie.produits) {
+      html += renderProduitCard(produit);
+    }
+    html += '</div></section>';
+  }
+
+  if (menuContent) menuContent.innerHTML = html;
+}
+
+function renderProduitCard(p) {
+  const quantiteInCart = getQuantiteInCart(p.id);
+  return `
+  <div class="bg-white rounded-xl border border-gray-100 p-4 flex gap-3 items-start shadow-sm ${!p.disponible ? 'opacity-50' : ''}">
+    <div class="flex-1 min-w-0">
+      <div class="font-semibold text-gray-900 text-sm leading-tight">${escHtml(p.nom)}</div>
+      ${p.description ? `<div class="text-xs text-gray-500 mt-0.5 line-clamp-2">${escHtml(p.description)}</div>` : ''}
+      <div class="font-bold text-sm mt-2" style="color:${PRIMARY_COLOR}">${formatMontant(p.prix)}</div>
+    </div>
+    <div class="flex flex-col items-end gap-2 flex-shrink-0">
+      ${p.photo_url ? `<img src="${escHtml(p.photo_url)}" alt="${escHtml(p.nom)}" class="w-16 h-16 rounded-lg object-cover border border-gray-100" loading="lazy">` : ''}
+      ${p.disponible ? (
+        quantiteInCart > 0 ?
+        `<div class="flex items-center gap-2 bg-gray-50 rounded-xl p-1">
+          <button onclick="removeFromCart('${p.id}')" class="w-7 h-7 rounded-lg flex items-center justify-center text-gray-600 hover:bg-gray-200 transition-colors font-bold">−</button>
+          <span class="text-sm font-bold w-4 text-center">${quantiteInCart}</span>
+          <button onclick="addToCart(${JSON.stringify({id: p.id, nom: p.nom, prix: p.prix, photo_url: p.photo_url}).replace(/"/g, '&quot;')})" class="w-7 h-7 rounded-lg flex items-center justify-center text-white transition-colors font-bold" style="background-color:${PRIMARY_COLOR}">+</button>
+        </div>` :
+        `<button onclick="addToCart(${JSON.stringify({id: p.id, nom: p.nom, prix: p.prix, photo_url: p.photo_url}).replace(/"/g, '&quot;')})" class="w-8 h-8 rounded-xl flex items-center justify-center text-white transition-all font-bold shadow-sm" style="background-color:${PRIMARY_COLOR}">
+          <i class="fa-solid fa-plus text-xs"></i>
+        </button>`
+      ) : '<span class="text-xs text-gray-400 bg-gray-100 px-2 py-1 rounded-lg">Indisponible</span>'}
+    </div>
+  </div>`;
+}
+
+function getQuantiteInCart(produitId) {
+  const item = cart.items.find(i => i.produit_id === produitId);
+  return item ? item.quantite : 0;
+}
+
+// ---- Panier actions ----
+function addToCart(produit) {
+  const existing = cart.items.find(i => i.produit_id === produit.id);
+  if (existing) {
+    existing.quantite++;
+  } else {
+    cart.items.push({
+      produit_id: produit.id,
+      nom: produit.nom,
+      prix: produit.prix,
+      quantite: 1,
+      photo_url: produit.photo_url || null
+    });
+  }
+  saveCart();
+  updateCartUI();
+  // Mettre à jour la card
+  renderMenu();
+}
+
+function removeFromCart(produitId) {
+  const idx = cart.items.findIndex(i => i.produit_id === produitId);
+  if (idx === -1) return;
+  if (cart.items[idx].quantite > 1) {
+    cart.items[idx].quantite--;
+  } else {
+    cart.items.splice(idx, 1);
+  }
+  saveCart();
+  updateCartUI();
+  renderMenu();
+}
+
+function updateCartUI() {
+  const count = getCartCount();
+  const total = getCartTotal();
+  const cartBtn = document.getElementById('cart-btn');
+  const cartCount = document.getElementById('cart-count');
+  const cartTotal = document.getElementById('cart-total');
+
+  if (cartBtn) cartBtn.classList.toggle('hidden', count === 0);
+  if (cartCount) cartCount.textContent = count;
+  if (cartTotal) cartTotal.textContent = formatMontant(total);
+}
+
+// ---- Modals ----
+function openCart() {
+  renderCartModal();
+  document.getElementById('cart-modal').classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+}
+
+function closeCart() {
+  document.getElementById('cart-modal').classList.add('hidden');
+  document.body.style.overflow = '';
+}
+
+function renderCartModal() {
+  const itemsEl = document.getElementById('cart-items');
+  const footerEl = document.getElementById('cart-footer');
+  if (!itemsEl || !footerEl) return;
+
+  if (cart.items.length === 0) {
+    itemsEl.innerHTML = '<div class="text-center py-8 text-gray-400"><i class="fa-solid fa-basket-shopping text-3xl mb-3 block"></i><p class="text-sm">Votre panier est vide</p></div>';
+    footerEl.innerHTML = '';
+    return;
+  }
+
+  itemsEl.innerHTML = cart.items.map(item => `
+    <div class="flex items-center gap-3 py-3">
+      <div class="flex-1 min-w-0">
+        <div class="font-semibold text-sm text-gray-900">${escHtml(item.nom)}</div>
+        <div class="text-xs text-gray-500">${formatMontant(item.prix)} l'unité</div>
+      </div>
+      <div class="flex items-center gap-2 bg-gray-50 rounded-xl p-1">
+        <button onclick="removeFromCart('${item.produit_id}'); renderCartModal(); updateCartUI();" class="w-7 h-7 rounded-lg flex items-center justify-center text-gray-600 hover:bg-gray-200 font-bold">−</button>
+        <span class="text-sm font-bold w-6 text-center">${item.quantite}</span>
+        <button onclick="addToCart({id:'${item.produit_id}',nom:'${escHtml(item.nom)}',prix:${item.prix}}); renderCartModal(); updateCartUI();" class="w-7 h-7 rounded-xl flex items-center justify-center text-white font-bold" style="background-color:${PRIMARY_COLOR}">+</button>
+      </div>
+      <div class="text-sm font-bold w-20 text-right">${formatMontant(item.prix * item.quantite)}</div>
+    </div>
+  `).join('');
+
+  const total = getCartTotal();
+  footerEl.innerHTML = `
+    <div class="flex justify-between font-bold text-base mb-3">
+      <span>Total articles</span>
+      <span>${formatMontant(total)}</span>
+    </div>
+    <button onclick="closeCart(); openCheckout();" class="w-full text-white font-bold py-3.5 rounded-xl flex items-center justify-center gap-2" style="background-color:${PRIMARY_COLOR}">
+      <i class="fa-solid fa-arrow-right"></i> Passer à la commande
+    </button>
+  `;
+}
+
+function openCheckout() {
+  updateCheckoutRecap();
+  document.getElementById('checkout-modal').classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+  // Écouter changements de mode de livraison
+  document.querySelectorAll('input[name="livraison-type"]').forEach(radio => {
+    radio.addEventListener('change', onLivraisonTypeChange);
+  });
+}
+
+function closeCheckout() {
+  document.getElementById('checkout-modal').classList.add('hidden');
+  document.body.style.overflow = '';
+}
+
+function onLivraisonTypeChange() {
+  const isLivraison = document.querySelector('input[name="livraison-type"]:checked')?.value === 'livraison';
+  const mapSection = document.getElementById('map-section');
+  if (mapSection) mapSection.style.display = isLivraison ? 'block' : 'none';
+  updateCheckoutRecap();
+}
+
+function updateCheckoutRecap() {
+  const sousTotal = getCartTotal();
+  const isLivraison = document.querySelector('input[name="livraison-type"]:checked')?.value === 'livraison';
+  const frais = isLivraison ? fraisLivraison : 0;
+  const total = sousTotal + frais;
+
+  const el_sous = document.getElementById('recap-sous-total');
+  const el_liv = document.getElementById('recap-livraison');
+  const el_tot = document.getElementById('recap-total');
+  if (el_sous) el_sous.textContent = formatMontant(sousTotal);
+  if (el_liv) el_liv.textContent = isLivraison ? (fraisLivraison > 0 ? formatMontant(fraisLivraison) : 'À calculer') : 'Gratuit';
+  if (el_tot) el_tot.textContent = isLivraison && fraisLivraison === 0 ? 'À calculer' : formatMontant(total);
+}
+
+// Géolocalisation
+function geolocaliser() {
+  if (!navigator.geolocation) { alert('Géolocalisation non supportée par votre navigateur.'); return; }
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      clientLat = pos.coords.latitude;
+      clientLon = pos.coords.longitude;
+      calculerFraisLivraison();
+    },
+    (err) => { console.warn('Géolocalisation refusée', err); }
+  );
+}
+
+async function calculerFraisLivraison() {
+  if (!pdvData || !clientLat || !clientLon) return;
+  try {
+    const res = await fetch('/api/v1/livraison/calcul', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pdv_id: pdvData.id, client_lat: clientLat, client_lon: clientLon })
+    });
+    if (res.ok) {
+      const data = await res.json();
+      fraisLivraison = data.frais_livraison || 0;
+      const detailEl = document.getElementById('frais-livraison-detail');
+      if (detailEl) detailEl.textContent = data.detail + ' — ' + data.temps_estime_min + ' min estimés';
+      updateCheckoutRecap();
+    }
+  } catch (e) { console.error('calcul livraison', e); }
+}
+
+// ---- Soumettre la commande ----
+async function submitOrder(e) {
+  e.preventDefault();
+  const btn = document.getElementById('submit-btn');
+  const nom = document.getElementById('client-nom')?.value?.trim();
+  const tel = document.getElementById('client-tel')?.value?.trim();
+  const adresse = document.getElementById('client-adresse')?.value?.trim();
+  const notes = document.getElementById('client-notes')?.value?.trim();
+  const modeType = document.querySelector('input[name="livraison-type"]:checked')?.value;
+
+  if (!nom || !tel) { alert('Veuillez renseigner votre nom et téléphone.'); return; }
+  if (cart.items.length === 0) { alert('Votre panier est vide.'); return; }
+
+  btn.disabled = true;
+  btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Envoi en cours...';
+
+  const idempotencyKey = crypto.randomUUID();
+  const sousTotal = getCartTotal();
+
+  const payload = {
+    tenant_id: tenantId,
+    point_de_vente_id: pdvData ? pdvData.id : '',
+    client_nom: nom,
+    client_telephone: tel,
+    client_adresse: adresse || null,
+    client_latitude: clientLat,
+    client_longitude: clientLon,
+    items: cart.items.map(item => ({ produit_id: item.produit_id, quantite: item.quantite })),
+    mode_paiement: 'especes_livraison',
+    idempotency_key: idempotencyKey,
+    notes: notes || null
+  };
+
+  try {
+    const res = await fetch('/api/v1/commandes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Idempotency-Key': idempotencyKey },
+      body: JSON.stringify(payload)
+    });
+
+    const data = await res.json();
+
+    if (res.ok && data.success) {
+      // Vider le panier
+      cart = { items: [], tenant_id: tenantId, slug: tenantSlug };
+      saveCart();
+      updateCartUI();
+
+      // Redirection WhatsApp
+      if (data.lien_whatsapp) {
+        window.open(data.lien_whatsapp, '_blank');
+      }
+
+      // Rediriger vers suivi
+      window.location.href = data.url_suivi || '/';
+    } else {
+      alert(data.error || 'Erreur lors de la commande. Réessayez.');
+      btn.disabled = false;
+      btn.innerHTML = '<i class="fa-brands fa-whatsapp"></i> Confirmer et envoyer sur WhatsApp';
+    }
+  } catch (err) {
+    alert('Erreur réseau. Vérifiez votre connexion et réessayez.');
+    btn.disabled = false;
+    btn.innerHTML = '<i class="fa-brands fa-whatsapp"></i> Confirmer et envoyer sur WhatsApp';
+  }
+}
+
+// ---- Utilitaires ----
+function formatMontant(montant) {
+  return (montant || 0).toLocaleString('fr-FR') + ' FCFA';
+}
+
+function escHtml(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+// Exposer les fonctions globalement
+window.initBoutique = initBoutique;
+window.addToCart = addToCart;
+window.removeFromCart = removeFromCart;
+window.openCart = openCart;
+window.closeCart = closeCart;
+window.openCheckout = openCheckout;
+window.closeCheckout = closeCheckout;
+window.submitOrder = submitOrder;
+window.geolocaliser = geolocaliser;

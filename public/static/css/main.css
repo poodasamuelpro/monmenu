@@ -1,0 +1,116 @@
+/* MonMenu — Styles globaux */
+/* Police Inter via Google Fonts chargée dans le HTML */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html {
+  scroll-behavior: smooth;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Focus accessible */
+*:focus-visible {
+  outline: 2px solid #DC2626;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Masquer scrollbar mais garder fonctionnalité */
+.scrollbar-hidden {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hidden::-webkit-scrollbar { display: none; }
+
+/* Bouton devise actif */
+.active-devise {
+  background-color: #DC2626 !important;
+  color: white !important;
+}
+
+/* Navigation active */
+.nav-link.active {
+  background-color: rgba(220, 38, 38, 0.15);
+  color: #FCA5A5;
+}
+
+/* Transition globale */
+a, button { transition: all 0.15s ease; }
+
+/* Badge statut commande */
+.statut-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.statut-en_attente { background: #FEF3C7; color: #92400E; }
+.statut-confirmee { background: #DBEAFE; color: #1E40AF; }
+.statut-en_preparation { background: #FED7AA; color: #9A3412; }
+.statut-en_livraison { background: #EDE9FE; color: #5B21B6; }
+.statut-livree { background: #D1FAE5; color: #065F46; }
+.statut-annulee { background: #FEE2E2; color: #991B1B; }
+.statut-remboursee { background: #F3F4F6; color: #374151; }
+
+/* Mode sombre automatique */
+@media (prefers-color-scheme: dark) {
+  /* Activé uniquement si pas de classe override */
+  body:not(.light-mode) {
+    background-color: #111827;
+    color: #F9FAFB;
+  }
+  body:not(.light-mode) .bg-white { background-color: #1F2937 !important; }
+  body:not(.light-mode) .bg-gray-50 { background-color: #111827 !important; }
+  body:not(.light-mode) .border-gray-100 { border-color: #374151 !important; }
+  body:not(.light-mode) .text-gray-900 { color: #F9FAFB !important; }
+  body:not(.light-mode) .text-gray-700 { color: #D1D5DB !important; }
+  body:not(.light-mode) .text-gray-600 { color: #9CA3AF !important; }
+  body:not(.light-mode) .text-gray-500 { color: #6B7280 !important; }
+}
+
+/* Spinner */
+@keyframes spin { to { transform: rotate(360deg); } }
+.animate-spin { animation: spin 1s linear infinite; }
+
+/* Card hover */
+.card-hover { transition: transform 0.2s ease, box-shadow 0.2s ease; }
+.card-hover:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(0,0,0,0.08); }
+
+/* Barre de chargement */
+#page-loader {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, #DC2626, #F97316);
+  z-index: 9999;
+  animation: loader 1.5s ease-in-out infinite;
+}
+@keyframes loader {
+  0% { left: -100%; right: 100%; }
+  50% { left: 0; right: 0; }
+  100% { left: 100%; right: -100%; }
+}
+
+/* Maps placeholder */
+#carte-livraison {
+  min-height: 200px;
+  background: linear-gradient(135deg, #F3F4F6 0%, #E5E7EB 100%);
+}
+
+/* Responsive images */
+img { max-width: 100%; height: auto; }
+
+/* Print */
+@media print {
+  header, footer, #cookie-banner, #cart-btn { display: none !important; }
+}
