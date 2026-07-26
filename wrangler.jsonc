@@ -5,7 +5,7 @@
   "compatibility_flags": ["nodejs_compat"],
   "pages_build_output_dir": "./dist",
 
-  // D1 Database principale
+  // D1 Database principale (auto-provisionnée par gsk hosted deploy)
   "d1_databases": [
     {
       "binding": "DB",
@@ -14,16 +14,7 @@
     }
   ],
 
-  // KV pour cache (menus, config globale)
-  "kv_namespaces": [
-    {
-      "binding": "KV_CACHE",
-      "id": "REPLACE_WITH_KV_ID",
-      "preview_id": "REPLACE_WITH_KV_PREVIEW_ID"
-    }
-  ],
-
-  // R2 pour les médias (logos, photos plats)
+  // R2 pour les médias (logos, photos plats) — auto-provisionnée
   "r2_buckets": [
     {
       "binding": "R2_MEDIA",
