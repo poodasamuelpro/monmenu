@@ -11,6 +11,9 @@ let fraisLivraison = 0;
 let clientLat = null;
 let clientLon = null;
 
+// --- Code promo state ---
+let promoAppliquee = null; // { code, type, valeur, remise } ou null
+
 // Devises
 const DEVISE = 'FCFA';
 
@@ -232,6 +235,9 @@ function renderCartModal() {
 }
 
 function openCheckout() {
+  // Réinitialiser le code promo à l'ouverture
+  promoAppliquee = null;
+  _resetPromoUI();
   updateCheckoutRecap();
   document.getElementById('checkout-modal').classList.remove('hidden');
   document.body.style.overflow = 'hidden';
@@ -253,18 +259,112 @@ function onLivraisonTypeChange() {
   updateCheckoutRecap();
 }
 
+// ---- Code promo — appliquer ----
+async function appliquerCodePromo() {
+  const input = document.getElementById('promo-input');
+  const msgEl = document.getElementById('promo-message');
+  const btnEl = document.getElementById('promo-btn');
+  if (!input || !msgEl) return;
+
+  const code = input.value.trim().toUpperCase();
+  if (!code) {
+    _setPromoMsg(msgEl, 'Saisissez un code promo.', 'error');
+    return;
+  }
+
+  // Désactiver pendant la requête
+  if (btnEl) { btnEl.disabled = true; btnEl.textContent = '...'; }
+
+  try {
+    const sousTotal = getCartTotal();
+    const res = await fetch('/api/v1/commandes/valider-promo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tenant_id: tenantId, code, sous_total: sousTotal })
+    });
+    const data = await res.json();
+
+    if (res.ok && data.valide) {
+      promoAppliquee = {
+        code: data.code,
+        type: data.type,
+        valeur: data.valeur,
+        remise: data.remise
+      };
+      _setPromoMsg(msgEl, `✓ Code « ${escHtml(data.code)} » appliqué — ${formatMontant(data.remise)} de remise !`, 'success');
+      if (input) input.disabled = true;
+      if (btnEl) { btnEl.textContent = 'Retirer'; btnEl.onclick = retirerCodePromo; }
+    } else {
+      promoAppliquee = null;
+      _setPromoMsg(msgEl, data.error || 'Code promo invalide ou expiré.', 'error');
+    }
+  } catch (e) {
+    _setPromoMsg(msgEl, 'Erreur réseau. Réessayez.', 'error');
+  } finally {
+    if (btnEl && promoAppliquee === null) {
+      btnEl.disabled = false;
+      btnEl.textContent = 'Appliquer';
+    }
+  }
+  updateCheckoutRecap();
+}
+
+function retirerCodePromo() {
+  promoAppliquee = null;
+  _resetPromoUI();
+  updateCheckoutRecap();
+}
+
+function _resetPromoUI() {
+  const input = document.getElementById('promo-input');
+  const msgEl = document.getElementById('promo-message');
+  const btnEl = document.getElementById('promo-btn');
+  if (input) { input.value = ''; input.disabled = false; }
+  if (msgEl) { msgEl.textContent = ''; msgEl.className = 'text-xs mt-1'; }
+  if (btnEl) { btnEl.textContent = 'Appliquer'; btnEl.disabled = false; btnEl.onclick = appliquerCodePromo; }
+}
+
+function _setPromoMsg(el, msg, type) {
+  if (!el) return;
+  el.textContent = msg;
+  el.className = 'text-xs mt-1 ' + (type === 'success' ? 'text-green-600' : 'text-red-600');
+}
+
+// ---- Calcul recap avec remise promo ----
 function updateCheckoutRecap() {
   const sousTotal = getCartTotal();
   const isLivraison = document.querySelector('input[name="livraison-type"]:checked')?.value === 'livraison';
   const frais = isLivraison ? fraisLivraison : 0;
-  const total = sousTotal + frais;
+
+  // Calculer remise
+  let remise = 0;
+  if (promoAppliquee) {
+    if (promoAppliquee.type === 'pourcentage') {
+      remise = Math.round(sousTotal * promoAppliquee.valeur / 100);
+    } else {
+      remise = Math.min(promoAppliquee.valeur, sousTotal);
+    }
+    // Stocker la remise recalculée
+    promoAppliquee.remise = remise;
+  }
+
+  const totalAvantFrais = Math.max(0, sousTotal - remise);
+  const total = totalAvantFrais + frais;
 
   const el_sous = document.getElementById('recap-sous-total');
+  const el_promo = document.getElementById('recap-promo-row');
+  const el_remise = document.getElementById('recap-remise');
   const el_liv = document.getElementById('recap-livraison');
   const el_tot = document.getElementById('recap-total');
+
   if (el_sous) el_sous.textContent = formatMontant(sousTotal);
+
+  // Ligne remise — afficher seulement si promo active
+  if (el_promo) el_promo.style.display = promoAppliquee ? 'flex' : 'none';
+  if (el_remise && promoAppliquee) el_remise.textContent = '− ' + formatMontant(remise);
+
   if (el_liv) el_liv.textContent = isLivraison ? (fraisLivraison > 0 ? formatMontant(fraisLivraison) : 'À calculer') : 'Gratuit';
-  if (el_tot) el_tot.textContent = isLivraison && fraisLivraison === 0 ? 'À calculer' : formatMontant(total);
+  if (el_tot) el_tot.textContent = (isLivraison && fraisLivraison === 0) ? 'À calculer' : formatMontant(total);
 }
 
 // Géolocalisation
@@ -315,7 +415,6 @@ async function submitOrder(e) {
   btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Envoi en cours...';
 
   const idempotencyKey = crypto.randomUUID();
-  const sousTotal = getCartTotal();
 
   const payload = {
     tenant_id: tenantId,
@@ -328,7 +427,9 @@ async function submitOrder(e) {
     items: cart.items.map(item => ({ produit_id: item.produit_id, quantite: item.quantite })),
     mode_paiement: 'especes_livraison',
     idempotency_key: idempotencyKey,
-    notes: notes || null
+    notes: notes || null,
+    // Code promo : inclure uniquement si une promo a été validée
+    code_promo: promoAppliquee ? promoAppliquee.code : undefined
   };
 
   try {
@@ -345,6 +446,7 @@ async function submitOrder(e) {
       cart = { items: [], tenant_id: tenantId, slug: tenantSlug };
       saveCart();
       updateCartUI();
+      promoAppliquee = null;
 
       // Redirection WhatsApp
       if (data.lien_whatsapp) {
@@ -390,3 +492,5 @@ window.openCheckout = openCheckout;
 window.closeCheckout = closeCheckout;
 window.submitOrder = submitOrder;
 window.geolocaliser = geolocaliser;
+window.appliquerCodePromo = appliquerCodePromo;
+window.retirerCodePromo = retirerCodePromo;

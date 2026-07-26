@@ -210,6 +210,13 @@ app.get('/inscription', async (c) => {
   return c.html(renderInscriptionPage(nomProjet))
 })
 
+// ---- Page Blog ----
+app.get('/blog', async (c) => {
+  setSecurityHeaders(c)
+  const nomProjet = await getNomProjet(c.env)
+  return c.html(renderBlogPage(nomProjet))
+})
+
 // ---- Pages légales ----
 app.get('/legal/cgu', async (c) => {
   setSecurityHeaders(c)
@@ -961,11 +968,34 @@ function renderBoutiquePage(tenant: {
           <textarea id="client-notes" maxlength="500" rows="2" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200 focus:border-red-400 resize-none" placeholder="Instructions particulières, étage, code..."></textarea>
         </div>
 
+        <!-- Code promo -->
+        <div>
+          <label class="block text-sm font-semibold text-gray-700 mb-1.5">
+            <i class="fa-solid fa-ticket mr-1"></i> Code promo (facultatif)
+          </label>
+          <div class="flex gap-2">
+            <input id="promo-input" type="text" maxlength="20" autocomplete="off"
+              class="flex-1 border border-gray-200 rounded-xl px-4 py-3 text-sm uppercase tracking-widest focus:outline-none focus:ring-2 focus:ring-red-200 focus:border-red-400"
+              placeholder="EX : PROMO20"
+              onkeydown="if(event.key==='Enter'){event.preventDefault();appliquerCodePromo();}">
+            <button id="promo-btn" type="button" onclick="appliquerCodePromo()"
+              class="px-4 py-3 rounded-xl text-sm font-bold text-white transition-colors"
+              style="background-color:${primaryColor}">
+              Appliquer
+            </button>
+          </div>
+          <p id="promo-message" class="text-xs mt-1"></p>
+        </div>
+
         <!-- Récapitulatif -->
         <div class="bg-gray-50 rounded-xl p-4">
           <div class="flex justify-between text-sm mb-1">
             <span class="text-gray-600">Sous-total</span>
             <span id="recap-sous-total" class="font-semibold">0 FCFA</span>
+          </div>
+          <div id="recap-promo-row" class="flex justify-between text-sm mb-1" style="display:none">
+            <span class="text-green-600 font-medium"><i class="fa-solid fa-ticket mr-1"></i>Remise promo</span>
+            <span id="recap-remise" class="font-semibold text-green-600">— FCFA</span>
           </div>
           <div class="flex justify-between text-sm mb-3">
             <span class="text-gray-600">Frais de livraison</span>
@@ -1411,6 +1441,12 @@ function renderDashboardPage(nomProjet: string): string {
         </a>
         <a href="/dashboard/qrcode" class="nav-link flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-gray-300 hover:bg-gray-800 hover:text-white transition-colors">
           <i class="fa-solid fa-qrcode w-4 text-center"></i> QR Code
+        </a>
+        <a href="/dashboard/codes-promo" class="nav-link flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-gray-300 hover:bg-gray-800 hover:text-white transition-colors">
+          <i class="fa-solid fa-ticket w-4 text-center"></i> Codes promo
+        </a>
+        <a href="/dashboard/pdv" class="nav-link flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-gray-300 hover:bg-gray-800 hover:text-white transition-colors">
+          <i class="fa-solid fa-map-location-dot w-4 text-center"></i> Mon restaurant
         </a>
         <a href="/dashboard/apparence" class="nav-link flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-gray-300 hover:bg-gray-800 hover:text-white transition-colors">
           <i class="fa-solid fa-palette w-4 text-center"></i> Apparence
@@ -1933,6 +1969,171 @@ Authentification et base de données PostgreSQL hébergées sur serveurs EU.</p>
     </nav>
   </main>
   ${renderFooter(nomProjet)}
+  <script src="/static/js/main.js"></script>
+</body>
+</html>`
+}
+
+function renderBlogPage(nomProjet: string): string {
+  const articles = [
+    {
+      slug: 'digitaliser-restaurant-afrique',
+      titre: 'Comment digitaliser son restaurant en Afrique de l\'Ouest en 2025',
+      extrait: 'Découvrez les étapes concrètes pour passer des commandes WhatsApp à une boutique en ligne professionnelle, sans investissement matériel.',
+      date: '15 janvier 2025',
+      categorie: 'Guide',
+      lecture: '5 min',
+      image: '🍽️'
+    },
+    {
+      slug: 'commandes-whatsapp-vs-boutique-en-ligne',
+      titre: 'Commandes WhatsApp vs boutique en ligne : ce qui change vraiment',
+      extrait: 'Beaucoup de restaurateurs gèrent leurs commandes via WhatsApp. Voici pourquoi une boutique dédiée change la donne pour vous et vos clients.',
+      date: '8 janvier 2025',
+      categorie: 'Comparatif',
+      lecture: '4 min',
+      image: '📱'
+    },
+    {
+      slug: 'qr-code-restaurant',
+      titre: 'QR code restaurant : comment booster vos commandes à table',
+      extrait: 'Le QR code est devenu incontournable pour les restaurateurs. Apprenez à créer, placer et exploiter vos QR codes pour maximiser vos commandes.',
+      date: '2 janvier 2025',
+      categorie: 'Astuce',
+      lecture: '3 min',
+      image: '📲'
+    },
+    {
+      slug: 'frais-livraison-restaurant',
+      titre: 'Comment calculer les frais de livraison pour votre restaurant',
+      extrait: 'Tarif kilométrique, heure de pointe, seuil de gratuité... Tout ce qu\'il faut savoir pour fixer des frais de livraison rentables et compétitifs.',
+      date: '26 décembre 2024',
+      categorie: 'Finance',
+      lecture: '6 min',
+      image: '🛵'
+    },
+    {
+      slug: 'mobile-money-paiement-restaurant',
+      titre: 'Mobile Money et paiement en ligne pour les restaurants : guide 2025',
+      extrait: 'Orange Money, Wave, MTN Mobile Money... Comment intégrer ces solutions de paiement dans votre restaurant et fidéliser vos clients.',
+      date: '18 décembre 2024',
+      categorie: 'Paiement',
+      lecture: '7 min',
+      image: '💳'
+    },
+    {
+      slug: 'photos-plats-vendre-plus',
+      titre: '5 astuces photo pour vendre plus de plats en ligne',
+      extrait: 'Une bonne photo de plat, c\'est 30 % de commandes en plus. Découvrez comment prendre des photos appétissantes avec votre téléphone.',
+      date: '10 décembre 2024',
+      categorie: 'Marketing',
+      lecture: '4 min',
+      image: '📸'
+    }
+  ]
+
+  const articlesHtml = articles.map(a => `
+    <article class="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden hover:shadow-md transition-shadow">
+      <div class="aspect-video bg-gradient-to-br from-red-50 to-orange-50 flex items-center justify-center text-6xl">
+        ${a.image}
+      </div>
+      <div class="p-6">
+        <div class="flex items-center gap-2 mb-3">
+          <span class="text-xs font-semibold text-red-600 bg-red-50 px-2.5 py-1 rounded-full">${a.categorie}</span>
+          <span class="text-xs text-gray-400">${a.lecture} de lecture</span>
+        </div>
+        <h2 class="font-bold text-gray-900 text-lg leading-tight mb-2 hover:text-red-600 transition-colors">
+          <a href="/blog/${a.slug}">${a.titre}</a>
+        </h2>
+        <p class="text-sm text-gray-600 line-clamp-2 mb-4">${a.extrait}</p>
+        <div class="flex items-center justify-between">
+          <span class="text-xs text-gray-400"><i class="fa-regular fa-calendar mr-1"></i>${a.date}</span>
+          <a href="/blog/${a.slug}" class="text-sm font-semibold text-red-600 hover:text-red-700 flex items-center gap-1">
+            Lire <i class="fa-solid fa-arrow-right text-xs"></i>
+          </a>
+        </div>
+      </div>
+    </article>
+  `).join('')
+
+  return `<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Blog — ${nomProjet} · Conseils pour restaurateurs</title>
+  <meta name="description" content="Conseils, guides et ressources pour les restaurateurs d'Afrique de l'Ouest : digitalisation, commandes en ligne, livraison, marketing.">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.5.0/css/all.min.css">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="/static/css/main.css">
+  <style>body { font-family: 'Inter', sans-serif; } .line-clamp-2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }</style>
+</head>
+<body class="bg-gray-50">
+  <!-- Nav -->
+  <nav class="bg-white border-b border-gray-100 sticky top-0 z-50">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 flex items-center justify-between h-14">
+      <a href="/" class="font-extrabold text-xl text-red-600">${nomProjet}</a>
+      <div class="hidden md:flex items-center gap-6">
+        <a href="/fonctionnalites" class="text-sm font-medium text-gray-600 hover:text-gray-900">Fonctionnalités</a>
+        <a href="/tarifs" class="text-sm font-medium text-gray-600 hover:text-gray-900">Tarifs</a>
+        <a href="/blog" class="text-sm font-medium text-red-600">Blog</a>
+        <a href="/contact" class="text-sm font-medium text-gray-600 hover:text-gray-900">Contact</a>
+      </div>
+      <a href="/inscription" class="inline-flex items-center gap-1.5 bg-red-600 hover:bg-red-700 text-white text-sm font-semibold px-4 py-2 rounded-lg transition-colors">
+        <i class="fa-solid fa-store text-xs"></i>
+        <span>Créer ma boutique</span>
+      </a>
+    </div>
+  </nav>
+
+  <!-- Header -->
+  <header class="bg-white border-b border-gray-100 py-12">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 text-center">
+      <span class="inline-block text-xs font-bold text-red-600 bg-red-50 px-3 py-1 rounded-full mb-4 uppercase tracking-wide">Blog</span>
+      <h1 class="text-3xl sm:text-4xl font-extrabold text-gray-900 mb-3">Conseils pour restaurateurs</h1>
+      <p class="text-gray-600 max-w-xl mx-auto">Guides pratiques, astuces et tendances pour digitaliser votre restaurant et booster vos ventes en ligne.</p>
+    </div>
+  </header>
+
+  <!-- Articles -->
+  <main class="max-w-6xl mx-auto px-4 sm:px-6 py-12">
+    <!-- Catégories -->
+    <div class="flex flex-wrap gap-2 mb-8">
+      <button class="text-sm font-semibold text-white bg-red-600 px-4 py-1.5 rounded-full">Tous les articles</button>
+      <button class="text-sm font-medium text-gray-600 bg-white border border-gray-200 px-4 py-1.5 rounded-full hover:border-red-300 transition-colors">Guide</button>
+      <button class="text-sm font-medium text-gray-600 bg-white border border-gray-200 px-4 py-1.5 rounded-full hover:border-red-300 transition-colors">Marketing</button>
+      <button class="text-sm font-medium text-gray-600 bg-white border border-gray-200 px-4 py-1.5 rounded-full hover:border-red-300 transition-colors">Finance</button>
+      <button class="text-sm font-medium text-gray-600 bg-white border border-gray-200 px-4 py-1.5 rounded-full hover:border-red-300 transition-colors">Astuce</button>
+    </div>
+
+    <!-- Grille articles -->
+    <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-6 mb-12">
+      ${articlesHtml}
+    </div>
+
+    <!-- CTA -->
+    <div class="bg-gradient-to-r from-red-600 to-orange-500 rounded-3xl p-8 text-center text-white">
+      <h2 class="text-2xl font-extrabold mb-2">Prêt à digitaliser votre restaurant ?</h2>
+      <p class="text-red-100 mb-6">Créez votre boutique en ligne en 5 minutes. Premier mois offert.</p>
+      <a href="/inscription" class="inline-flex items-center gap-2 bg-white text-red-600 font-bold px-6 py-3 rounded-xl hover:bg-red-50 transition-colors">
+        <i class="fa-solid fa-rocket"></i>
+        Créer ma boutique gratuitement
+      </a>
+    </div>
+  </main>
+
+  <!-- Footer -->
+  <footer class="bg-gray-900 text-gray-400 py-8 mt-8">
+    <div class="max-w-6xl mx-auto px-4 text-center text-sm">
+      <p>© 2025 ${nomProjet}. Tous droits réservés.</p>
+      <div class="flex justify-center gap-4 mt-3">
+        <a href="/legal/cgu" class="hover:text-white transition-colors">CGU</a>
+        <a href="/legal/confidentialite" class="hover:text-white transition-colors">Confidentialité</a>
+        <a href="/contact" class="hover:text-white transition-colors">Contact</a>
+      </div>
+    </div>
+  </footer>
   <script src="/static/js/main.js"></script>
 </body>
 </html>`
