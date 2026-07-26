@@ -131,11 +131,6 @@ authRouter.post('/register', async (c) => {
     slug = slug + '-' + Date.now().toString(36).slice(-4)
   }
 
-  // Vérifier unicité email dans D1
-  const existingUser = await c.env.DB
-    .prepare('SELECT id FROM utilisateurs_tenant WHERE auth_user_id IN (SELECT auth_user_id FROM utilisateurs_tenant)')
-    .first()
-
   // Créer compte Supabase Auth
   const supabase = createSupabaseClient(c.env)
   const { data: authData, error: authError } = await supabase.auth.signUp({
@@ -193,11 +188,24 @@ authRouter.post('/register', async (c) => {
     .bind(utilisateurId, tenantId, authData.user.id, nom_gerant, now)
     .run()
 
+  // Connexion automatique si email confirmation non requise
+  let sessionData: { access_token?: string; refresh_token?: string } = {}
+  if (authData.session) {
+    sessionData = {
+      access_token: authData.session.access_token,
+      refresh_token: authData.session.refresh_token
+    }
+  }
+
   return c.json({
     success: true,
-    message: 'Compte créé avec succès. Vérifiez votre email pour confirmer votre inscription.',
+    message: authData.session
+      ? 'Compte créé avec succès. Vous êtes connecté.'
+      : 'Compte créé. Vérifiez votre email pour confirmer votre inscription.',
     slug,
-    tenant_id: tenantId
+    tenant_id: tenantId,
+    boutique_url: `https://monmenu.app/${slug}`,
+    ...sessionData
   }, 201)
 })
 
