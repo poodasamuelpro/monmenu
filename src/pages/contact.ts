@@ -51,33 +51,24 @@ export function renderContactPage(nomProjet: string, whatsappSupport: string = '
     </div>
 
     <!-- Formulaire -->
-    <div class="border border-gray-200 rounded-2xl p-8">
-      <form id="contact-form" class="space-y-5" onsubmit="submitContact(event)">
-        <div class="grid sm:grid-cols-2 gap-5">
-          <div>
-            <label for="contact-nom" class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Nom complet</label>
-            <input type="text" id="contact-nom" required
-              class="w-full border border-gray-200 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900/10 focus:border-gray-400 transition-colors"
-              placeholder="Votre nom">
-          </div>
-          <div>
-            <label for="contact-email" class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Email ou téléphone</label>
-            <input type="text" id="contact-email" required
-              class="w-full border border-gray-200 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900/10 focus:border-gray-400 transition-colors"
-              placeholder="votre@email.com">
-          </div>
+    <div class="bg-white border border-gray-100 rounded-3xl p-8 shadow-xl shadow-gray-100/50">
+      <form id="contact-form" class="space-y-4" onsubmit="submitContact(event)">
+        <div>
+          <label class="block text-xs font-bold text-gray-400 uppercase mb-2 ml-1">Nom complet</label>
+          <input type="text" id="contact-nom" required class="w-full bg-gray-50 border-none rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-red-100 transition-all" placeholder="Votre nom">
         </div>
         <div>
-          <label for="contact-message" class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Message</label>
-          <textarea id="contact-message" required rows="5"
-            class="w-full border border-gray-200 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900/10 focus:border-gray-400 transition-colors resize-none"
-            placeholder="Comment pouvons-nous vous aider ?"></textarea>
+          <label class="block text-xs font-bold text-gray-400 uppercase mb-2 ml-1">Email ou Téléphone</label>
+          <input type="text" id="contact-email" required class="w-full bg-gray-50 border-none rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-red-100 transition-all" placeholder="votre@email.com">
         </div>
-        <button type="submit" id="contact-btn"
-          class="w-full bg-gray-900 hover:bg-black text-white font-semibold py-3 rounded-lg transition-colors">
+        <div>
+          <label class="block text-xs font-bold text-gray-400 uppercase mb-2 ml-1">Message</label>
+          <textarea id="contact-message" required rows="4" class="w-full bg-gray-50 border-none rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-red-100 transition-all resize-none" placeholder="Comment pouvons-nous vous aider ?"></textarea>
+        </div>
+        <button type="submit" id="contact-btn" class="w-full bg-gray-900 hover:bg-black text-white font-bold py-4 rounded-xl transition-all shadow-lg">
           Envoyer le message
         </button>
-        <div id="contact-feedback" class="hidden text-center text-sm font-medium"></div>
+        <div id="contact-feedback" class="hidden text-center p-3 rounded-xl text-xs font-medium"></div>
       </form>
     </div>
   </main>
@@ -90,12 +81,12 @@ export function renderContactPage(nomProjet: string, whatsappSupport: string = '
       const feedback = document.getElementById('contact-feedback');
       btn.disabled = true;
       btn.innerText = 'Envoi...';
-
+      
       // Simulation
       await new Promise(r => setTimeout(r, 1000));
-
+      
       feedback.innerText = '✓ Message envoyé. Nous vous répondrons très bientôt.';
-      feedback.className = 'text-green-600 text-sm font-medium text-center mt-2';
+      feedback.className = 'text-green-600 bg-green-50 p-3 rounded-xl text-xs font-medium mt-4';
       feedback.classList.remove('hidden');
       e.target.reset();
       btn.disabled = false;
