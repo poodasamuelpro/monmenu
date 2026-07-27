@@ -2,22 +2,39 @@
 // ARCHITECTURE :
 //   • D1 (Cloudflare) → SITE WEB uniquement : config_globale, pays, plans
 //   • Supabase (PostgreSQL) → APPLICATION : tenants, commandes, menu, livreurs, etc.
-// Toutes les routes nécessitent un JWT Supabase valide
+// §2 — Toutes les routes acceptent désormais le token via cookie httpOnly
+//      "sb-access-token" (flux navigateur) OU header Authorization: Bearer
+//      (clients API/mobile), avec le cookie prioritaire.
 
 import { Hono } from 'hono'
+import { getCookie } from 'hono/cookie'
 import type { Env } from '../types/database'
 import { createSupabaseClient, createSupabaseClientWithToken, createSupabaseAdminClient } from '../lib/supabase'
 import { setSecurityHeaders, checkRateLimit } from '../lib/security'
 
 const dashboardRouter = new Hono<{ Bindings: Env }>()
 
+// Doit être strictement identique au nom de cookie posé dans api-auth.ts
+// et utilisé dans src/middleware/auth.ts.
+const ACCESS_TOKEN_COOKIE = 'sb-access-token'
+
+function extractToken(c: any): string | null {
+  const cookieToken = getCookie(c, ACCESS_TOKEN_COOKIE)
+  if (cookieToken && cookieToken.length >= 20) return cookieToken.trim()
+
+  const authHeader = c.req.header('Authorization')
+  if (authHeader?.startsWith('Bearer ')) {
+    const headerToken = authHeader.replace('Bearer ', '').trim()
+    if (headerToken.length >= 20) return headerToken
+  }
+
+  return null
+}
+
 // ---- Middleware d'authentification ----
 async function verifyAuth(c: any): Promise<{ user_id: string; tenant_id: string; tenant_slug: string; token: string } | null> {
-  const authHeader = c.req.header('Authorization')
-  if (!authHeader?.startsWith('Bearer ')) return null
-
-  const token = authHeader.replace('Bearer ', '')
-  if (!token || token.length < 20) return null
+  const token = extractToken(c)
+  if (!token) return null
 
   try {
     const supabase = createSupabaseClient(c.env)
