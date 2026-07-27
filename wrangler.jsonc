@@ -30,5 +30,14 @@
   // §1.8 — Cron trigger : calcul des stats journalières à 02h00 UTC chaque nuit
   "triggers": {
     "crons": ["0 2 * * *"]
+  },
+
+  // Logs d'observabilité Cloudflare (Observability > Logs dans le dashboard)
+  // pour voir les erreurs runtime en direct, y compris les invocations complètes.
+  "observability": {
+    "logs": {
+      "enabled": true,
+      "invocation_logs": true
+    }
   }
 }
