@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { logger } from 'hono/logger'
 import { serveStatic } from 'hono/cloudflare-workers'
+import { getCookie } from 'hono/cookie'
 import type { Env } from './types/database'
 import { commandesRouter } from './routes/api-commandes'
 import { tenantsRouter } from './routes/api-tenants'
@@ -12,7 +13,7 @@ import { dashboardRouter } from './routes/api-dashboard'
 import { blogRouter } from './routes/api-blog'
 import { newsletterRouter } from './routes/api-newsletter'
 import { setSecurityHeaders } from './lib/security'
-import { getNomProjet, getWhatsAppSupport, createSupabaseAdminClient } from './lib/supabase'
+import { getNomProjet, getWhatsAppSupport, createSupabaseAdminClient, createSupabaseClient } from './lib/supabase'
 import { detectLocale } from './i18n'
 
 // ---- Imports composants & pages ----
@@ -30,6 +31,9 @@ import { renderBoutiquePage } from './pages/boutique'
 import { render404Page } from './pages/not-found'
 
 const app = new Hono<{ Bindings: Env }>()
+
+// Nom du cookie httpOnly — doit rester identique à celui posé dans api-auth.ts
+const ACCESS_TOKEN_COOKIE = 'sb-access-token'
 
 // ---- Middleware globaux ----
 app.use('*', logger())
@@ -59,11 +63,18 @@ function originAutorisee(origin: string): string | null {
   return null
 }
 
+// §2 — credentials:true est OBLIGATOIRE pour que le navigateur envoie/accepte
+// les cookies httpOnly cross-origin (ex: dashboard sur un sous-domaine séparé
+// appelant l'API). Sans ça, aucun cookie ne circule et l'auth par cookie ne
+// fonctionne jamais, même si tout le reste (backend, frontend) est correct.
+// Note : credentials:true impose que "origin" ne soit jamais '*' — c'est déjà
+// le cas ici car originAutorisee() renvoie toujours une origine précise ou ''.
 app.use('/api/*', cors({
   origin: (origin) => originAutorisee(origin) ?? '',
   allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowHeaders: ['Content-Type', 'Authorization', 'X-Idempotency-Key'],
-  exposeHeaders: ['X-Cache', 'X-RateLimit-Remaining']
+  exposeHeaders: ['X-Cache', 'X-RateLimit-Remaining'],
+  credentials: true
 }))
 
 // ---- Fichiers statiques ----
@@ -91,8 +102,6 @@ app.use('*', async (c, next) => {
         .maybeSingle()
 
       if (tenant) {
-        // Vérifier plan Mogho (seul plan autorisé à utiliser domaine_perso)
-        const planCheck = tenant as any
         const nomProjet = await getNomProjet(c.env)
         return c.html(renderBoutiquePage(tenant as any, nomProjet))
       }
@@ -371,28 +380,33 @@ app.get('/dashboard', async (c) => {
   return c.html(renderConnexionPage(nomProjet))
 })
 
-// CORRIGÉ (bug redirection login en boucle) :
-// L'ancienne version vérifiait un cookie "sb-access-token" ou un header
-// Authorization avant de servir le HTML du dashboard. Mais l'app stocke
-// le token UNIQUEMENT dans localStorage (voir dashboard.js / auth.ts) —
-// un cookie n'est jamais posé et un header Authorization n'est jamais
-// envoyé lors d'une navigation classique du navigateur (window.location.href).
-// Résultat : hasToken était toujours `false`, donc CHAQUE visite de
-// /dashboard/* (même juste après un login/inscription réussi) était
-// redirigée vers /dashboard (= page de connexion), en boucle silencieuse.
-//
-// Le HTML du dashboard ne contient aucune donnée sensible par lui-même :
-// toutes les données réelles passent par /api/v1/dashboard/*, qui vérifie
-// déjà correctement le Bearer token côté serveur (voir verifyAuth() dans
-// api-dashboard.ts). On peut donc servir le HTML sans condition ici, et
-// laisser dashboard.js (initDashboard()) gérer la redirection côté client
-// s'il ne trouve pas de token dans localStorage — ce qu'il fait déjà :
-//
-//   authToken = localStorage.getItem('monmenu_auth_token');
-//   if (!authToken) { window.location.href = '/dashboard'; return; }
-//
+// §2 — CORRIGÉ : vraie vérification JWT (pas juste "cookie présent").
+// L'ancien bug (redirection en boucle) venait d'un check qui cherchait un
+// cookie qui n'était jamais posé, car le token vivait uniquement dans
+// localStorage. Maintenant que /login et /register posent un vrai cookie
+// httpOnly "sb-access-token", on peut faire une vérification serveur
+// complète ici : lire le cookie, valider le JWT auprès de Supabase Auth,
+// et rediriger vers /dashboard (page de connexion) si absent/invalide/expiré.
+// Le HTML rendu ne contient toujours aucune donnée sensible — les données
+// réelles passent par /api/v1/dashboard/*, qui revalide indépendamment.
 app.get('/dashboard/*', async (c) => {
   setSecurityHeaders(c)
+
+  const token = getCookie(c, ACCESS_TOKEN_COOKIE)
+  if (!token) {
+    return c.redirect('/dashboard', 302)
+  }
+
+  try {
+    const supabase = createSupabaseClient(c.env)
+    const { data: { user }, error } = await supabase.auth.getUser(token)
+    if (error || !user) {
+      return c.redirect('/dashboard', 302)
+    }
+  } catch {
+    return c.redirect('/dashboard', 302)
+  }
+
   const nomProjet = await getNomProjet(c.env)
   // §2 — Injecter SUPABASE_URL + SUPABASE_ANON_KEY (jamais service_role) pour Realtime
   return c.html(renderDashboardPage(nomProjet, c.env.SUPABASE_URL, c.env.SUPABASE_ANON_KEY))
@@ -462,10 +476,6 @@ app.notFound((c) => {
 })
 
 // ---- Erreurs globales ----
-// CORRIGÉ : on loggait l'objet Error entier, ce qui fait que Cloudflare
-// n'affichait que la stack trace minifiée, jamais err.message.
-// On log maintenant explicitement le message + la stack pour pouvoir
-// diagnostiquer les 500 (ex: variable d'env manquante, binding KV absent, etc.)
 app.onError((err, c) => {
   const message = err instanceof Error ? err.message : String(err)
   const stack = err instanceof Error ? err.stack : undefined
@@ -526,7 +536,8 @@ Français (défaut), Anglais
 
 ## Note pour les agents IA
 Les boutiques restaurants sont des pages publiques accessibles sans authentification.
-Le dashboard restaurant (/dashboard) est privé et nécessite une authentification Supabase.
+Le dashboard restaurant (/dashboard) est privé et nécessite une authentification Supabase
+via cookie httpOnly (session navigateur).
 `
   return c.text(content, 200, { 'Content-Type': 'text/plain; charset=utf-8' })
 })
