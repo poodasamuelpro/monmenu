@@ -6,7 +6,7 @@
 
 import { Hono } from 'hono'
 import type { Env } from '../types/database'
-import { checkRateLimit, setSecurityHeaders } from '../lib/security'
+import { checkRateLimit, setSecurityHeaders, sanitizeSlug } from '../lib/security'
 import { createSupabaseClient, createSupabaseAdminClient } from '../lib/supabase'
 
 const authRouter = new Hono<{ Bindings: Env }>()
@@ -114,8 +114,11 @@ authRouter.post('/register', async (c) => {
   setSecurityHeaders(c)
   const ip = c.req.header('CF-Connecting-IP') ?? 'unknown'
 
-  // Rate limiting : 3 inscriptions / heure par IP
-  const rateLimit = await checkRateLimit(`auth_register:${ip}`, 3, 3600000)
+  // Rate limiting : 15 inscriptions / heure par IP
+  // (CORRIGÉ — passé de 3 à 15/heure à la demande de Samuel, pour laisser
+  // plus de marge pendant les tests et l'usage réel. À resurveiller selon
+  // la consommation / le taux d'abus observé.)
+  const rateLimit = await checkRateLimit(`auth_register:${ip}`, 15, 3600000)
   if (!rateLimit.allowed) {
     return c.json({ error: 'Trop de tentatives. Réessayez dans une heure.' }, 429)
   }
@@ -143,8 +146,9 @@ authRouter.post('/register', async (c) => {
     return c.json({ error: 'Numéro WhatsApp invalide.' }, 422)
   }
 
-  // Générer le slug depuis le nom
-  const { sanitizeSlug } = await import('../lib/security')
+  // CORRIGÉ — import statique de sanitizeSlug en haut du fichier au lieu
+  // d'un `await import('../lib/security')` dynamique, qui peut mal se
+  // bundler avec esbuild/Wrangler et provoquer un crash silencieux au runtime.
   let slug = sanitizeSlug(nom_restaurant)
   if (!slug) slug = 'restaurant-' + Date.now().toString(36)
 
