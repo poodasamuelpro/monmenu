@@ -1,4 +1,7 @@
 // src/pages/inscription.ts
+// §2 — Migration cookies httpOnly : fetch('/api/v1/auth/register') utilise
+// désormais credentials:'include' pour accepter le cookie httpOnly posé
+// par le serveur. Le token n'est plus stocké en localStorage.
 import { renderHead } from '../components/head'
 import { renderNav } from '../components/nav'
 import { renderFooter } from '../components/footer'
@@ -193,17 +196,18 @@ export function renderInscriptionPage(nomProjet: string): string {
       };
 
       try {
+        // §2 — credentials:'include' pour accepter le cookie httpOnly
+        // posé par le serveur si la session est créée immédiatement.
         const res = await fetch('/api/v1/auth/register', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
           body: JSON.stringify(payload)
         });
         const data = await res.json();
         if (res.ok && data.success) {
-          if (data.access_token) {
-            localStorage.setItem('monmenu_auth_token', data.access_token);
-            if (data.refresh_token) localStorage.setItem('monmenu_refresh_token', data.refresh_token);
-            if (data.tenant) localStorage.setItem('monmenu_tenant', JSON.stringify(data.tenant));
+          if (data.tenant) {
+            localStorage.setItem('monmenu_tenant', JSON.stringify(data.tenant));
             successEl.textContent = data.message || 'Compte créé ! Redirection vers votre tableau de bord...';
             successEl.classList.remove('hidden');
             e.target.reset();
