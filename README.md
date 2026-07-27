@@ -1,4 +1,4 @@
-# MonMenu — Plateforme de commande en ligne pour restaurants
+# MonMenu — Plateforme de commande en ligne pour restaurants 
 
 ## Vue d'ensemble
 **MonMenu** est une plateforme SaaS de commande en ligne pour les restaurants d'Afrique de l'Ouest et Centrale. Les restaurateurs créent leur boutique digitale en quelques minutes, gèrent leur menu et reçoivent les commandes directement sur WhatsApp — sans commission.
