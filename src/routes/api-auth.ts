@@ -3,13 +3,51 @@
 //   • Supabase Auth  → authentification (signIn, signUp, JWT, refresh)
 //   • Supabase DB    → tenants, utilisateurs_tenant, points_de_vente  (APPLICATION)
 //   • D1 Cloudflare  → plans, pays  (SITE WEB — lecture uniquement pour inscription)
+//
+// §2 — Migration cookies httpOnly : login/register posent désormais des
+// cookies httpOnly + Secure + SameSite=Lax contenant access/refresh token.
+// Le corps JSON continue de renvoyer les tokens en clair pour les clients
+// API/mobile qui n'utilisent pas de cookies (rétrocompatibilité).
 
 import { Hono } from 'hono'
+import { setCookie, deleteCookie, getCookie } from 'hono/cookie'
 import type { Env } from '../types/database'
 import { checkRateLimit, setSecurityHeaders, sanitizeSlug } from '../lib/security'
 import { createSupabaseClient, createSupabaseAdminClient } from '../lib/supabase'
 
 const authRouter = new Hono<{ Bindings: Env }>()
+
+// Noms de cookies — DOIVENT être strictement identiques à ceux lus dans
+// src/middleware/auth.ts et src/routes/api-dashboard.ts.
+const ACCESS_TOKEN_COOKIE = 'sb-access-token'
+const REFRESH_TOKEN_COOKIE = 'sb-refresh-token'
+
+// Durées de vie des cookies (en secondes). L'access token Supabase expire
+// généralement après 1h côté serveur — le cookie peut avoir une durée un
+// peu plus longue sans risque : Supabase invalidera de toute façon le JWT
+// expiré lors de auth.getUser().
+const ACCESS_TOKEN_MAX_AGE = 3600 // 1 heure
+const REFRESH_TOKEN_MAX_AGE = 60 * 60 * 24 * 30 // 30 jours
+
+function cookieOptions(maxAge: number) {
+  return {
+    httpOnly: true,
+    secure: true,
+    sameSite: 'Lax' as const,
+    path: '/',
+    maxAge
+  }
+}
+
+function setAuthCookies(c: any, accessToken: string, refreshToken: string) {
+  setCookie(c, ACCESS_TOKEN_COOKIE, accessToken, cookieOptions(ACCESS_TOKEN_MAX_AGE))
+  setCookie(c, REFRESH_TOKEN_COOKIE, refreshToken, cookieOptions(REFRESH_TOKEN_MAX_AGE))
+}
+
+function clearAuthCookies(c: any) {
+  deleteCookie(c, ACCESS_TOKEN_COOKIE, { path: '/' })
+  deleteCookie(c, REFRESH_TOKEN_COOKIE, { path: '/' })
+}
 
 // POST /api/v1/auth/login — Connexion restaurant via Supabase Auth
 authRouter.post('/login', async (c) => {
@@ -65,6 +103,9 @@ authRouter.post('/login', async (c) => {
     return c.json({ error: 'Votre compte est suspendu. Contactez le support.' }, 403)
   }
 
+  // §2 — Pose des cookies httpOnly (source d'authentification principale pour le dashboard web)
+  setAuthCookies(c, data.session.access_token, data.session.refresh_token)
+
   // Stocker token dans KV_CACHE avec TTL 1h (optionnel)
   if (c.env.KV_CACHE) {
     const sessionKey = `session:${data.session.access_token.slice(-20)}`
@@ -95,6 +136,8 @@ authRouter.post('/login', async (c) => {
 
   return c.json({
     success: true,
+    // Conservés pour compatibilité clients API/mobile sans cookies.
+    // Le dashboard web n'a plus besoin de les stocker : le cookie httpOnly suffit.
     access_token: data.session.access_token,
     refresh_token: data.session.refresh_token,
     tenant: {
@@ -182,16 +225,12 @@ authRouter.post('/register', async (c) => {
   }
 
   // Récupérer plan gratuit depuis D1 (SITE WEB) — lecture uniquement pour nom du plan.
-  // NOTE : plan_id est ici utilisé tel quel dans l'insert Supabase ci-dessous.
-  // Si "tenants_plan_id_fkey" existe aussi côté Supabase, ce même problème
-  // d'UUID cross-database s'appliquera à plan_id — à vérifier si l'inscription
-  // échoue de nouveau avec une erreur "tenants_plan_id_fkey".
   const planGratuit = await c.env.DB
     .prepare("SELECT id, nom FROM plans WHERE nom = 'Gratuit' OR ordre_affichage = 0 LIMIT 1")
     .first<{ id: string; nom: string }>()
 
-  // CORRIGÉ — pays_id lu depuis SUPABASE (pas D1), car c'est la table
-  // Supabase "pays" que la contrainte FK tenants_pays_id_fkey vérifie.
+  // pays_id lu depuis SUPABASE (pas D1), car c'est la table Supabase "pays"
+  // que la contrainte FK tenants_pays_id_fkey vérifie.
   const { data: paysSupabase } = await adminClient
     .from('pays')
     .select('id')
@@ -250,6 +289,8 @@ authRouter.post('/register', async (c) => {
       access_token: authData.session.access_token,
       refresh_token: authData.session.refresh_token
     }
+    // §2 — Pose des cookies httpOnly dès l'inscription si la session est immédiate
+    setAuthCookies(c, authData.session.access_token, authData.session.refresh_token)
   }
 
   return c.json({
@@ -276,34 +317,53 @@ authRouter.post('/register', async (c) => {
 // POST /api/v1/auth/logout — Déconnexion
 authRouter.post('/logout', async (c) => {
   setSecurityHeaders(c)
+
+  // Le token peut venir du cookie ou du header, selon le client
+  const cookieToken = getCookie(c, ACCESS_TOKEN_COOKIE)
   const authHeader = c.req.header('Authorization')
-  const token = authHeader?.replace('Bearer ', '')
+  const headerToken = authHeader?.replace('Bearer ', '')
+  const token = cookieToken || headerToken
 
   if (token && c.env.KV_CACHE) {
     const sessionKey = `session:${token.slice(-20)}`
     try { await c.env.KV_CACHE.delete(sessionKey) } catch {}
   }
 
+  // §2 — Effacer les cookies httpOnly côté navigateur
+  clearAuthCookies(c)
+
   return c.json({ success: true })
 })
 
 // POST /api/v1/auth/refresh — Refresh token Supabase
+// §2 — Accepte le refresh token depuis le cookie httpOnly en priorité,
+// avec fallback sur le body JSON pour les clients API/mobile.
 authRouter.post('/refresh', async (c) => {
   setSecurityHeaders(c)
-  let body: { refresh_token?: string }
-  try { body = await c.req.json() }
-  catch { return c.json({ error: 'JSON invalide.' }, 400) }
 
-  if (!body.refresh_token) {
-    return c.json({ error: 'refresh_token requis.' }, 422)
+  const cookieRefreshToken = getCookie(c, REFRESH_TOKEN_COOKIE)
+
+  let bodyRefreshToken: string | undefined
+  try {
+    const body = await c.req.json() as { refresh_token?: string }
+    bodyRefreshToken = body?.refresh_token
+  } catch { /* body absent — normal si appel initié uniquement via cookie */ }
+
+  const refreshToken = cookieRefreshToken || bodyRefreshToken
+  if (!refreshToken) {
+    return c.json({ error: 'refresh_token requis (cookie ou body).' }, 422)
   }
 
   const supabase = createSupabaseClient(c.env)
-  const { data, error } = await supabase.auth.refreshSession({ refresh_token: body.refresh_token })
+  const { data, error } = await supabase.auth.refreshSession({ refresh_token: refreshToken })
 
   if (error || !data.session) {
+    clearAuthCookies(c)
     return c.json({ error: 'Session expirée. Reconnectez-vous.' }, 401)
   }
+
+  // §2 — Reposer les cookies avec les nouveaux tokens
+  setAuthCookies(c, data.session.access_token, data.session.refresh_token)
 
   return c.json({
     access_token: data.session.access_token,
@@ -362,6 +422,10 @@ authRouter.post('/verify-otp', async (c) => {
 
   if (error || !data.session) return c.json({ error: 'Code OTP invalide ou expiré.' }, 401)
 
+  // §2 — Session temporaire posée en cookie également, pour que
+  // reset-password (étape suivante) fonctionne sans dépendre du localStorage.
+  setAuthCookies(c, data.session.access_token, data.session.refresh_token)
+
   return c.json({
     access_token: data.session.access_token,
     refresh_token: data.session.refresh_token,
@@ -369,12 +433,16 @@ authRouter.post('/verify-otp', async (c) => {
   })
 })
 
-// POST /api/v1/auth/reset-password  (Bearer token issu de verify-otp)
+// POST /api/v1/auth/reset-password  (token issu de verify-otp, via cookie ou Bearer)
 authRouter.post('/reset-password', async (c) => {
   setSecurityHeaders(c)
+
+  const cookieToken = getCookie(c, ACCESS_TOKEN_COOKIE)
   const authHeader = c.req.header('authorization') ?? ''
-  if (!authHeader.startsWith('Bearer ')) return c.json({ error: "Token d'accès requis." }, 401)
-  const token = authHeader.slice(7)
+  const headerToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : undefined
+  const token = cookieToken || headerToken
+
+  if (!token) return c.json({ error: "Session requise (cookie ou jeton Bearer)." }, 401)
 
   let body: { password?: string }
   try { body = await c.req.json() } catch { return c.json({ error: 'JSON invalide.' }, 400) }
@@ -385,7 +453,10 @@ authRouter.post('/reset-password', async (c) => {
   // Créer un client supabase avec le token de l'utilisateur
   const supabase = createSupabaseClient(c.env)
   const { error: userError } = await supabase.auth.getUser(token)
-  if (userError) return c.json({ error: 'Session invalide ou expirée.' }, 401)
+  if (userError) {
+    clearAuthCookies(c)
+    return c.json({ error: 'Session invalide ou expirée.' }, 401)
+  }
 
   const { error } = await supabase.auth.updateUser({ password: body.password })
   if (error) return c.json({ error: 'Erreur changement mot de passe.', detail: error.message }, 500)
