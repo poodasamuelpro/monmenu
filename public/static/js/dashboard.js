@@ -1,4 +1,4 @@
-// MonMenu — Dashboard restaurant (v1.1.0 — audit complet corrigé)
+// MonMenu — Dashboard restaurant (v1.2.0 — §2 Supabase Realtime)
 'use strict';
 
 let currentSection = 'commandes';
@@ -6,6 +6,132 @@ let currentFilter = null;
 let authToken = null;
 let tenantData = null;
 let commandesInterval = null;
+
+// §2 — Supabase Realtime : variables de gestion de la connexion
+let _supabaseClient = null;
+let _realtimeChannel = null;
+let _realtimeFallbackInterval = null; // fallback polling 2 min si Realtime échoue
+
+/**
+ * §2 — Initialise le client Supabase (clé anon) + abonnement Realtime.
+ * Écoute les INSERT et UPDATE sur la table "commandes" filtrés par tenant_id.
+ * En cas d'échec de connexion, active un fallback polling toutes les 2 minutes.
+ */
+function initRealtimeCommandes(tenantId) {
+  const supabaseUrl = window.__SUPABASE_URL__;
+  const supabaseAnonKey = window.__SUPABASE_ANON_KEY__;
+
+  // Prérequis : bibliothèque Supabase JS chargée et clés disponibles
+  if (!supabaseUrl || !supabaseAnonKey || typeof window.supabase === 'undefined') {
+    console.warn('[Realtime] Supabase JS ou clés indisponibles — fallback polling activé');
+    _startFallbackPolling();
+    return;
+  }
+
+  if (!_supabaseClient) {
+    _supabaseClient = window.supabase.createClient(supabaseUrl, supabaseAnonKey, {
+      realtime: { timeout: 30000 }
+    });
+  }
+
+  // Nettoyer l'abonnement précédent s'il existe
+  if (_realtimeChannel) {
+    _supabaseClient.removeChannel(_realtimeChannel);
+    _realtimeChannel = null;
+  }
+
+  _realtimeChannel = _supabaseClient
+    .channel('commandes-dashboard-' + tenantId)
+    .on(
+      'postgres_changes',
+      {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'commandes',
+        filter: `tenant_id=eq.${tenantId}`
+      },
+      (payload) => {
+        console.log('[Realtime] Nouvelle commande :', payload.new?.id);
+        _onNouvelleCommande(payload.new);
+      }
+    )
+    .on(
+      'postgres_changes',
+      {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'commandes',
+        filter: `tenant_id=eq.${tenantId}`
+      },
+      (payload) => {
+        console.log('[Realtime] Commande mise à jour :', payload.new?.id, payload.new?.statut);
+        // Recharger la liste uniquement si on est sur la section commandes
+        if (currentSection === 'commandes') fetchCommandes();
+      }
+    )
+    .subscribe((status, err) => {
+      if (status === 'SUBSCRIBED') {
+        console.log('[Realtime] Abonnement Realtime actif pour tenant', tenantId);
+        // Annuler le fallback si le Realtime fonctionne
+        if (_realtimeFallbackInterval) {
+          clearInterval(_realtimeFallbackInterval);
+          _realtimeFallbackInterval = null;
+        }
+      } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+        console.warn('[Realtime] Erreur connexion Realtime (' + status + ') — fallback polling activé', err);
+        _startFallbackPolling();
+      }
+    });
+}
+
+/**
+ * §2 — Appelée quand une nouvelle commande arrive via Realtime.
+ * Recharge la liste + affiche une notification visuelle/sonore.
+ */
+function _onNouvelleCommande(commande) {
+  if (currentSection === 'commandes') {
+    fetchCommandes();
+  }
+  _afficherNotificationCommande(commande);
+}
+
+/**
+ * §2 — Notification visuelle en cas de nouvelle commande.
+ */
+function _afficherNotificationCommande(commande) {
+  // Notification toast
+  const toast = document.createElement('div');
+  toast.className = 'fixed top-4 right-4 z-50 bg-green-600 text-white px-5 py-3 rounded-xl shadow-lg flex items-center gap-3 animate-bounce';
+  toast.innerHTML = `<i class="fa-solid fa-bell"></i> <span>Nouvelle commande de <strong>${escHtml(commande?.client_nom || 'Client')}</strong> !</span>`;
+  document.body.appendChild(toast);
+  // Son natif du navigateur (non bloquant)
+  try { const ctx = new AudioContext(); const osc = ctx.createOscillator(); const gain = ctx.createGain(); osc.connect(gain); gain.connect(ctx.destination); osc.frequency.value = 880; gain.gain.setValueAtTime(0.3, ctx.currentTime); gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4); osc.start(ctx.currentTime); osc.stop(ctx.currentTime + 0.4); } catch {}
+  setTimeout(() => toast.remove(), 5000);
+}
+
+/**
+ * §2 — Fallback polling toutes les 2 minutes (si Realtime échoue).
+ */
+function _startFallbackPolling() {
+  if (_realtimeFallbackInterval) return; // Évite les doublons
+  _realtimeFallbackInterval = setInterval(() => {
+    if (currentSection === 'commandes') fetchCommandes();
+  }, 120000); // 2 minutes
+}
+
+/**
+ * §2 — Nettoyage Realtime (appelé lors de la déconnexion/navigation).
+ */
+function teardownRealtime() {
+  if (_realtimeChannel && _supabaseClient) {
+    _supabaseClient.removeChannel(_realtimeChannel);
+    _realtimeChannel = null;
+  }
+  if (_realtimeFallbackInterval) {
+    clearInterval(_realtimeFallbackInterval);
+    _realtimeFallbackInterval = null;
+  }
+}
 
 // ---- Init Dashboard ----
 async function initDashboard() {
@@ -49,6 +175,10 @@ function setActiveNavLink(section) {
 
 function navigateTo(section) {
   if (commandesInterval) { clearInterval(commandesInterval); commandesInterval = null; }
+  // §2 — Nettoyer le Realtime/fallback si on quitte la section commandes
+  if (currentSection === 'commandes' && section !== 'commandes') {
+    teardownRealtime();
+  }
   currentSection = section;
   setActiveNavLink(section);
   const title = document.getElementById('page-title');
@@ -97,7 +227,15 @@ async function loadCommandes() {
       </div>
     </div>`;
   await fetchCommandes();
-  commandesInterval = setInterval(fetchCommandes, 30000);
+  // §2 — Supabase Realtime remplace le polling 30s (setInterval supprimé)
+  // Activer le Realtime si le tenant est connu, sinon fallback 2 min
+  const tenantId = tenantData?.id ?? null;
+  if (tenantId) {
+    initRealtimeCommandes(tenantId);
+  } else {
+    // Tenant inconnu (localStorage vide) — fallback polling 2 min
+    _startFallbackPolling();
+  }
 }
 
 async function fetchCommandes() {

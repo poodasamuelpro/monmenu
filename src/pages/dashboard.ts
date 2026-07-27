@@ -1,12 +1,23 @@
 // src/pages/dashboard.ts
 import { renderHead } from '../components/head'
 
-export function renderDashboardPage(nomProjet: string): string {
+export function renderDashboardPage(
+  nomProjet: string,
+  supabaseUrl: string = '',
+  supabaseAnonKey: string = ''
+): string {
+  // Injecter SUPABASE_URL et SUPABASE_ANON_KEY (clé anon publique uniquement,
+  // jamais service_role) pour permettre au client d'utiliser Supabase Realtime.
+  // Les variables sont sérialisées en JSON pour éviter tout XSS via les valeurs.
+  const supabaseConfig = supabaseUrl
+    ? `<script>window.__SUPABASE_URL__=${JSON.stringify(supabaseUrl)};window.__SUPABASE_ANON_KEY__=${JSON.stringify(supabaseAnonKey)};</script>`
+    : ''
+
   return `${renderHead(
     `Tableau de bord — ${nomProjet}`,
     `Gérez vos commandes, votre menu et vos statistiques.`,
     nomProjet,
-    `<meta name="robots" content="noindex, nofollow">`
+    `<meta name="robots" content="noindex, nofollow">\n  ${supabaseConfig}`
   )}
 <body class="font-sans bg-gray-50 min-h-screen">
   <div id="dashboard-app">
@@ -106,6 +117,8 @@ export function renderDashboardPage(nomProjet: string): string {
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- §2 — Supabase JS client (clé anon uniquement) pour Realtime postgres_changes -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
   <script src="/static/js/dashboard.js"></script>
   <script>
     // Afficher nom du tenant dans la sidebar

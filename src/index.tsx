@@ -13,6 +13,7 @@ import { blogRouter } from './routes/api-blog'
 import { newsletterRouter } from './routes/api-newsletter'
 import { setSecurityHeaders } from './lib/security'
 import { getNomProjet, getWhatsAppSupport, createSupabaseAdminClient } from './lib/supabase'
+import { detectLocale } from './i18n'
 
 // ---- Imports composants & pages ----
 import { renderHomePage } from './pages/home'
@@ -138,13 +139,16 @@ app.get('/sitemap.xml', async (c) => {
     <loc>${baseUrl}/</loc>
     <changefreq>weekly</changefreq>
     <priority>1.0</priority>
-    <xhtml:link rel="alternate" hreflang="fr" href="${baseUrl}/fr/"/>
-    <xhtml:link rel="alternate" hreflang="en" href="${baseUrl}/en/"/>
+    <xhtml:link rel="alternate" hreflang="fr" href="${baseUrl}/"/>
+    <xhtml:link rel="alternate" hreflang="en" href="${baseUrl}/?lang=en"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="${baseUrl}/"/>
   </url>
   <url>
     <loc>${baseUrl}/contact</loc>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
+    <xhtml:link rel="alternate" hreflang="fr" href="${baseUrl}/contact"/>
+    <xhtml:link rel="alternate" hreflang="en" href="${baseUrl}/contact?lang=en"/>
   </url>
   <url>
     <loc>${baseUrl}/inscription</loc>
@@ -180,6 +184,22 @@ ${restaurantUrls}
 </urlset>`
 
   return c.text(sitemap, 200, { 'Content-Type': 'application/xml; charset=utf-8' })
+})
+
+// ---- §3 — Routes i18n /fr et /en ----
+// Les pages institutionnelles sont servies en FR (défaut) ou EN.
+// /fr et /en redirigent vers la page d'accueil avec le préfixe de langue.
+// /fr/blog, /fr/contact, etc. servent la page dans la langue correspondante.
+// La boutique et le dashboard restent en FR uniquement.
+app.get('/fr', (c) => c.redirect('/', 302))
+app.get('/en', (c) => c.redirect('/?lang=en', 302))
+app.get('/fr/*', (c) => {
+  const path = c.req.path.replace(/^\/fr/, '') || '/'
+  return c.redirect(path, 302)
+})
+app.get('/en/*', (c) => {
+  const path = c.req.path.replace(/^\/en/, '') || '/'
+  return c.redirect(path + (path.includes('?') ? '&' : '?') + 'lang=en', 302)
 })
 
 // ---- robots.txt ----
@@ -366,7 +386,8 @@ app.get('/dashboard/*', async (c) => {
     }
   }
   const nomProjet = await getNomProjet(c.env)
-  return c.html(renderDashboardPage(nomProjet))
+  // §2 — Injecter SUPABASE_URL + SUPABASE_ANON_KEY (jamais service_role) pour Realtime
+  return c.html(renderDashboardPage(nomProjet, c.env.SUPABASE_URL, c.env.SUPABASE_ANON_KEY))
 })
 
 // ---- Page boutique restaurant (DOIT être EN DERNIER — route générique) ----
@@ -446,3 +467,52 @@ export default {
   fetch: app.fetch.bind(app),
   scheduled: handleScheduled
 }
+
+// ---- §5 — llms.txt (convention LLM/IA) ----
+app.get('/llms.txt', (c) => {
+  const content = `# MonMenu
+
+## Description
+MonMenu est une plateforme SaaS de commande en ligne pour les restaurants d'Afrique de l'Ouest et Centrale.
+Elle permet aux restaurateurs de créer leur boutique digitale en quelques minutes, de gérer leur menu,
+et de recevoir les commandes directement sur WhatsApp — sans commission.
+
+## Sections principales
+- Accueil : https://monmenu.app/
+- Blog : https://monmenu.app/blog
+- Tarifs : https://monmenu.app/#tarifs
+- Fonctionnalités : https://monmenu.app/#fonctionnalites
+- Contact : https://monmenu.app/contact
+- Inscription restaurant : https://monmenu.app/inscription
+- Connexion dashboard : https://monmenu.app/connexion
+
+## Pages légales
+- CGU : https://monmenu.app/legal/cgu
+- Confidentialité : https://monmenu.app/legal/confidentialite
+- Mentions légales : https://monmenu.app/legal/mentions
+- Cookies : https://monmenu.app/legal/cookies
+
+## Boutiques restaurants
+Chaque restaurant inscrit dispose d'une boutique publique accessible via :
+https://monmenu.app/{slug-du-restaurant}
+
+## API publique
+- Commandes : POST /api/v1/commandes
+- Suivi commande : GET /api/v1/commandes/suivi/{token}
+- Blog (lecture) : GET /api/v1/blog, GET /api/v1/blog/{slug}
+
+## Technologies
+- Backend : Hono v4 sur Cloudflare Workers
+- Base de données : Supabase PostgreSQL + Cloudflare D1
+- Paiements : Mobile Money, espèces, carte bancaire (selon disponibilité du restaurant)
+- Notifications : WhatsApp Business API
+
+## Langues supportées
+Français (défaut), Anglais
+
+## Note pour les agents IA
+Les boutiques restaurants sont des pages publiques accessibles sans authentification.
+Le dashboard restaurant (/dashboard) est privé et nécessite une authentification Supabase.
+`
+  return c.text(content, 200, { 'Content-Type': 'text/plain; charset=utf-8' })
+})

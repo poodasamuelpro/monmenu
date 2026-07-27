@@ -14,15 +14,29 @@
 //    /api/v1/plans — zéro prix codé en dur dans ce fichier.
 //  - FAQ étendue (9 questions), facilement extensible.
 // =============================================================
-import { renderHead } from '../components/head'
+import { renderHead, jsonLdOrganization, jsonLdWebSite } from '../components/head'
 import { renderNav } from '../components/nav'
 import { renderFooter } from '../components/footer'
 
 export function renderHomePage(nomProjet: string): string {
+  const description = `${nomProjet} est la plateforme de commande en ligne pour les restaurants d'Afrique de l'Ouest et Centrale. Créez votre boutique en quelques minutes. Sans commission.`
   return `${renderHead(
     `${nomProjet} — Commandez en ligne dans vos restaurants préférés`,
-    `${nomProjet} est la plateforme de commande en ligne pour les restaurants d'Afrique de l'Ouest et Centrale. Créez votre boutique en quelques minutes. Sans commission.`,
-    nomProjet
+    description,
+    nomProjet,
+    '',
+    'https://monmenu.app/',
+    {
+      ogType: 'website',
+      ogLocale: 'fr_FR',
+      canonicalUrl: 'https://monmenu.app/',
+      jsonLd: { '@context': 'https://schema.org', '@graph': [jsonLdOrganization(nomProjet), jsonLdWebSite(nomProjet)] },
+      hreflangAlternates: [
+        { lang: 'fr', url: 'https://monmenu.app/' },
+        { lang: 'en', url: 'https://monmenu.app/?lang=en' },
+        { lang: 'x-default', url: 'https://monmenu.app/' }
+      ]
+    }
   )}
 <body class="font-sans bg-white dark:bg-[#0B0A09] text-gray-900 dark:text-gray-50 transition-colors">
   ${renderNav(nomProjet, 'accueil')}

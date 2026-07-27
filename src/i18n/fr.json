@@ -1,0 +1,74 @@
+{
+  "lang": "fr",
+  "locale": "fr_FR",
+  "nav": {
+    "home": "Accueil",
+    "features": "Fonctionnalités",
+    "pricing": "Tarifs",
+    "blog": "Blog",
+    "contact": "Contact",
+    "login": "Connexion",
+    "register": "Créer mon menu",
+    "dashboard": "Mon tableau de bord"
+  },
+  "home": {
+    "hero_title": "La carte digitale pour vos restaurants",
+    "hero_subtitle": "Créez votre menu en ligne en quelques minutes. Recevez vos commandes directement sur WhatsApp. Sans commission, sans abonnement obligatoire.",
+    "hero_cta": "Créer mon menu gratuitement",
+    "hero_cta_secondary": "Voir une démo"
+  },
+  "contact": {
+    "title": "Contactez-nous",
+    "description": "Nous sommes là pour vous aider. Envoyez-nous un message.",
+    "name": "Nom complet",
+    "email": "Adresse e-mail",
+    "subject": "Sujet",
+    "message": "Votre message",
+    "send": "Envoyer le message",
+    "success": "Message envoyé avec succès !",
+    "error": "Erreur lors de l'envoi. Veuillez réessayer."
+  },
+  "blog": {
+    "title": "Blog",
+    "description": "Conseils, actualités et ressources pour les restaurateurs.",
+    "read_more": "Lire la suite",
+    "min_read": "min de lecture",
+    "no_articles": "Aucun article disponible pour le moment."
+  },
+  "inscription": {
+    "title": "Créer votre menu digital",
+    "description": "Rejoignez des centaines de restaurateurs qui utilisent MonMenu.",
+    "restaurant_name": "Nom du restaurant",
+    "whatsapp": "Numéro WhatsApp",
+    "email": "Adresse e-mail",
+    "password": "Mot de passe",
+    "submit": "Créer mon compte",
+    "already_account": "Déjà un compte ?",
+    "login_link": "Se connecter"
+  },
+  "auth": {
+    "title": "Connexion",
+    "description": "Accédez à votre tableau de bord restaurant.",
+    "email": "Adresse e-mail",
+    "password": "Mot de passe",
+    "submit": "Se connecter",
+    "forgot_password": "Mot de passe oublié ?",
+    "no_account": "Pas encore de compte ?",
+    "register_link": "Créer un compte"
+  },
+  "legal": {
+    "cgu": "Conditions Générales d'Utilisation",
+    "confidentialite": "Politique de confidentialité",
+    "mentions": "Mentions légales",
+    "cookies": "Politique des cookies"
+  },
+  "footer": {
+    "rights": "Tous droits réservés.",
+    "made_with": "Fait avec ❤️ en Afrique de l'Ouest"
+  },
+  "language": {
+    "fr": "Français",
+    "en": "English",
+    "switch": "Changer de langue"
+  }
+}

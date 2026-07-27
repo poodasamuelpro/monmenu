@@ -1,9 +1,15 @@
 // src/routes/api-blog.ts
 import { Hono } from 'hono'
 import type { Env } from '../types/database'
-import { createSupabaseAdminClient } from '../lib/supabase' 
+import { createSupabaseAdminClient } from '../lib/supabase'
+import { authMiddlewarePlatform } from '../middleware/auth'
 
 export const blogRouter = new Hono<{ Bindings: Env }>()
+
+// §1 — Toutes les routes /admin/* sont protégées par JWT Supabase.
+// CORS seul ne constitue PAS une protection d'authentification :
+// il ne bloque que les requêtes cross-origin browser, pas curl/Postman/scripts.
+blogRouter.use('/admin/*', authMiddlewarePlatform)
 
 // GET /api/v1/blog — liste des articles publiés (public)
 blogRouter.get('/', async (c) => {
@@ -39,18 +45,6 @@ blogRouter.get('/:slug', async (c) => {
 
   return c.json({ article: data })
 })
-
-// -----------------------------------------------------------------
-// ⚠️ Routes admin (créer / modifier / supprimer un article)
-// À PROTÉGER avec le middleware d'authentification que tu utilises
-// déjà pour /dashboard. Je n'ai pas ce fichier, donc à brancher toi-même,
-// par exemple :
-//
-//   import { authMiddleware } from '../middleware/auth'
-//   blogRouter.use('/admin/*', authMiddleware)
-//
-// Sans ça, ces 3 routes sont ouvertes à tout le monde.
-// -----------------------------------------------------------------
 
 // POST /api/v1/blog/admin — créer un article
 blogRouter.post('/admin', async (c) => {

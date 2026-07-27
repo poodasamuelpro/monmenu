@@ -1,0 +1,74 @@
+{
+  "lang": "en",
+  "locale": "en_US",
+  "nav": {
+    "home": "Home",
+    "features": "Features",
+    "pricing": "Pricing",
+    "blog": "Blog",
+    "contact": "Contact",
+    "login": "Login",
+    "register": "Create my menu",
+    "dashboard": "My dashboard"
+  },
+  "home": {
+    "hero_title": "The digital menu for your restaurants",
+    "hero_subtitle": "Create your online menu in minutes. Receive your orders directly on WhatsApp. No commission, no mandatory subscription.",
+    "hero_cta": "Create my menu for free",
+    "hero_cta_secondary": "See a demo"
+  },
+  "contact": {
+    "title": "Contact us",
+    "description": "We are here to help. Send us a message.",
+    "name": "Full name",
+    "email": "Email address",
+    "subject": "Subject",
+    "message": "Your message",
+    "send": "Send message",
+    "success": "Message sent successfully!",
+    "error": "Error sending message. Please try again."
+  },
+  "blog": {
+    "title": "Blog",
+    "description": "Tips, news and resources for restaurant owners.",
+    "read_more": "Read more",
+    "min_read": "min read",
+    "no_articles": "No articles available at the moment."
+  },
+  "inscription": {
+    "title": "Create your digital menu",
+    "description": "Join hundreds of restaurant owners using MonMenu.",
+    "restaurant_name": "Restaurant name",
+    "whatsapp": "WhatsApp number",
+    "email": "Email address",
+    "password": "Password",
+    "submit": "Create my account",
+    "already_account": "Already have an account?",
+    "login_link": "Log in"
+  },
+  "auth": {
+    "title": "Login",
+    "description": "Access your restaurant dashboard.",
+    "email": "Email address",
+    "password": "Password",
+    "submit": "Log in",
+    "forgot_password": "Forgot your password?",
+    "no_account": "Don't have an account yet?",
+    "register_link": "Create an account"
+  },
+  "legal": {
+    "cgu": "Terms and Conditions",
+    "confidentialite": "Privacy Policy",
+    "mentions": "Legal Notice",
+    "cookies": "Cookie Policy"
+  },
+  "footer": {
+    "rights": "All rights reserved.",
+    "made_with": "Made with ❤️ in West Africa"
+  },
+  "language": {
+    "fr": "Français",
+    "en": "English",
+    "switch": "Change language"
+  }
+}

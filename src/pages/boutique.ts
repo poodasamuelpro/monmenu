@@ -1,5 +1,5 @@
 // src/pages/boutique.ts — Page boutique d'un restaurant (vue client)
-import { renderHead } from '../components/head'
+import { renderHead, jsonLdRestaurant } from '../components/head'
 
 export interface TenantBoutique {
   id: string
@@ -22,12 +22,36 @@ export function renderBoutiquePage(tenant: TenantBoutique, nomProjet: string): s
   const secondaryColor = tenant.couleur_secondaire || '#1D4ED8'
   const currentYear = new Date().getFullYear()
 
+  const boutiqueUrl = `https://monmenu.app/${tenant.slug}`
+  const description = `Commandez vos plats chez ${tenant.nom} sur ${nomProjet}. Livraison ou retrait sur place.`
+
   return `${renderHead(
-    `${tenant.nom} — Commander en ligne`,
-    `Commandez vos plats chez ${tenant.nom} sur ${nomProjet}. Livraison ou retrait sur place.`,
+    `${tenant.nom} — Commander en ligne | ${nomProjet}`,
+    description,
     nomProjet,
-    `<!-- Leaflet CSS — carte interactive livraison (§1.1) -->
+    '',
+    boutiqueUrl,
+    {
+      ogImage: tenant.logo_url ?? tenant.banniere_url ?? undefined,
+      ogType: 'website',
+      ogLocale: 'fr_FR',
+      canonicalUrl: boutiqueUrl,
+      jsonLd: jsonLdRestaurant({
+        nom: tenant.nom,
+        logoUrl: tenant.logo_url,
+        adresse: tenant.pdv_adresse,
+        latitude: tenant.pdv_latitude,
+        longitude: tenant.pdv_longitude,
+        horaires: typeof tenant.pdv_horaires === 'string' ? tenant.pdv_horaires : null,
+        url: boutiqueUrl
+      }),
+      hreflangAlternates: [
+        { lang: 'fr', url: boutiqueUrl },
+        { lang: 'x-default', url: boutiqueUrl }
+      ],
+      extra: `<!-- Leaflet CSS — carte interactive livraison (§1.1) -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.css">`
+    }
   )}
 <body class="font-sans bg-gray-50 dark:bg-gray-900 transition-colors">
   <style>

@@ -5,7 +5,7 @@
 // requis par static/js/main.js pour la bascule clair/sombre/système.
 // =============================================================
 
-export function renderNav(nomProjet: string, activePage: string = ''): string {
+export function renderNav(nomProjet: string, activePage: string = '', locale: string = 'fr'): string {
   const isActive = (page: string) =>
     activePage === page
       ? 'text-red-600 dark:text-red-400 font-semibold'
@@ -44,6 +44,23 @@ export function renderNav(nomProjet: string, activePage: string = ''): string {
 
       <!-- Actions -->
       <div class="flex items-center gap-3">
+        <!-- §3 — Sélecteur de langue FR/EN -->
+        <div class="relative group">
+          <button type="button"
+            class="w-9 h-9 rounded-lg border border-gray-200 dark:border-gray-700 flex items-center justify-center text-gray-600 dark:text-gray-300 hover:border-red-300 dark:hover:border-red-500 transition-colors flex-shrink-0 text-xs font-bold uppercase"
+            aria-label="Changer de langue" aria-haspopup="true">
+            ${locale === 'en' ? 'EN' : 'FR'}
+          </button>
+          <div class="absolute right-0 top-10 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg py-1 min-w-[90px] z-50 hidden group-hover:block">
+            <a href="/fr" class="flex items-center gap-2 px-3 py-2 text-sm ${locale === 'fr' ? 'text-red-600 font-semibold' : 'text-gray-700 dark:text-gray-300'} hover:bg-gray-50 dark:hover:bg-gray-700">
+              🇫🇷 Français
+            </a>
+            <a href="/en" class="flex items-center gap-2 px-3 py-2 text-sm ${locale === 'en' ? 'text-red-600 font-semibold' : 'text-gray-700 dark:text-gray-300'} hover:bg-gray-50 dark:hover:bg-gray-700">
+              🇬🇧 English
+            </a>
+          </div>
+        </div>
+
         <!-- Bascule thème clair / sombre / système — cf. static/js/main.js -->
         <button id="dark-toggle" type="button"
           class="w-9 h-9 rounded-lg border border-gray-200 dark:border-gray-700 flex items-center justify-center text-gray-600 dark:text-gray-300 hover:border-red-300 dark:hover:border-red-500 transition-colors flex-shrink-0"

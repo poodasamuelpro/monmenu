@@ -1,4 +1,5 @@
-// src/pages/article.ts 
+// src/pages/article.ts
+import { renderHead, jsonLdArticle } from '../components/head'
 import { renderNav } from '../components/nav'
 import { renderFooter } from '../components/footer'
 
@@ -19,24 +20,33 @@ export function renderArticlePage(nomProjet: string, article: ArticleDetail): st
     return new Date(iso).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' })
   }
 
-  return `<!DOCTYPE html>
-<html lang="fr">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${article.titre} — ${nomProjet}</title>
-  <meta name="description" content="${article.extrait}">
-  <meta property="og:title" content="${article.titre}">
-  <meta property="og:description" content="${article.extrait}">
-  <meta property="og:type" content="article">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.5.0/css/all.min.css">
-  <script src="https://cdn.tailwindcss.com"></script>
-  <link rel="stylesheet" href="/static/css/main.css">
-  <style>body { font-family: 'Inter', sans-serif; }</style>
-</head>
-<body class="bg-white">
+  // §4 — SEO étendu pour les articles de blog
+  const articleUrl = `https://monmenu.app/blog/${article.titre.toLowerCase().replace(/\s+/g, '-')}`
+  return `${renderHead(
+    `${article.titre} — ${nomProjet}`,
+    article.extrait,
+    nomProjet,
+    '',
+    articleUrl,
+    {
+      ogType: 'article',
+      ogImage: article.image_url ?? undefined,
+      ogLocale: 'fr_FR',
+      canonicalUrl: articleUrl,
+      articlePublishedTime: article.date_publication ?? undefined,
+      articleAuthor: article.auteur ?? undefined,
+      jsonLd: jsonLdArticle({
+        title: article.titre,
+        description: article.extrait,
+        imageUrl: article.image_url,
+        datePublished: article.date_publication,
+        author: article.auteur,
+        url: articleUrl,
+        nomProjet
+      })
+    }
+  )}
+<body class="bg-white dark:bg-gray-900 font-sans transition-colors">
   ${renderNav(nomProjet, 'blog')}
 
   <article class="max-w-2xl mx-auto px-4 sm:px-6 py-16">
