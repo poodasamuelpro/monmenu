@@ -268,23 +268,14 @@ export function renderHomePage(nomProjet: string): string {
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
       <div class="text-center mb-10">
         <h2 class="text-3xl sm:text-4xl font-extrabold text-gray-900 dark:text-white mb-4">Tarifs transparents</h2>
-        <p class="text-gray-600 dark:text-gray-300 mb-6 text-lg">Sans commission sur vos ventes. Forfait fixe, sans surprise.</p>
-
-        <div class="inline-flex items-center gap-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-1 shadow-sm">
-          <button onclick="changerDevise('FCFA')" id="btn-fcfa"
-            class="devise-btn active px-4 py-2 rounded-lg text-sm font-semibold bg-gray-900 dark:bg-red-600 text-white transition-all">FCFA</button>
-          <button onclick="changerDevise('EUR')" id="btn-eur"
-            class="devise-btn px-4 py-2 rounded-lg text-sm font-semibold text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-all">EUR</button>
-          <button onclick="changerDevise('USD')" id="btn-usd"
-            class="devise-btn px-4 py-2 rounded-lg text-sm font-semibold text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-all">USD</button>
-        </div>
+        <p class="text-gray-600 dark:text-gray-300 text-lg">Sans commission sur vos ventes. Forfait fixe, sans surprise.</p>
       </div>
 
       <div id="plans-grid" class="grid sm:grid-cols-2 lg:grid-cols-4 gap-5 max-w-6xl mx-auto">
         ${[1, 2, 3, 4].map(() => '<div class="animate-pulse bg-gray-100 dark:bg-gray-800 rounded-2xl h-96"></div>').join('')}
       </div>
       <p class="text-center text-xs text-gray-400 dark:text-gray-500 mt-6">
-        Tarifs indicatifs en franc CFA, convertis automatiquement selon la devise choisie. Le plan Faso inclut 30 jours d'essai gratuit.
+        Tarifs en franc CFA (FCFA). Le plan Faso inclut 30 jours d'essai gratuit.
       </p>
     </div>
   </section>
@@ -382,31 +373,16 @@ export function renderHomePage(nomProjet: string): string {
     // ---------------------------------------------------------
     // Grille tarifs — 4 plans, 100% dynamiques depuis /api/v1/plans
     // (aucun prix ni nom de plan codé en dur dans ce fichier)
+    // Devise : FCFA uniquement (pas de sélecteur), l'API /api/v1/plans
+    // retourne déjà du FCFA par défaut si aucun paramètre ?devise n'est passé.
     // ---------------------------------------------------------
-    let deviseCouranteAccueil = 'FCFA';
-
-    function changerDevise(devise) {
-      deviseCouranteAccueil = devise;
-      ['fcfa', 'eur', 'usd'].forEach(d => {
-        const btn = document.getElementById('btn-' + d);
-        if (!btn) return;
-        const actif = devise.toLowerCase() === d;
-        btn.classList.toggle('bg-gray-900', actif);
-        btn.classList.toggle('dark:bg-red-600', actif);
-        btn.classList.toggle('text-white', actif);
-        btn.classList.toggle('text-gray-500', !actif);
-        btn.classList.toggle('dark:text-gray-400', !actif);
-      });
-      chargerPlansAccueil();
-    }
-
     async function chargerPlansAccueil() {
       const grid = document.getElementById('plans-grid');
       try {
-        const res = await fetch('/api/v1/plans?devise=' + deviseCouranteAccueil);
+        const res = await fetch('/api/v1/plans');
         if (!res.ok) throw new Error('API error');
         const data = await res.json();
-        renderPlansGridAccueil(data.plans || [], data.devise || deviseCouranteAccueil);
+        renderPlansGridAccueil(data.plans || [], 'FCFA');
       } catch (e) {
         console.error('Erreur chargement plans:', e);
         grid.innerHTML = '<p class="text-gray-500 dark:text-gray-400 col-span-4 text-center py-8">Impossible de charger les tarifs pour le moment. <a href="/contact" class="text-red-600 dark:text-red-400 hover:underline">Contactez-nous</a>.</p>';
@@ -415,7 +391,7 @@ export function renderHomePage(nomProjet: string): string {
 
     function formaterPrix(plan, devise) {
       if (plan.prix_mensuel === 0) return 'Gratuit';
-      const prix = plan.prix_mensuel_converti || 0;
+      const prix = plan.prix_mensuel_converti || plan.prix_mensuel || 0;
       return prix.toLocaleString('fr-FR') + ' ' + devise + ' / mois';
     }
 
