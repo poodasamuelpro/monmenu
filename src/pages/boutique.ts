@@ -1,4 +1,4 @@
-// src/pages/boutique.ts — Page boutique d'un restaurant (vue client)
+// src/pages/boutique.ts — Page boutique d'un restaurant (vue client) 
 import { renderHead, jsonLdRestaurant } from '../components/head'
 
 export interface TenantBoutique {
