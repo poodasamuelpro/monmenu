@@ -1,5 +1,8 @@
 // src/middleware/auth.ts
 // §1bis — Middleware d'authentification Hono réutilisable (JWT Supabase)
+// §2 — Supporte désormais le cookie httpOnly "sb-access-token" en plus
+//       du header Authorization: Bearer (rétrocompatibilité pour les
+//       clients API tiers / mobile qui n'utilisent pas de cookies).
 //
 // Usage :
 //   import { authMiddleware, type AuthContext } from '../middleware/auth'
@@ -10,7 +13,7 @@
 //   })
 
 import type { MiddlewareHandler } from 'hono'
-import { createMiddleware } from 'hono/factory'
+import { getCookie } from 'hono/cookie'
 import type { Env } from '../types/database'
 import { createSupabaseClient, createSupabaseClientWithToken } from '../lib/supabase'
 
@@ -24,21 +27,40 @@ export interface AuthContext {
 // Variables Hono pour typage strict de c.get/c.set
 type AuthVariables = { auth: AuthContext }
 
+// Nom du cookie httpOnly posé par /api/v1/auth/login et /register.
+// DOIT rester strictement identique au nom utilisé dans api-auth.ts
+// (setCookie / deleteCookie), sinon aucune requête ne sera authentifiée.
+export const ACCESS_TOKEN_COOKIE = 'sb-access-token'
+
 /**
- * Middleware Hono : vérifie le JWT Supabase (header Authorization: Bearer <token>)
+ * Extrait le token JWT depuis, par ordre de priorité :
+ *   1. Le cookie httpOnly "sb-access-token" (flux navigateur / dashboard web)
+ *   2. Le header "Authorization: Bearer <token>" (clients API / app mobile)
+ * Retourne null si aucune source valide n'est trouvée.
+ */
+function extractToken(c: any): string | null {
+  const cookieToken = getCookie(c, ACCESS_TOKEN_COOKIE)
+  if (cookieToken && cookieToken.length >= 20) return cookieToken.trim()
+
+  const authHeader = c.req.header('Authorization')
+  if (authHeader?.startsWith('Bearer ')) {
+    const headerToken = authHeader.replace('Bearer ', '').trim()
+    if (headerToken.length >= 20) return headerToken
+  }
+
+  return null
+}
+
+/**
+ * Middleware Hono : vérifie le JWT Supabase (cookie ou header)
  * et hydrate c.get('auth') avec { user_id, tenant_id, tenant_slug, token }.
  * Retourne 401 si le token est absent, invalide ou révoqué.
  * Retourne 403 si le tenant est suspendu ou supprimé.
  */
 export const authMiddleware: MiddlewareHandler<{ Bindings: Env; Variables: AuthVariables }> = async (c, next) => {
-  const authHeader = c.req.header('Authorization')
-  if (!authHeader?.startsWith('Bearer ')) {
-    return c.json({ error: 'Non authentifié. Jeton Bearer requis.' }, 401)
-  }
-
-  const token = authHeader.replace('Bearer ', '').trim()
-  if (!token || token.length < 20) {
-    return c.json({ error: 'Non authentifié. Jeton invalide.' }, 401)
+  const token = extractToken(c)
+  if (!token) {
+    return c.json({ error: 'Non authentifié. Session ou jeton requis.' }, 401)
   }
 
   try {
@@ -46,7 +68,7 @@ export const authMiddleware: MiddlewareHandler<{ Bindings: Env; Variables: AuthV
     const supabase = createSupabaseClient(c.env)
     const { data: { user }, error: authError } = await supabase.auth.getUser(token)
     if (authError || !user) {
-      return c.json({ error: 'Non authentifié. Jeton expiré ou invalide.' }, 401)
+      return c.json({ error: 'Non authentifié. Session expirée ou invalide.' }, 401)
     }
 
     // 2. Résoudre le tenant associé à cet utilisateur
@@ -66,7 +88,7 @@ export const authMiddleware: MiddlewareHandler<{ Bindings: Env; Variables: AuthV
     const tenant = utData.tenants as any
 
     // 3. Hydrate le contexte Hono
-    ;(c as any).set('auth', {
+    c.set('auth', {
       user_id: user.id,
       tenant_id: utData.tenant_id,
       tenant_slug: tenant.slug,
@@ -86,24 +108,19 @@ export const authMiddleware: MiddlewareHandler<{ Bindings: Env; Variables: AuthV
  *  pas à un tenant spécifique). Vérifie uniquement la validité du JWT.
  */
 export const authMiddlewarePlatform: MiddlewareHandler<{ Bindings: Env; Variables: AuthVariables }> = async (c, next) => {
-  const authHeader = c.req.header('Authorization')
-  if (!authHeader?.startsWith('Bearer ')) {
-    return c.json({ error: 'Non authentifié. Jeton Bearer requis.' }, 401)
-  }
-
-  const token = authHeader.replace('Bearer ', '').trim()
-  if (!token || token.length < 20) {
-    return c.json({ error: 'Non authentifié. Jeton invalide.' }, 401)
+  const token = extractToken(c)
+  if (!token) {
+    return c.json({ error: 'Non authentifié. Session ou jeton requis.' }, 401)
   }
 
   try {
     const supabase = createSupabaseClient(c.env)
     const { data: { user }, error: authError } = await supabase.auth.getUser(token)
     if (authError || !user) {
-      return c.json({ error: 'Non authentifié. Jeton expiré ou invalide.' }, 401)
+      return c.json({ error: 'Non authentifié. Session expirée ou invalide.' }, 401)
     }
 
-    ;(c as any).set('auth', {
+    c.set('auth', {
       user_id: user.id,
       tenant_id: null,
       tenant_slug: null,
