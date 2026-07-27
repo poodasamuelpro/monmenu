@@ -1,5 +1,8 @@
 // =============================================================
 // COMPOSANT HEAD — <head> commun à toutes les pages
+// Mise à jour : passage du dark mode en stratégie "class" (Tailwind)
+// + script anti-flash (FOUC) exécuté avant tout rendu visible.
+// Voir notes/INTEGRATION-DARK-MODE.md pour le détail de ce choix.
 // =============================================================
 
 export function renderHead(
@@ -12,6 +15,18 @@ export function renderHead(
 <html lang="fr">
 <head>
   <meta charset="UTF-8">
+
+  <!-- Anti-flash (FOUC) — DOIT rester tout en haut du <head>, avant tout
+       CSS/contenu visible, pour appliquer le thème sombre avant le premier
+       rendu si l'utilisateur l'a choisi (ou si son OS est en sombre). -->
+  <script>
+    (function() {
+      var t = localStorage.getItem('monmenu-theme') || 'system';
+      var sombre = t === 'dark' || (t === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      if (sombre) document.documentElement.classList.add('dark');
+    })();
+  </script>
+
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>${title}</title>
   <meta name="description" content="${description}">
@@ -28,11 +43,14 @@ export function renderHead(
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.5.0/css/all.min.css">
-  <script src="https://cdn.tailwindcss.com"></script>
-  <link rel="stylesheet" href="/static/css/main.css">
-  ${extra}
+
+  <!-- Config Tailwind : DOIT être déclarée avant le <script src="...tailwindcss.com">
+       pour que darkMode:'class' soit pris en compte (sinon Tailwind retombe sur
+       la stratégie "media" basée uniquement sur l'OS, ce qui casse le bouton
+       de bascule manuelle #dark-toggle géré par static/js/main.js). -->
   <script>
     tailwind.config = {
+      darkMode: 'class',
       theme: {
         extend: {
           colors: {
@@ -44,5 +62,8 @@ export function renderHead(
       }
     }
   </script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="/static/css/main.css">
+  ${extra}
 </head>`
 }
