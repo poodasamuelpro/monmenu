@@ -1,0 +1,147 @@
+/* MonMenu — Styles globaux */
+/* Police Inter via Google Fonts chargée dans le HTML */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html {
+  scroll-behavior: smooth;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Focus accessible */
+*:focus-visible {
+  outline: 2px solid #DC2626;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+html.dark *:focus-visible {
+  outline-color: #F87171;
+}
+
+/* Masquer scrollbar mais garder fonctionnalité */
+.scrollbar-hidden {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hidden::-webkit-scrollbar { display: none; }
+
+/* Bouton devise actif */
+.active-devise {
+  background-color: #DC2626 !important;
+  color: white !important;
+}
+
+/* Navigation active */
+.nav-link.active {
+  background-color: rgba(220, 38, 38, 0.15);
+  color: #FCA5A5;
+}
+
+/* Transition globale */
+a, button { transition: all 0.15s ease; }
+
+/* Badge statut commande */
+.statut-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.statut-en_attente { background: #FEF3C7; color: #92400E; }
+.statut-confirmee { background: #DBEAFE; color: #1E40AF; }
+.statut-en_preparation { background: #FED7AA; color: #9A3412; }
+.statut-en_livraison { background: #EDE9FE; color: #5B21B6; }
+.statut-livree { background: #D1FAE5; color: #065F46; }
+.statut-annulee { background: #FEE2E2; color: #991B1B; }
+.statut-remboursee { background: #F3F4F6; color: #374151; }
+
+/*
+ * ------------------------------------------------------------------
+ * MODE SOMBRE — piloté par la classe html.dark (ajoutée/retirée par
+ * static/js/main.js). Trois états gérés côté JS : "system" (suit
+ * l'OS via matchMedia), "light" (forcé), "dark" (forcé). On ne
+ * dépend plus uniquement de @media (prefers-color-scheme) car cela
+ * empêchait un choix manuel explicite indépendant de l'OS.
+ *
+ * Le HTML des pages (home.ts, etc.) utilise directement les variantes
+ * Tailwind "dark:" (ex: class="bg-white dark:bg-gray-900"). Voir
+ * notes/INTEGRATION-DARK-MODE.md pour la configuration Tailwind
+ * nécessaire dans components/head.ts (darkMode: 'class').
+ *
+ * Les quelques règles ci-dessous couvrent uniquement les éléments
+ * qui ne passent pas par des classes Tailwind (badges, loader, etc.)
+ * ------------------------------------------------------------------
+ */
+html.dark body {
+  background-color: #0B0A09;
+  color: #F9FAFB;
+}
+html.dark .statut-en_attente { background: #3A2E10; color: #FCD34D; }
+html.dark .statut-confirmee { background: #1E2A45; color: #93C5FD; }
+html.dark .statut-en_preparation { background: #3A2412; color: #FDBA74; }
+html.dark .statut-en_livraison { background: #2A2145; color: #C4B5FD; }
+html.dark .statut-livree { background: #12291F; color: #6EE7B7; }
+html.dark .statut-annulee { background: #341515; color: #FCA5A5; }
+
+/* Spinner */
+@keyframes spin { to { transform: rotate(360deg); } }
+.animate-spin { animation: spin 1s linear infinite; }
+
+/* Card hover */
+.card-hover { transition: transform 0.2s ease, box-shadow 0.2s ease; }
+.card-hover:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(0,0,0,0.08); }
+html.dark .card-hover:hover { box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
+
+/* Barre de chargement */
+#page-loader {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, #DC2626, #1D4ED8);
+  z-index: 9999;
+  animation: loader 1.5s ease-in-out infinite;
+}
+@keyframes loader {
+  0% { left: -100%; right: 100%; }
+  50% { left: 0; right: 0; }
+  100% { left: 100%; right: -100%; }
+}
+
+/* Maps / carte de livraison — placeholder neutre tant que Mapbox n'est pas monté */
+#carte-livraison {
+  min-height: 200px;
+  background: linear-gradient(135deg, #F3F4F6 0%, #E5E7EB 100%);
+}
+html.dark #carte-livraison {
+  background: linear-gradient(135deg, #1F2937 0%, #111827 100%);
+}
+
+/* Icône illustrative de plat (remplace une photo tant qu'aucune photo
+   réelle n'a été fournie par le restaurant — jamais de photo volée au web) */
+.vignette-plat {
+  background: linear-gradient(135deg, #FEE2E2 0%, #DBEAFE 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+html.dark .vignette-plat {
+  background: linear-gradient(135deg, #3A1414 0%, #14204A 100%);
+}
+
+/* Responsive images */
+img { max-width: 100%; height: auto; }
+
+/* Print */
+@media print {
+  header, footer, #cookie-banner, #cart-btn { display: none !important; }
+}
