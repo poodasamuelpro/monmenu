@@ -1,4 +1,4 @@
-# Rapport d'Audit — MonMenu Public (`monmenu-public`)  
+# Rapport d'Audit — MonMenu Public (`monmenu-public`)
 
 **Date :** Juillet 2026  
 **Version :** 1.0.1 (post-audit)  
