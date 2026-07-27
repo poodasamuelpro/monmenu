@@ -10,6 +10,62 @@ import { createSupabaseAdminClient } from '../lib/supabase'
 
 const tenantsRouter = new Hono<{ Bindings: Env }>()
 
+// =============================================================
+// GET /api/v1/tenants — Liste publique des restaurants actifs
+// AJOUT : cet endpoint n'existait pas. Il est nécessaire pour la
+// section "Restaurants partenaires" de la page d'accueil (home.ts),
+// qui affiche les vrais logos des restaurants actifs — jamais de
+// données inventées (cahier des charges, section 1.1/13). Tant
+// qu'aucun restaurant n'est actif, elle renvoie un tableau vide et
+// le frontend affiche un état vide honnête plutôt que des données
+// fictives.
+// Ne renvoie QUE des champs publics (pas de whatsapp_number, pas de
+// metadata interne) : ce endpoint n'est pas authentifié.
+// =============================================================
+tenantsRouter.get('/', async (c) => {
+  setSecurityHeaders(c)
+
+  const limitParam = parseInt(c.req.query('limit') ?? '12', 10)
+  const limit = Number.isFinite(limitParam) ? Math.min(Math.max(limitParam, 1), 24) : 12
+
+  const cacheKey = `tenants:public:${limit}`
+  try {
+    if (c.env.KV_CACHE) {
+      const cached = await c.env.KV_CACHE.get(cacheKey, 'json')
+      if (cached) {
+        c.header('X-Cache', 'HIT')
+        return c.json(cached)
+      }
+    }
+  } catch { /* KV non disponible en local dev */ }
+
+  // SUPABASE — restaurants actifs uniquement (APPLICATION DATA)
+  // "essai" est volontairement exclu de cette liste publique : un
+  // restaurant en période d'essai ne doit pas être présenté comme
+  // preuve sociale tant qu'il n'a pas confirmé son abonnement.
+  const adminClient = createSupabaseAdminClient(c.env)
+  const { data: tenants, error } = await adminClient
+    .from('tenants')
+    .select('nom, slug, logo_url')
+    .eq('statut', 'actif')
+    .is('deleted_at', null)
+    .not('logo_url', 'is', null)
+    .order('updated_at', { ascending: false })
+    .limit(limit)
+
+  if (error) {
+    console.error('[Tenants] Erreur Supabase (liste publique):', error.message)
+    return c.json({ tenants: [] })
+  }
+
+  const result = { tenants: tenants ?? [] }
+
+  // Cache 5 minutes — cohérent avec le cache déjà utilisé sur GET /:slug
+  try { if (c.env.KV_CACHE) await c.env.KV_CACHE.put(cacheKey, JSON.stringify(result), { expirationTtl: 300 }) } catch {}
+
+  return c.json(result)
+})
+
 // GET /api/v1/tenants/:slug — Info publique boutique restaurant
 tenantsRouter.get('/:slug', async (c) => {
   setSecurityHeaders(c)
