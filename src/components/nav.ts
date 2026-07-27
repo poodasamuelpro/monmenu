@@ -52,7 +52,7 @@ export function renderNav(nomProjet: string, activePage: string = ''): string {
           <i class="fa-solid fa-store text-xs" aria-hidden="true"></i>
           <span>Créer ma boutique</span>
         </a>
-        <button id="menu-toggle" aria-expanded="false" aria-controls="mobile-menu"
+        <button id="menu-toggle" type="button" aria-expanded="false" aria-controls="mobile-menu"
           class="md:hidden p-2 rounded-lg text-gray-600 hover:bg-gray-100 transition-colors"
           aria-label="Ouvrir le menu">
           <i class="fa-solid fa-bars" aria-hidden="true"></i>
@@ -93,5 +93,29 @@ export function renderNav(nomProjet: string, activePage: string = ''): string {
       </div>
     </div>
   </nav>
-</header>`
+</header>
+
+<script>
+  (function () {
+    var toggle = document.getElementById('menu-toggle');
+    var menu = document.getElementById('mobile-menu');
+    if (!toggle || !menu) return;
+
+    toggle.addEventListener('click', function () {
+      var isOpen = !menu.classList.contains('hidden');
+      menu.classList.toggle('hidden');
+      toggle.setAttribute('aria-expanded', String(!isOpen));
+      menu.setAttribute('aria-hidden', String(isOpen));
+    });
+
+    // Ferme le menu si on clique sur un lien à l'intérieur
+    menu.querySelectorAll('a').forEach(function (link) {
+      link.addEventListener('click', function () {
+        menu.classList.add('hidden');
+        toggle.setAttribute('aria-expanded', 'false');
+        menu.setAttribute('aria-hidden', 'true');
+      });
+    });
+  })();
+</script>`
 }
