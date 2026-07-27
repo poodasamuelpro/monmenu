@@ -191,6 +191,8 @@ export interface CodePromo {
   usage_actuel: number
   actif: boolean
   created_at: string
+  // Ajoutée par la migration 004 (utilisée par increment_promo_usage)
+  updated_at: string
 }
 
 export interface ConfigGlobale {
@@ -198,15 +200,47 @@ export interface ConfigGlobale {
   valeur: string
 }
 
+// Schéma aligné sur audit_log après le patch 001b + migration 004
+// (fn_audit_log() peuple : id, tenant_id, table_name, record_id,
+//  action, changes, created_at)
 export interface AuditLog {
   id: string
-  table_cible: string
-  ligne_id: string
+  tenant_id: string | null
+  table_name: string
+  record_id: string
   action: 'INSERT' | 'UPDATE' | 'DELETE'
-  ancien_valeur: Record<string, unknown> | null
-  nouvelle_valeur: Record<string, unknown> | null
-  auteur_id: string | null
-  timestamp: string
+  changes: {
+    avant?: Record<string, unknown>
+    apres?: Record<string, unknown>
+    data?: Record<string, unknown>
+  } | null
+  created_at: string
+}
+
+// Migration 005 — Blog (dashboard admin, écrit/lu via service_role)
+export interface Article {
+  id: string
+  slug: string
+  titre: string
+  extrait: string
+  contenu: string
+  categorie: string
+  temps_lecture: string | null
+  image_url: string | null
+  statut: 'brouillon' | 'publie'
+  auteur: string | null
+  date_publication: string | null
+  created_at: string
+  updated_at: string
+}
+
+// Migration 005 — Newsletter (inscription publique, lecture service_role)
+export interface NewsletterSubscriber {
+  id: string
+  email: string
+  statut: 'actif' | 'desinscrit'
+  source: string | null
+  created_at: string
 }
 
 // Contexte Cloudflare Workers
