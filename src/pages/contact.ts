@@ -96,3 +96,4 @@ export function renderContactPage(nomProjet: string, whatsappSupport: string = '
 </body>
 </html>`
 }
+ 
