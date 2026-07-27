@@ -1,4 +1,4 @@
-// src/pages/article.ts
+// src/pages/article.ts 
 import { renderNav } from '../components/nav'
 import { renderFooter } from '../components/footer'
 
