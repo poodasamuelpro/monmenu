@@ -1,4 +1,4 @@
-// src/pages/forgot-password.ts — Page de récupération de mot de passe par OTP (§1.7)
+// src/pages/forgot-password.ts — Page de récupération de mot de passe par OTP (§1.7) 
 import { renderHead } from '../components/head'
 
 export function renderForgotPasswordPage(nomProjet: string): string {
