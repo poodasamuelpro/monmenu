@@ -84,12 +84,67 @@ export function renderFooter(nomProjet: string): string {
       </nav>
     </div>
 
+    <!-- Newsletter -->
+    <div class="border-t border-gray-800 mt-12 pt-8 flex flex-col md:flex-row items-start md:items-center justify-between gap-5">
+      <div>
+        <h3 class="text-white font-semibold text-sm mb-1">Recevez nos conseils par email</h3>
+        <p class="text-sm text-gray-500">Un guide pratique de temps en temps. Pas de spam.</p>
+      </div>
+      <form id="newsletter-form" class="flex w-full md:w-auto gap-2" onsubmit="submitNewsletterFooter(event)">
+        <input type="email" id="newsletter-email" required placeholder="votre@email.com"
+          class="flex-1 md:w-64 bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-red-500/40 focus:border-red-500 transition-colors">
+        <button type="submit" id="newsletter-btn"
+          class="bg-red-600 hover:bg-red-700 text-white text-sm font-semibold px-5 py-2.5 rounded-lg transition-colors whitespace-nowrap">
+          S'abonner
+        </button>
+      </form>
+    </div>
+    <p id="newsletter-feedback" class="hidden text-xs mt-3"></p>
+
     <!-- Barre de bas de footer -->
-    <div class="border-t border-gray-800 mt-12 pt-6 flex flex-col sm:flex-row justify-between items-center gap-4">
+    <div class="border-t border-gray-800 mt-8 pt-6 flex flex-col sm:flex-row justify-between items-center gap-4">
       <p class="text-xs text-gray-500">
         &copy; ${year} ${nomProjet}. Tous droits réservés.
       </p>
     </div>
   </div>
-</footer>`
+</footer>
+
+<script>
+  async function submitNewsletterFooter(e) {
+    e.preventDefault();
+    const btn = document.getElementById('newsletter-btn');
+    const emailInput = document.getElementById('newsletter-email');
+    const feedback = document.getElementById('newsletter-feedback');
+    const email = emailInput.value.trim();
+
+    btn.disabled = true;
+    btn.textContent = 'Envoi...';
+
+    try {
+      const res = await fetch('/api/v1/newsletter', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email })
+      });
+      const data = await res.json();
+
+      if (res.ok) {
+        feedback.textContent = '✓ Inscription réussie. Merci !';
+        feedback.className = 'text-xs mt-3 text-green-400';
+        emailInput.value = '';
+      } else {
+        feedback.textContent = data.error || 'Une erreur est survenue.';
+        feedback.className = 'text-xs mt-3 text-red-400';
+      }
+    } catch (err) {
+      feedback.textContent = 'Une erreur est survenue. Réessayez.';
+      feedback.className = 'text-xs mt-3 text-red-400';
+    }
+
+    feedback.classList.remove('hidden');
+    btn.disabled = false;
+    btn.textContent = "S'abonner";
+  }
+</script>`
 }
