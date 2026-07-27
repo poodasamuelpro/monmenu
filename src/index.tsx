@@ -371,20 +371,28 @@ app.get('/dashboard', async (c) => {
   return c.html(renderConnexionPage(nomProjet))
 })
 
+// CORRIGÉ (bug redirection login en boucle) :
+// L'ancienne version vérifiait un cookie "sb-access-token" ou un header
+// Authorization avant de servir le HTML du dashboard. Mais l'app stocke
+// le token UNIQUEMENT dans localStorage (voir dashboard.js / auth.ts) —
+// un cookie n'est jamais posé et un header Authorization n'est jamais
+// envoyé lors d'une navigation classique du navigateur (window.location.href).
+// Résultat : hasToken était toujours `false`, donc CHAQUE visite de
+// /dashboard/* (même juste après un login/inscription réussi) était
+// redirigée vers /dashboard (= page de connexion), en boucle silencieuse.
+//
+// Le HTML du dashboard ne contient aucune donnée sensible par lui-même :
+// toutes les données réelles passent par /api/v1/dashboard/*, qui vérifie
+// déjà correctement le Bearer token côté serveur (voir verifyAuth() dans
+// api-dashboard.ts). On peut donc servir le HTML sans condition ici, et
+// laisser dashboard.js (initDashboard()) gérer la redirection côté client
+// s'il ne trouve pas de token dans localStorage — ce qu'il fait déjà :
+//
+//   authToken = localStorage.getItem('monmenu_auth_token');
+//   if (!authToken) { window.location.href = '/dashboard'; return; }
+//
 app.get('/dashboard/*', async (c) => {
   setSecurityHeaders(c)
-  // §2.3 — Vérification auth côté serveur avant rendu du dashboard
-  const cookieHeader = c.req.header('cookie') ?? ''
-  const tokenMatch = cookieHeader.match(/sb-access-token=([^;]+)/)
-  const authHeader = c.req.header('authorization') ?? ''
-  const hasToken = tokenMatch || authHeader.startsWith('Bearer ')
-  if (!hasToken) {
-    // Redirection vers la page de connexion si pas de token JWT visible
-    const currentPath = new URL(c.req.url).pathname
-    if (currentPath !== '/dashboard' && currentPath !== '/dashboard/') {
-      return c.redirect('/dashboard?redirect=' + encodeURIComponent(currentPath), 302)
-    }
-  }
   const nomProjet = await getNomProjet(c.env)
   // §2 — Injecter SUPABASE_URL + SUPABASE_ANON_KEY (jamais service_role) pour Realtime
   return c.html(renderDashboardPage(nomProjet, c.env.SUPABASE_URL, c.env.SUPABASE_ANON_KEY))
