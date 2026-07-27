@@ -9,6 +9,8 @@ import { livraisonRouter } from './routes/api-livraison'
 import { plansRouter } from './routes/api-plans'
 import { authRouter } from './routes/api-auth'
 import { dashboardRouter } from './routes/api-dashboard'
+import { blogRouter } from './routes/api-blog'
+import { newsletterRouter } from './routes/api-newsletter'
 import { setSecurityHeaders } from './lib/security'
 import { getNomProjet, getWhatsAppSupport, createSupabaseAdminClient } from './lib/supabase'
 
@@ -16,6 +18,7 @@ import { getNomProjet, getWhatsAppSupport, createSupabaseAdminClient } from './l
 import { renderHomePage } from './pages/home'
 import { renderContactPage } from './pages/contact'
 import { renderBlogPage } from './pages/blog'
+import { renderArticlePage } from './pages/article'
 import { renderInscriptionPage } from './pages/inscription'
 import { renderLegalPage } from './pages/legal'
 import { renderConnexionPage, renderCreerComptePage } from './pages/auth'
@@ -47,6 +50,8 @@ app.route('/api/v1/livraison', livraisonRouter)
 app.route('/api/v1/plans', plansRouter)
 app.route('/api/v1/auth', authRouter)
 app.route('/api/v1/dashboard', dashboardRouter)
+app.route('/api/v1/blog', blogRouter)
+app.route('/api/v1/newsletter', newsletterRouter)
 
 // ---- Sitemap dynamique ----
 app.get('/sitemap.xml', async (c) => {
@@ -175,11 +180,42 @@ app.get('/inscription', async (c) => {
   return c.html(renderInscriptionPage(nomProjet))
 })
 
-// ---- Page Blog ----
+// ---- Page Blog (liste) ----
 app.get('/blog', async (c) => {
   setSecurityHeaders(c)
   const nomProjet = await getNomProjet(c.env)
-  return c.html(renderBlogPage(nomProjet))
+
+  // SUPABASE — articles publiés (APPLICATION DATA)
+  const adminClient = createSupabaseAdminClient(c.env)
+  const { data: articles } = await adminClient
+    .from('articles')
+    .select('slug, titre, extrait, categorie, temps_lecture, image_url, date_publication')
+    .eq('statut', 'publie')
+    .order('date_publication', { ascending: false })
+
+  return c.html(renderBlogPage(nomProjet, articles ?? []))
+})
+
+// ---- Page Blog (article individuel) ----
+// IMPORTANT : doit être définie avant /:slug générique
+app.get('/blog/:slug', async (c) => {
+  setSecurityHeaders(c)
+  const slug = c.req.param('slug')
+  const nomProjet = await getNomProjet(c.env)
+
+  const adminClient = createSupabaseAdminClient(c.env)
+  const { data: article } = await adminClient
+    .from('articles')
+    .select('titre, contenu, extrait, categorie, temps_lecture, image_url, date_publication, auteur')
+    .eq('slug', slug)
+    .eq('statut', 'publie')
+    .maybeSingle()
+
+  if (!article) {
+    return c.html(render404Page(), 404)
+  }
+
+  return c.html(renderArticlePage(nomProjet, article))
 })
 
 // ---- Pages légales ----
