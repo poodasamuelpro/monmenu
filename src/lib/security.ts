@@ -69,6 +69,8 @@ export const CommandeSchema = z.object({
     variante_id: z.string().uuid().optional()
   })).min(1).max(30),
   mode_paiement: z.enum(['especes_livraison', 'mobile_money', 'carte_bancaire']),
+  // §1.9 — Mode livraison : livraison à domicile ou retrait sur place
+  mode_livraison: z.enum(['livraison', 'emporter']).default('livraison'),
   code_promo: z.string().max(50).optional(),
   idempotency_key: z.string().uuid(),
   notes: z.string().max(500).optional().nullable()
@@ -103,8 +105,8 @@ export function setSecurityHeaders(c: Context): void {
     "default-src 'self'; " +
     "script-src 'self' 'unsafe-inline' cdn.tailwindcss.com cdn.jsdelivr.net api.mapbox.com; " +
     "style-src 'self' 'unsafe-inline' cdn.tailwindcss.com cdn.jsdelivr.net api.mapbox.com fonts.googleapis.com; " +
-    "img-src 'self' data: blob: *.mapbox.com *.openstreetmap.org *.supabase.co; " +
-    "connect-src 'self' *.supabase.co api.mapbox.com events.mapbox.com api.openweathermap.org graph.facebook.com; " +
+    "img-src 'self' data: blob: *.mapbox.com *.openstreetmap.org *.supabase.co *.tile.openstreetmap.org; " +
+    "connect-src 'self' *.supabase.co api.mapbox.com events.mapbox.com api.openweathermap.org graph.facebook.com nominatim.openstreetmap.org; " +
     "font-src 'self' fonts.gstatic.com cdn.jsdelivr.net; " +
     "frame-ancestors 'none';"
   )

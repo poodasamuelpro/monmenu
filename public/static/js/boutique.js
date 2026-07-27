@@ -11,6 +11,10 @@ let fraisLivraison = 0;
 let clientLat = null;
 let clientLon = null;
 
+// ---- Carte Leaflet (§1.1) ----
+let livraisonMap = null;
+let livraisonMarker = null;
+
 // --- Code promo state ---
 let promoAppliquee = null; // { code, type, valeur, remise } ou null
 
@@ -19,7 +23,9 @@ const DEVISE = 'FCFA';
 
 // ---- Init ----
 async function initBoutique(tid, slug) {
-  tenantId = tid;
+  // §2.4 : tid est maintenant le slug (TENANT_ID retiré du HTML).
+  // tenantId sera résolu depuis l'API via loadTenant().
+  tenantId = ''; // Sera rempli par loadTenant()
   tenantSlug = slug;
   loadCart();
   await Promise.all([loadTenant(), loadMenu()]);
@@ -60,9 +66,13 @@ function getCartCount() {
 async function loadTenant() {
   try {
     const res = await fetch('/api/v1/tenants/' + tenantSlug);
-    if (res.ok) tenantData = await res.json();
-    if (tenantData && tenantData.pdv_id) {
-      pdvData = { id: tenantData.pdv_id, lat: tenantData.pdv_latitude, lon: tenantData.pdv_longitude };
+    if (res.ok) {
+      tenantData = await res.json();
+      // §2.4 : tenantId résolu depuis l'API (non exposé dans le HTML)
+      if (tenantData && tenantData.id) tenantId = tenantData.id;
+      if (tenantData && tenantData.pdv_id) {
+        pdvData = { id: tenantData.pdv_id, lat: tenantData.pdv_latitude, lon: tenantData.pdv_longitude };
+      }
     }
   } catch (e) { console.error('loadTenant', e); }
 }
@@ -245,6 +255,11 @@ function openCheckout() {
   document.querySelectorAll('input[name="livraison-type"]').forEach(radio => {
     radio.addEventListener('change', onLivraisonTypeChange);
   });
+  // Initialiser la carte si mode livraison sélectionné par défaut
+  const isLivraison = document.querySelector('input[name="livraison-type"]:checked')?.value === 'livraison';
+  if (isLivraison) {
+    setTimeout(() => initCartelivraison(), 200);
+  }
 }
 
 function closeCheckout() {
@@ -256,7 +271,89 @@ function onLivraisonTypeChange() {
   const isLivraison = document.querySelector('input[name="livraison-type"]:checked')?.value === 'livraison';
   const mapSection = document.getElementById('map-section');
   if (mapSection) mapSection.style.display = isLivraison ? 'block' : 'none';
+
+  if (isLivraison) {
+    // Initialiser la carte si pas encore fait
+    setTimeout(() => initCartelivraison(), 100);
+  }
+  if (!isLivraison) {
+    // Mode à emporter : pas de frais
+    fraisLivraison = 0;
+  }
   updateCheckoutRecap();
+}
+
+// ---- Carte Leaflet interactive (§1.1) ----
+function initCartelivraison() {
+  const container = document.getElementById('carte-livraison');
+  if (!container) return;
+
+  // Vider le placeholder texte
+  container.innerHTML = '';
+  container.style.height = '220px';
+
+  // Coordonnées initiales : PDV du restaurant ou Ouagadougou par défaut
+  const defaultLat = (pdvData && pdvData.lat) ? pdvData.lat : 12.3647;
+  const defaultLon = (pdvData && pdvData.lon) ? pdvData.lon : -1.5321;
+  const startLat = clientLat || defaultLat;
+  const startLon = clientLon || defaultLon;
+
+  if (!livraisonMap) {
+    livraisonMap = L.map('carte-livraison').setView([startLat, startLon], clientLat ? 15 : 13);
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+      maxZoom: 19
+    }).addTo(livraisonMap);
+
+    // Marker déplaçable pour la position client
+    livraisonMarker = L.marker([startLat, startLon], { draggable: true }).addTo(livraisonMap);
+    livraisonMarker.bindPopup('Votre position de livraison.<br>Déplacez-moi si besoin.').openPopup();
+
+    livraisonMarker.on('dragend', async function(e) {
+      const pos = e.target.getLatLng();
+      clientLat = pos.lat;
+      clientLon = pos.lng;
+      // Géocodage inverse (Nominatim/OSM — gratuit)
+      await geocoderInverse(pos.lat, pos.lng);
+      await calculerFraisLivraison();
+    });
+
+    // Marker fixe PDV (non draggable)
+    if (pdvData && pdvData.lat && pdvData.lon) {
+      L.marker([pdvData.lat, pdvData.lon], {
+        icon: L.icon({
+          iconUrl: 'https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/images/marker-icon-2x.png',
+          shadowUrl: 'https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/images/marker-shadow.png',
+          iconSize: [25, 41], iconAnchor: [12, 41],
+          popupAnchor: [1, -34], shadowSize: [41, 41]
+        })
+      }).addTo(livraisonMap).bindPopup('Restaurant');
+    }
+  } else {
+    // Carte déjà créée : invalider la taille au cas où le container était caché
+    livraisonMap.invalidateSize();
+    livraisonMap.setView([startLat, startLon], clientLat ? 15 : 13);
+    if (livraisonMarker) livraisonMarker.setLatLng([startLat, startLon]);
+  }
+}
+
+async function geocoderInverse(lat, lon) {
+  try {
+    const res = await fetch(
+      `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json`,
+      { headers: { 'Accept-Language': 'fr', 'User-Agent': 'MonMenu/1.0' } }
+    );
+    if (!res.ok) return;
+    const data = await res.json();
+    const adresse = data.display_name || '';
+    const inputAdresse = document.getElementById('client-adresse');
+    if (inputAdresse && adresse) {
+      inputAdresse.value = adresse;
+    }
+  } catch (e) {
+    console.warn('Géocodage inverse échoué', e);
+  }
 }
 
 // ---- Code promo — appliquer ----
@@ -371,10 +468,16 @@ function updateCheckoutRecap() {
 function geolocaliser() {
   if (!navigator.geolocation) { alert('Géolocalisation non supportée par votre navigateur.'); return; }
   navigator.geolocation.getCurrentPosition(
-    (pos) => {
+    async (pos) => {
       clientLat = pos.coords.latitude;
       clientLon = pos.coords.longitude;
-      calculerFraisLivraison();
+      // Mettre à jour le marqueur sur la carte si elle est initialisée
+      if (livraisonMap && livraisonMarker) {
+        livraisonMarker.setLatLng([clientLat, clientLon]);
+        livraisonMap.setView([clientLat, clientLon], 15);
+        await geocoderInverse(clientLat, clientLon);
+      }
+      await calculerFraisLivraison();
     },
     (err) => { console.warn('Géolocalisation refusée', err); }
   );
@@ -416,16 +519,21 @@ async function submitOrder(e) {
 
   const idempotencyKey = crypto.randomUUID();
 
+  // §1.9 — Détecter le mode de livraison choisi par l'utilisateur
+  const isEmporter = modeType === 'emporter';
+
   const payload = {
     tenant_id: tenantId,
     point_de_vente_id: pdvData ? pdvData.id : '',
     client_nom: nom,
     client_telephone: tel,
-    client_adresse: adresse || null,
-    client_latitude: clientLat,
-    client_longitude: clientLon,
+    // En mode "à emporter", pas d'adresse ni de coordonnées
+    client_adresse: isEmporter ? null : (adresse || null),
+    client_latitude: isEmporter ? null : clientLat,
+    client_longitude: isEmporter ? null : clientLon,
     items: cart.items.map(item => ({ produit_id: item.produit_id, quantite: item.quantite })),
     mode_paiement: 'especes_livraison',
+    mode_livraison: isEmporter ? 'emporter' : 'livraison',
     idempotency_key: idempotencyKey,
     notes: notes || null,
     // Code promo : inclure uniquement si une promo a été validée

@@ -79,6 +79,20 @@ authRouter.post('/login', async (c) => {
     } catch { /* KV optionnel */ }
   }
 
+  // §1.6 — Audit log connexion (async, non bloquant)
+  const adminClient = createSupabaseAdminClient(c.env)
+  c.executionCtx.waitUntil(
+    adminClient.from('audit_log').insert({
+      id: crypto.randomUUID(),
+      tenant_id: tenant.id,
+      action: 'LOGIN',
+      table_name: 'auth',
+      record_id: data.user.id,
+      changes: { email: data.user.email, ip: c.req.header('CF-Connecting-IP') ?? 'unknown' },
+      created_at: new Date().toISOString()
+    }).then(() => {}).catch(() => {})
+  )
+
   return c.json({
     success: true,
     access_token: data.session.access_token,
@@ -285,6 +299,88 @@ authRouter.post('/refresh', async (c) => {
     access_token: data.session.access_token,
     refresh_token: data.session.refresh_token
   })
+})
+
+// ============================================================
+// §1.7 — Récupération mot de passe par OTP 6 chiffres (Supabase)
+// ============================================================
+
+// POST /api/v1/auth/forgot-password
+authRouter.post('/forgot-password', async (c) => {
+  setSecurityHeaders(c)
+  const ip = c.req.header('CF-Connecting-IP') ?? 'unknown'
+  const rateLimit = await checkRateLimit(`forgot-pwd:${ip}`, 5, 3600000)
+  if (!rateLimit.allowed) return c.json({ error: 'Trop de tentatives. Réessayez plus tard.' }, 429)
+
+  let body: { email?: string }
+  try { body = await c.req.json() } catch { return c.json({ error: 'JSON invalide.' }, 400) }
+
+  // Réponse générique — ne jamais confirmer l'existence d'un compte
+  if (!body.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(body.email)) {
+    return c.json({ message: "Si ce compte existe, un code OTP a été envoyé." })
+  }
+
+  const supabase = createSupabaseClient(c.env)
+  // signInWithOtp envoie un OTP 6 chiffres par email (shouldCreateUser:false = pas de création)
+  await supabase.auth.signInWithOtp({
+    email: body.email.toLowerCase().trim(),
+    options: { shouldCreateUser: false }
+  })
+
+  return c.json({ message: "Si ce compte existe, un code OTP à 6 chiffres a été envoyé à votre adresse." })
+})
+
+// POST /api/v1/auth/verify-otp
+authRouter.post('/verify-otp', async (c) => {
+  setSecurityHeaders(c)
+  const ip = c.req.header('CF-Connecting-IP') ?? 'unknown'
+  const rateLimit = await checkRateLimit(`verify-otp:${ip}`, 10, 900000)
+  if (!rateLimit.allowed) return c.json({ error: 'Trop de tentatives. Réessayez dans 15 minutes.' }, 429)
+
+  let body: { email?: string; token?: string }
+  try { body = await c.req.json() } catch { return c.json({ error: 'JSON invalide.' }, 400) }
+  if (!body.email || !body.token || !/^\d{6}$/.test(body.token)) {
+    return c.json({ error: 'Email et code OTP à 6 chiffres requis.' }, 422)
+  }
+
+  const supabase = createSupabaseClient(c.env)
+  const { data, error } = await supabase.auth.verifyOtp({
+    email: body.email.toLowerCase().trim(),
+    token: body.token,
+    type: 'email'
+  })
+
+  if (error || !data.session) return c.json({ error: 'Code OTP invalide ou expiré.' }, 401)
+
+  return c.json({
+    access_token: data.session.access_token,
+    refresh_token: data.session.refresh_token,
+    message: 'Code valide. Définissez votre nouveau mot de passe.'
+  })
+})
+
+// POST /api/v1/auth/reset-password  (Bearer token issu de verify-otp)
+authRouter.post('/reset-password', async (c) => {
+  setSecurityHeaders(c)
+  const authHeader = c.req.header('authorization') ?? ''
+  if (!authHeader.startsWith('Bearer ')) return c.json({ error: "Token d'accès requis." }, 401)
+  const token = authHeader.slice(7)
+
+  let body: { password?: string }
+  try { body = await c.req.json() } catch { return c.json({ error: 'JSON invalide.' }, 400) }
+  if (!body.password || body.password.length < 8) {
+    return c.json({ error: 'Mot de passe trop court (8 caractères minimum).' }, 422)
+  }
+
+  // Créer un client supabase avec le token de l'utilisateur
+  const supabase = createSupabaseClient(c.env)
+  const { error: userError } = await supabase.auth.getUser(token)
+  if (userError) return c.json({ error: 'Session invalide ou expirée.' }, 401)
+
+  const { error } = await supabase.auth.updateUser({ password: body.password })
+  if (error) return c.json({ error: 'Erreur changement mot de passe.', detail: error.message }, 500)
+
+  return c.json({ success: true, message: 'Mot de passe mis à jour avec succès.' })
 })
 
 export { authRouter }

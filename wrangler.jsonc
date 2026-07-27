@@ -25,5 +25,10 @@
       "binding": "R2_MEDIA",
       "bucket_name": "monmenu-media"
     }
-  ]
+  ],
+
+  // §1.8 — Cron trigger : calcul des stats journalières à 02h00 UTC chaque nuit
+  "triggers": {
+    "crons": ["0 2 * * *"]
+  }
 }

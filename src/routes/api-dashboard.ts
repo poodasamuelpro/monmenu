@@ -315,7 +315,7 @@ dashboardRouter.get('/menu', async (c) => {
 
     supabase
       .from('produits')
-      .select('id, categorie_id, nom, description, prix, photo_url, disponible, ordre_affichage, stock_actuel, created_at, categories_menu!inner(nom)')
+      .select('id, categorie_id, nom, description, prix, photo_url, disponible, ordre_affichage, created_at, categories_menu!inner(nom)')
       .eq('tenant_id', auth.tenant_id)
       .is('deleted_at', null)
       .order('ordre_affichage', { ascending: true })
@@ -872,6 +872,30 @@ dashboardRouter.patch('/parametres', async (c) => {
 
   const supabase = createSupabaseClientWithToken(c.env, auth.token)
 
+  // §1.11 — Restriction domaine_perso au plan "Mogho" uniquement
+  if (body.domaine_perso !== undefined && body.domaine_perso !== null && body.domaine_perso !== '') {
+    const { data: tenantInfo } = await supabase
+      .from('tenants')
+      .select('plan_id')
+      .eq('id', auth.tenant_id)
+      .single()
+
+    if (tenantInfo?.plan_id) {
+      const planInfo = await c.env.DB
+        .prepare('SELECT nom FROM plans WHERE id = ?')
+        .bind(tenantInfo.plan_id)
+        .first<{ nom: string }>()
+
+      const planNom = (planInfo?.nom ?? '').toLowerCase()
+      if (!planNom.includes('mogho')) {
+        return c.json({
+          error: 'Le domaine personnalisé est réservé au plan Mogho.',
+          upgrade_required: true
+        }, 403)
+      }
+    }
+  }
+
   const updateData: any = { nom: body.nom.trim(), updated_at: new Date().toISOString() }
   if (body.whatsapp_number !== undefined) updateData.whatsapp_number = body.whatsapp_number
   if (body.domaine_perso !== undefined) updateData.domaine_perso = body.domaine_perso
@@ -947,6 +971,46 @@ dashboardRouter.get('/profil', async (c) => {
     boutique_url: `https://monmenu.app/${tenant.slug}`,
     total_commandes: totalCommandes ?? 0
   })
+})
+
+// ---- POST /api/v1/dashboard/profil/change-password (§1.7) ----
+dashboardRouter.post('/profil/change-password', async (c) => {
+  setSecurityHeaders(c)
+  const auth = await verifyAuth(c)
+  if (!auth) return c.json({ error: 'Non authentifié.' }, 401)
+
+  let body: { current_password?: string; new_password?: string }
+  try { body = await c.req.json() } catch { return c.json({ error: 'JSON invalide.' }, 400) }
+
+  if (!body.current_password || !body.new_password) {
+    return c.json({ error: 'Mot de passe actuel et nouveau mot de passe requis.' }, 422)
+  }
+  if (body.new_password.length < 8) {
+    return c.json({ error: 'Nouveau mot de passe trop court (8 caractères minimum).' }, 422)
+  }
+  if (body.new_password === body.current_password) {
+    return c.json({ error: 'Le nouveau mot de passe doit être différent de l\'ancien.' }, 422)
+  }
+
+  // Récupérer l'email de l'utilisateur connecté
+  const supabaseToken = createSupabaseClientWithToken(c.env, auth.token)
+  const { data: { user: currentUser } } = await supabaseToken.auth.getUser()
+  if (!currentUser?.email) return c.json({ error: 'Utilisateur introuvable.' }, 404)
+
+  // Vérifier l'ancien mot de passe via re-signin
+  const supabaseAnon = createSupabaseClient(c.env)
+  const { error: signInError } = await supabaseAnon.auth.signInWithPassword({
+    email: currentUser.email,
+    password: body.current_password
+  })
+  if (signInError) return c.json({ error: 'Mot de passe actuel incorrect.' }, 401)
+
+  // Mettre à jour le mot de passe
+  const supabase = createSupabaseClientWithToken(c.env, auth.token)
+  const { error: updateError } = await supabase.auth.updateUser({ password: body.new_password })
+  if (updateError) return c.json({ error: 'Erreur lors du changement de mot de passe.', detail: updateError.message }, 500)
+
+  return c.json({ success: true, message: 'Mot de passe mis à jour.' })
 })
 
 // ---- GET /api/v1/dashboard/codes-promo ----
@@ -1026,6 +1090,50 @@ dashboardRouter.post('/codes-promo', async (c) => {
   return c.json({ success: true, id: promoId, code: body.code.toUpperCase() }, 201)
 })
 
+// ---- POST /api/v1/dashboard/codes-promo/generate — Auto-génération (§1.3b) ----
+dashboardRouter.post('/codes-promo/generate', async (c) => {
+  setSecurityHeaders(c)
+  const auth = await verifyAuth(c)
+  if (!auth) return c.json({ error: 'Non authentifié.' }, 401)
+
+  let body: { type?: string; valeur?: number; usage_max?: number | null; date_fin?: string | null }
+  try { body = await c.req.json() } catch { return c.json({ error: 'JSON invalide.' }, 400) }
+
+  if (!body.type || !['pourcentage', 'montant_fixe'].includes(body.type)) {
+    return c.json({ error: 'Type invalide.' }, 422)
+  }
+  if (!body.valeur || typeof body.valeur !== 'number' || body.valeur <= 0) {
+    return c.json({ error: 'Valeur invalide.' }, 422)
+  }
+
+  // Générer un code unique : préfixe + 6 chars alphanumériques
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+  const randomPart = Array.from(crypto.getRandomValues(new Uint8Array(6)))
+    .map(b => chars[b % chars.length]).join('')
+  const code = `PROMO${randomPart}`
+
+  const supabase = createSupabaseClientWithToken(c.env, auth.token)
+  const promoId = crypto.randomUUID()
+  const now = new Date().toISOString()
+
+  const { error } = await supabase.from('codes_promo').insert({
+    id: promoId,
+    tenant_id: auth.tenant_id,
+    code,
+    type: body.type,
+    valeur: body.valeur,
+    date_debut: now,
+    date_fin: body.date_fin ?? null,
+    usage_max: body.usage_max ?? null,
+    usage_actuel: 0,
+    actif: true,
+    created_at: now
+  })
+
+  if (error) return c.json({ error: 'Erreur génération code promo.', detail: error.message }, 500)
+  return c.json({ success: true, id: promoId, code }, 201)
+})
+
 // ---- DELETE /api/v1/dashboard/codes-promo/:id ----
 dashboardRouter.delete('/codes-promo/:id', async (c) => {
   setSecurityHeaders(c)
@@ -1056,8 +1164,17 @@ dashboardRouter.post('/upload-image', async (c) => {
     return c.json({ error: 'Stockage médias non configuré.' }, 503)
   }
 
-  const rateLimit = await checkRateLimit(`upload:${auth.tenant_id}`, 20, 3600000)
-  if (!rateLimit.allowed) return c.json({ error: 'Trop de téléversements. Réessayez dans une heure.' }, 429)
+  // §1.10 — Limite portée à 25 uploads/heure/tenant
+  const rateLimit = await checkRateLimit(`upload:${auth.tenant_id}`, 25, 3600000)
+  if (!rateLimit.allowed) {
+    const secsRemaining = Math.ceil((rateLimit.resetAt - Date.now()) / 1000)
+    const minsRemaining = Math.ceil(secsRemaining / 60)
+    const tempsMsg = minsRemaining > 1 ? `dans ${minsRemaining} minutes` : `dans ${secsRemaining} secondes`
+    return c.json({
+      error: `Limite d'uploads atteinte (25/heure). Réessayez ${tempsMsg}.`,
+      retry_after_seconds: secsRemaining
+    }, 429)
+  }
 
   let formData: FormData
   try {
@@ -1123,6 +1240,39 @@ dashboardRouter.get('/qrcode', async (c) => {
     qr_download_png: `https://api.qrserver.com/v1/create-qr-code/?size=600x600&data=${encodeURIComponent(boutiqueUrl)}&color=${color}&bgcolor=ffffff&format=png`,
     qr_download_svg: `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(boutiqueUrl)}&color=${color}&bgcolor=ffffff&format=svg`
   })
+})
+
+// ---- GET /api/v1/dashboard/stats-journalieres (§1.8) ----
+dashboardRouter.get('/stats-journalieres', async (c) => {
+  setSecurityHeaders(c)
+  const auth = await verifyAuth(c)
+  if (!auth) return c.json({ error: 'Non authentifié.' }, 401)
+
+  const jours = Math.min(parseInt(c.req.query('jours') || '30'), 90)
+  const supabase = createSupabaseClientWithToken(c.env, auth.token)
+
+  const { data: stats, error } = await supabase
+    .from('stats_journalieres')
+    .select('date, nb_commandes, nb_commandes_livrees, nb_commandes_annulees, chiffre_affaires, frais_livraison_total, top_produits')
+    .eq('tenant_id', auth.tenant_id)
+    .order('date', { ascending: false })
+    .limit(jours)
+
+  if (error) return c.json({ error: 'Erreur récupération stats.', detail: error.message }, 500)
+
+  const liste = stats ?? []
+
+  // Totaux sur la période
+  const totaux = {
+    nb_commandes: liste.reduce((s: number, r: any) => s + (r.nb_commandes ?? 0), 0),
+    chiffre_affaires: liste.reduce((s: number, r: any) => s + (r.chiffre_affaires ?? 0), 0),
+    nb_jours_actifs: liste.filter((r: any) => (r.nb_commandes ?? 0) > 0).length,
+    moyenne_journaliere: liste.length > 0
+      ? Math.round(liste.reduce((s: number, r: any) => s + (r.chiffre_affaires ?? 0), 0) / liste.length)
+      : 0
+  }
+
+  return c.json({ stats: liste, totaux, periode_jours: jours })
 })
 
 export { dashboardRouter }
