@@ -2,6 +2,9 @@
 -- Migration 004 — Triggers d'audit automatique (§1.6)
 -- Peuple automatiquement la table audit_log via des triggers
 -- Postgres pour les opérations sur les tables sensibles.
+--
+-- Schéma audit_log attendu (voir migration 001) :
+--   id, tenant_id, table_name, record_id, action, changes, created_at
 -- =============================================================
 
 -- -------------------------------------------------------
@@ -17,8 +20,12 @@ DECLARE
   v_tenant_id UUID;
   v_changes   JSONB;
 BEGIN
-  -- Résoudre le tenant_id depuis la ligne modifiée
-  IF TG_OP = 'DELETE' THEN
+  -- Résoudre le tenant_id depuis la ligne modifiée.
+  -- Cas particulier : la table "tenants" n'a pas de colonne
+  -- "tenant_id" (c'est elle-même le tenant, identifiée par "id").
+  IF TG_TABLE_NAME = 'tenants' THEN
+    v_tenant_id := CASE WHEN TG_OP = 'DELETE' THEN OLD.id ELSE NEW.id END;
+  ELSIF TG_OP = 'DELETE' THEN
     v_tenant_id := OLD.tenant_id;
   ELSE
     v_tenant_id := NEW.tenant_id;
@@ -105,7 +112,23 @@ CREATE TRIGGER trg_audit_tenants
   EXECUTE FUNCTION fn_audit_log();
 
 -- -------------------------------------------------------
--- 6. RPC pour incrément atomique usage code promo (§1.3)
+-- 6. Colonne updated_at manquante sur codes_promo
+-- (DOIT être exécuté AVANT la création de increment_promo_usage
+--  ci-dessous : une fonction LANGUAGE sql est analysée à la
+--  création et échoue si la colonne n'existe pas encore)
+-- -------------------------------------------------------
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'codes_promo' AND column_name = 'updated_at'
+  ) THEN
+    ALTER TABLE codes_promo ADD COLUMN updated_at TIMESTAMPTZ DEFAULT NOW();
+  END IF;
+END $$;
+
+-- -------------------------------------------------------
+-- 7. RPC pour incrément atomique usage code promo (§1.3)
 -- Évite la race condition sur usage_actuel
 -- -------------------------------------------------------
 CREATE OR REPLACE FUNCTION increment_promo_usage(promo_id UUID)
@@ -121,23 +144,10 @@ AS $$
 $$;
 
 -- -------------------------------------------------------
--- 7. Index sur audit_log pour les requêtes dashboard
+-- 8. Index sur audit_log pour les requêtes dashboard
 -- -------------------------------------------------------
 CREATE INDEX IF NOT EXISTS idx_audit_log_tenant_created
   ON audit_log (tenant_id, created_at DESC);
 
 CREATE INDEX IF NOT EXISTS idx_audit_log_table_action
   ON audit_log (table_name, action);
-
--- -------------------------------------------------------
--- 8. Colonnes updated_at manquantes (si pas encore présentes)
--- -------------------------------------------------------
-DO $$
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM information_schema.columns
-    WHERE table_name = 'codes_promo' AND column_name = 'updated_at'
-  ) THEN
-    ALTER TABLE codes_promo ADD COLUMN updated_at TIMESTAMPTZ DEFAULT NOW();
-  END IF;
-END $$;
