@@ -22,16 +22,12 @@ export function renderContactPage(nomProjet: string, whatsappSupport: string = '
   <!-- Hero -->
   <section class="py-16 bg-gradient-to-b from-gray-50 to-white" aria-labelledby="contact-hero-heading">
     <div class="max-w-3xl mx-auto px-4 sm:px-6 text-center">
-      <div class="inline-flex items-center gap-2 bg-green-100 text-green-700 text-xs font-semibold px-3 py-1.5 rounded-full mb-6">
-        <i class="fa-solid fa-circle text-green-500 text-xs animate-pulse" aria-hidden="true"></i>
-        Support en ligne
-      </div>
       <h1 id="contact-hero-heading" class="text-4xl font-extrabold text-gray-900 mb-4">
         Comment pouvons-nous vous aider ?
       </h1>
       <p class="text-gray-600 text-lg max-w-xl mx-auto">
         Notre équipe répond en français du lundi au samedi, de 8h à 20h (GMT+0).
-        Délai habituel : moins de 4 heures.
+        Réponse sous 48h maximum.
       </p>
     </div>
   </section>
@@ -40,7 +36,7 @@ export function renderContactPage(nomProjet: string, whatsappSupport: string = '
   <section class="pb-12" aria-labelledby="channels-heading">
     <div class="max-w-3xl mx-auto px-4 sm:px-6">
       <div class="sr-only" id="channels-heading">Canaux de contact</div>
-      <div class="grid sm:grid-cols-3 gap-4 mb-12">
+      <div class="grid sm:grid-cols-2 gap-4 mb-8">
 
         <!-- WhatsApp -->
         <a href="${waLink}" target="_blank" rel="noopener noreferrer"
@@ -62,17 +58,6 @@ export function renderContactPage(nomProjet: string, whatsappSupport: string = '
           <div class="font-bold text-gray-900 mb-1">Email</div>
           <div class="text-sm text-gray-600 mb-2">support@monmenu.app</div>
           <div class="text-xs text-blue-600 font-semibold">Réponse sous 24h</div>
-        </a>
-
-        <!-- Documentation -->
-        <a href="/blog"
-          class="border border-gray-200 bg-gray-50 rounded-xl p-5 flex flex-col items-center text-center hover:shadow-md transition-all group hover:border-gray-400">
-          <div class="w-14 h-14 bg-gray-700 rounded-2xl flex items-center justify-center text-white mb-3 shadow-md shadow-gray-200 group-hover:scale-105 transition-transform">
-            <i class="fa-solid fa-book-open text-2xl" aria-hidden="true"></i>
-          </div>
-          <div class="font-bold text-gray-900 mb-1">Blog & Guides</div>
-          <div class="text-sm text-gray-600 mb-2">Tutoriels et conseils</div>
-          <div class="text-xs text-gray-600 font-semibold">Accès immédiat</div>
         </a>
       </div>
 
@@ -151,42 +136,12 @@ export function renderContactPage(nomProjet: string, whatsappSupport: string = '
           </p>
         </form>
       </div>
-    </div>
-  </section>
 
-  <!-- Infos pratiques -->
-  <section class="py-12 bg-gray-50" aria-labelledby="info-heading">
-    <div class="max-w-3xl mx-auto px-4 sm:px-6">
-      <h2 id="info-heading" class="text-lg font-bold text-gray-900 mb-6">Informations pratiques</h2>
-      <div class="grid sm:grid-cols-3 gap-4">
-        <div class="flex items-start gap-3">
-          <div class="w-9 h-9 bg-white rounded-lg border border-gray-100 flex items-center justify-center flex-shrink-0 shadow-sm">
-            <i class="fa-solid fa-clock text-gray-500 text-sm" aria-hidden="true"></i>
-          </div>
-          <div>
-            <div class="font-semibold text-gray-900 text-sm">Horaires support</div>
-            <div class="text-sm text-gray-500">Lun–Sam, 8h–20h (GMT+0)</div>
-          </div>
-        </div>
-        <div class="flex items-start gap-3">
-          <div class="w-9 h-9 bg-white rounded-lg border border-gray-100 flex items-center justify-center flex-shrink-0 shadow-sm">
-            <i class="fa-solid fa-language text-gray-500 text-sm" aria-hidden="true"></i>
-          </div>
-          <div>
-            <div class="font-semibold text-gray-900 text-sm">Langues</div>
-            <div class="text-sm text-gray-500">Français, Mooré (bientôt)</div>
-          </div>
-        </div>
-        <div class="flex items-start gap-3">
-          <div class="w-9 h-9 bg-white rounded-lg border border-gray-100 flex items-center justify-center flex-shrink-0 shadow-sm">
-            <i class="fa-solid fa-location-dot text-gray-500 text-sm" aria-hidden="true"></i>
-          </div>
-          <div>
-            <div class="font-semibold text-gray-900 text-sm">Basé à</div>
-            <div class="text-sm text-gray-500">Ouagadougou, Burkina Faso</div>
-          </div>
-        </div>
-      </div>
+      <!-- Blog & Guides — mention discrète -->
+      <p class="text-center text-sm text-gray-500 mt-8">
+        Vous cherchez plutôt un tutoriel ou un conseil ?
+        <a href="/blog" class="text-red-600 font-semibold hover:underline">Consultez notre blog</a>.
+      </p>
     </div>
   </section>
 
