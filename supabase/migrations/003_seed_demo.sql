@@ -2,18 +2,21 @@
 -- MonMenu — Migration 003 : Données de démonstration
 -- Marquées EXPLICITEMENT comme exemples (section 1.1)
 -- =====================================================
-
 -- IMPORTANT : Ces données sont des EXEMPLES de démonstration
 -- Elles doivent être remplacées par des données réelles en production
 
 -- Restaurant de démonstration
+-- NB : l'id est généré automatiquement (gen_random_uuid() par défaut).
+-- L'ancien littéral 'demo-restaurant-001'::uuid n'est pas un UUID
+-- valide (format 8-4-4-4-12 requis) et provoquait une erreur
+-- "invalid input syntax for type uuid". L'idempotence est assurée
+-- par la contrainte UNIQUE sur "slug" (ON CONFLICT (slug) DO NOTHING).
 INSERT INTO tenants (
-  id, pays_id, nom, slug, whatsapp_number,
+  pays_id, nom, slug, whatsapp_number,
   couleur_primaire, couleur_secondaire,
   statut, plan_id, metadata
 )
 SELECT
-  'demo-restaurant-001'::uuid,
   p.id,
   'Restaurant Démo (exemple)',
   'demo-restaurant',
