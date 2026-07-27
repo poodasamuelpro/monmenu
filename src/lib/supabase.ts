@@ -135,3 +135,28 @@ export async function getWhatsAppSupport(
 ): Promise<string> {
   return (await getConfigGlobale('whatsapp_support', env)) ?? ''
 }
+
+/**
+ * §6.5 — Masque les détails d'erreur Supabase en production.
+ * En développement, retourne le message complet pour faciliter le débogage.
+ * En production, log côté serveur uniquement et retourne un message générique.
+ */
+export function safeSupabaseError(error: { message?: string } | null, context: string, env?: { ENVIRONMENT?: string }): string {
+  const isProduction = env?.ENVIRONMENT === 'production'
+  if (error?.message) {
+    console.error(`[Supabase] ${context}:`, error.message)
+  }
+  return isProduction ? 'Erreur de base de données.' : (error?.message ?? 'Erreur inconnue.')
+}
+
+/**
+ * §8 — Log un warning si KV_CACHE n'est pas configuré.
+ * Appelé au premier accès pour être visible en observabilité.
+ */
+let _kvWarningLogged = false
+export function warnIfKvCacheAbsent(kv?: KVNamespace): void {
+  if (!kv && !_kvWarningLogged) {
+    _kvWarningLogged = true
+    console.warn('[MonMenu] ⚠️  KV_CACHE non configuré. Le rate limiting distribué et le cache KV sont désactivés. Configurez KV_CACHE dans wrangler.jsonc pour de meilleures performances en production.')
+  }
+}

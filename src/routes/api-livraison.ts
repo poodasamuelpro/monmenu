@@ -20,7 +20,12 @@ livraisonRouter.post('/calcul', async (c) => {
     client_lon: number
   }>()
 
-  if (!body.pdv_id || typeof body.client_lat !== 'number' || typeof body.client_lon !== 'number') {
+  // §6.4 — Validation UUID sur pdv_id (Zod z.string().uuid())
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+  if (!body.pdv_id || !uuidRegex.test(body.pdv_id)) {
+    return c.json({ error: 'pdv_id invalide : UUID v4 requis.' }, 400)
+  }
+  if (typeof body.client_lat !== 'number' || typeof body.client_lon !== 'number') {
     return c.json({ error: 'Paramètres manquants.' }, 400)
   }
 

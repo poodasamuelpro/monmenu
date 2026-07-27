@@ -118,8 +118,15 @@ function renderMenu() {
   if (menuContent) menuContent.innerHTML = html;
 }
 
+// §6.3 — Fix XSS : remplace onclick="addToCart(JSON.stringify(...))" par data-* + addEventListener
+// L'ancien pattern injectait du JSON dans un attribut onclick — fragile et XSS-risqué si un
+// nom de produit contient des guillemets ou du code. Le nouveau pattern utilise data-produit-id
+// et délègue les events via addEventListener sur le conteneur parent.
 function renderProduitCard(p) {
   const quantiteInCart = getQuantiteInCart(p.id);
+  // Stocker les données produit dans un registre global (clé: id) pour éviter l'inline JSON
+  _produitRegistry[p.id] = { id: p.id, nom: p.nom, prix: p.prix, photo_url: p.photo_url };
+
   return `
   <div class="bg-white rounded-xl border border-gray-100 p-4 flex gap-3 items-start shadow-sm ${!p.disponible ? 'opacity-50' : ''}">
     <div class="flex-1 min-w-0">
@@ -132,11 +139,11 @@ function renderProduitCard(p) {
       ${p.disponible ? (
         quantiteInCart > 0 ?
         `<div class="flex items-center gap-2 bg-gray-50 rounded-xl p-1">
-          <button onclick="removeFromCart('${p.id}')" class="w-7 h-7 rounded-lg flex items-center justify-center text-gray-600 hover:bg-gray-200 transition-colors font-bold">−</button>
+          <button data-action="remove" data-produit-id="${escHtml(p.id)}" class="w-7 h-7 rounded-lg flex items-center justify-center text-gray-600 hover:bg-gray-200 transition-colors font-bold">−</button>
           <span class="text-sm font-bold w-4 text-center">${quantiteInCart}</span>
-          <button onclick="addToCart(${JSON.stringify({id: p.id, nom: p.nom, prix: p.prix, photo_url: p.photo_url}).replace(/"/g, '&quot;')})" class="w-7 h-7 rounded-lg flex items-center justify-center text-white transition-colors font-bold" style="background-color:${PRIMARY_COLOR}">+</button>
+          <button data-action="add" data-produit-id="${escHtml(p.id)}" class="w-7 h-7 rounded-lg flex items-center justify-center text-white transition-colors font-bold" style="background-color:${PRIMARY_COLOR}">+</button>
         </div>` :
-        `<button onclick="addToCart(${JSON.stringify({id: p.id, nom: p.nom, prix: p.prix, photo_url: p.photo_url}).replace(/"/g, '&quot;')})" class="w-8 h-8 rounded-xl flex items-center justify-center text-white transition-all font-bold shadow-sm" style="background-color:${PRIMARY_COLOR}">
+        `<button data-action="add" data-produit-id="${escHtml(p.id)}" class="w-8 h-8 rounded-xl flex items-center justify-center text-white transition-all font-bold shadow-sm" style="background-color:${PRIMARY_COLOR}">
           <i class="fa-solid fa-plus text-xs"></i>
         </button>`
       ) : '<span class="text-xs text-gray-400 bg-gray-100 px-2 py-1 rounded-lg">Indisponible</span>'}

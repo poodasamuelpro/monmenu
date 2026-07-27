@@ -6,24 +6,59 @@ import { z } from 'zod'
 import type { Env } from '../types/database'
 
 // ---- Rate Limiting ----
+// §6.1 — Rate limiting distribué via Cloudflare KV (remplace Map in-memory)
+// La Map in-memory est non distribuée : chaque isolate Cloudflare a son propre état,
+// ce qui rend le rate limiting inefficace en production multi-isolate.
+// Avec KV + TTL, le compteur est partagé entre tous les isolates.
+
 interface RateLimitEntry {
   count: number
   resetAt: number
 }
 
-const rateLimitStore = new Map<string, RateLimitEntry>()
+/**
+ * §6.1 — Rate limiting distribué via KV.
+ * Fallback sur in-memory si KV_CACHE absent (§8 — KV_CACHE optionnel).
+ */
+const _rateLimitStoreFallback = new Map<string, RateLimitEntry>()
 
 export async function checkRateLimit(
   key: string,
   maxRequests: number = 30,
-  windowMs: number = 60000
+  windowMs: number = 60000,
+  kv?: KVNamespace
 ): Promise<{ allowed: boolean; remaining: number; resetAt: number }> {
   const now = Date.now()
-  const entry = rateLimitStore.get(key)
+
+  // --- KV distribué (prioritaire) ---
+  if (kv) {
+    const kvKey = `rl:${key}`
+    const raw = await kv.get(kvKey, 'json') as RateLimitEntry | null
+
+    if (!raw || now > raw.resetAt) {
+      const resetAt = now + windowMs
+      const ttlSeconds = Math.ceil(windowMs / 1000)
+      await kv.put(kvKey, JSON.stringify({ count: 1, resetAt }), { expirationTtl: ttlSeconds })
+      return { allowed: true, remaining: maxRequests - 1, resetAt }
+    }
+
+    if (raw.count >= maxRequests) {
+      return { allowed: false, remaining: 0, resetAt: raw.resetAt }
+    }
+
+    const newCount = raw.count + 1
+    const ttlSeconds = Math.ceil((raw.resetAt - now) / 1000)
+    await kv.put(kvKey, JSON.stringify({ count: newCount, resetAt: raw.resetAt }), { expirationTtl: Math.max(ttlSeconds, 1) })
+    return { allowed: true, remaining: maxRequests - newCount, resetAt: raw.resetAt }
+  }
+
+  // --- Fallback in-memory (si KV_CACHE absent) ---
+  // §8 — warning loggé au niveau supérieur si KV absent
+  const entry = _rateLimitStoreFallback.get(key)
 
   if (!entry || now > entry.resetAt) {
     const resetAt = now + windowMs
-    rateLimitStore.set(key, { count: 1, resetAt })
+    _rateLimitStoreFallback.set(key, { count: 1, resetAt })
     return { allowed: true, remaining: maxRequests - 1, resetAt }
   }
 
@@ -94,7 +129,22 @@ export const ProduitSchema = z.object({
 })
 
 // ---- Headers sécurité ----
-export function setSecurityHeaders(c: Context): void {
+/**
+ * §6.2 — Génère un nonce CSP cryptographiquement aléatoire.
+ * À appeler une fois par requête et passer aux templates SSR pour les <script> inline.
+ */
+export function generateCspNonce(): string {
+  const array = new Uint8Array(16)
+  crypto.getRandomValues(array)
+  return btoa(String.fromCharCode(...array))
+}
+
+export function setSecurityHeaders(c: Context, nonce?: string): void {
+  // §6.2 — Utiliser un nonce si fourni, sinon 'unsafe-inline' en fallback de développement
+  const scriptSrcDirective = nonce
+    ? `'nonce-${nonce}' cdn.tailwindcss.com cdn.jsdelivr.net api.mapbox.com`
+    : `'unsafe-inline' cdn.tailwindcss.com cdn.jsdelivr.net api.mapbox.com`
+
   c.header('X-Content-Type-Options', 'nosniff')
   c.header('X-Frame-Options', 'DENY')
   c.header('X-XSS-Protection', '1; mode=block')
@@ -102,13 +152,13 @@ export function setSecurityHeaders(c: Context): void {
   c.header('Permissions-Policy', 'geolocation=(self), microphone=()')
   c.header(
     'Content-Security-Policy',
-    "default-src 'self'; " +
-    "script-src 'self' 'unsafe-inline' cdn.tailwindcss.com cdn.jsdelivr.net api.mapbox.com; " +
-    "style-src 'self' 'unsafe-inline' cdn.tailwindcss.com cdn.jsdelivr.net api.mapbox.com fonts.googleapis.com; " +
-    "img-src 'self' data: blob: *.mapbox.com *.openstreetmap.org *.supabase.co *.tile.openstreetmap.org; " +
-    "connect-src 'self' *.supabase.co api.mapbox.com events.mapbox.com api.openweathermap.org graph.facebook.com nominatim.openstreetmap.org; " +
-    "font-src 'self' fonts.gstatic.com cdn.jsdelivr.net; " +
-    "frame-ancestors 'none';"
+    `default-src 'self'; ` +
+    `script-src 'self' ${scriptSrcDirective}; ` +
+    `style-src 'self' 'unsafe-inline' cdn.tailwindcss.com cdn.jsdelivr.net api.mapbox.com fonts.googleapis.com; ` +
+    `img-src 'self' data: blob: *.mapbox.com *.openstreetmap.org *.supabase.co *.tile.openstreetmap.org; ` +
+    `connect-src 'self' *.supabase.co api.mapbox.com events.mapbox.com api.openweathermap.org graph.facebook.com nominatim.openstreetmap.org; ` +
+    `font-src 'self' fonts.gstatic.com cdn.jsdelivr.net; ` +
+    `frame-ancestors 'none';`
   )
 }
 
