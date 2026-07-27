@@ -32,15 +32,33 @@ const app = new Hono<{ Bindings: Env }>()
 // ---- Middleware globaux ----
 app.use('*', logger())
 
+// Domaines/sous-domaines autorisés à appeler l'API, tant que le domaine
+// définitif du dashboard admin n'est pas fixé. Couvre .app / .com / .bf
+// (racine + n'importe quel sous-domaine, ex: admin.monmenu.com) ainsi
+// que les URLs de preview Cloudflare Workers (*.workers.dev).
+function originAutorisee(origin: string): string | null {
+  const domainesRacines = ['monmenu.app', 'monmenu.com', 'monmenu.bf']
+  const localhosts = ['http://localhost:5173', 'http://localhost:3000']
+
+  if (localhosts.includes(origin)) return origin
+
+  try {
+    const hostname = new URL(origin).hostname
+    const estDomaineAutorise = domainesRacines.some(
+      (racine) => hostname === racine || hostname.endsWith(`.${racine}`)
+    )
+    const estWorkersDev = hostname.endsWith('.workers.dev')
+
+    if (estDomaineAutorise || estWorkersDev) return origin
+  } catch {
+    return null
+  }
+
+  return null
+}
+
 app.use('/api/*', cors({
-  origin: [
-    'https://monmenu.app',
-    'http://localhost:5173',
-    'http://localhost:3000',
-    // ⚠️ À REMPLACER quand le domaine du dashboard admin (autre repo) sera connu.
-    // Exemple : 'https://admin.monmenu.app'
-    'https://admin.monmenu.app'
-  ],
+  origin: (origin) => originAutorisee(origin) ?? '',
   allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowHeaders: ['Content-Type', 'Authorization', 'X-Idempotency-Key'],
   exposeHeaders: ['X-Cache', 'X-RateLimit-Remaining']
