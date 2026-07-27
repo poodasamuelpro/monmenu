@@ -14,8 +14,6 @@ import { getNomProjet, getWhatsAppSupport, createSupabaseAdminClient } from './l
 
 // ---- Imports composants & pages ----
 import { renderHomePage } from './pages/home'
-import { renderFonctionnalitesPage } from './pages/fonctionnalites'
-import { renderTarifsPage } from './pages/tarifs'
 import { renderContactPage } from './pages/contact'
 import { renderBlogPage } from './pages/blog'
 import { renderInscriptionPage } from './pages/inscription'
@@ -80,16 +78,6 @@ app.get('/sitemap.xml', async (c) => {
     <priority>1.0</priority>
     <xhtml:link rel="alternate" hreflang="fr" href="${baseUrl}/fr/"/>
     <xhtml:link rel="alternate" hreflang="en" href="${baseUrl}/en/"/>
-  </url>
-  <url>
-    <loc>${baseUrl}/fonctionnalites</loc>
-    <changefreq>monthly</changefreq>
-    <priority>0.9</priority>
-  </url>
-  <url>
-    <loc>${baseUrl}/tarifs</loc>
-    <changefreq>weekly</changefreq>
-    <priority>0.9</priority>
   </url>
   <url>
     <loc>${baseUrl}/contact</loc>
@@ -164,17 +152,12 @@ app.get('/', async (c) => {
 // ---- Pages institutionnelles ----
 // IMPORTANT : Ces routes DOIVENT être définies AVANT /:slug
 // sinon Hono capture tout avec le paramètre générique
-app.get('/fonctionnalites', async (c) => {
-  setSecurityHeaders(c)
-  const nomProjet = await getNomProjet(c.env)
-  return c.html(renderFonctionnalitesPage(nomProjet))
-})
 
-app.get('/tarifs', async (c) => {
-  setSecurityHeaders(c)
-  const nomProjet = await getNomProjet(c.env)
-  return c.html(renderTarifsPage(nomProjet))
-})
+// "Fonctionnalités" et "Tarifs" ne sont plus des pages séparées :
+// ce sont des sections de la page d'accueil (#fonctionnalites / #tarifs).
+// On redirige les anciennes URLs pour ne pas casser les liens existants / le SEO.
+app.get('/fonctionnalites', (c) => c.redirect('/#fonctionnalites', 301))
+app.get('/tarifs', (c) => c.redirect('/#tarifs', 301))
 
 app.get('/contact', async (c) => {
   setSecurityHeaders(c)
