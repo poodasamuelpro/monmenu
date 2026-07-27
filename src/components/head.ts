@@ -9,7 +9,8 @@ export function renderHead(
   title: string,
   description: string,
   nomProjet: string,
-  extra: string = ''
+  extra: string = '',
+  canonicalUrl: string = 'https://monmenu.app/'
 ): string {
   return `<!DOCTYPE html>
 <html lang="fr">
@@ -37,7 +38,7 @@ export function renderHead(
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="${title}">
   <meta name="twitter:description" content="${description}">
-  <link rel="canonical" href="https://monmenu.app/">
+  <link rel="canonical" href="${canonicalUrl}">
   <link rel="icon" type="image/svg+xml" href="/static/img/favicon.svg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>

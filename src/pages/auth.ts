@@ -44,7 +44,7 @@ export function renderConnexionPage(nomProjet: string): string {
             </button>
           </div>
           <div class="text-right mt-1">
-            <a href="#" class="text-xs text-red-600 hover:underline">Mot de passe oublié ?</a>
+            <a href="/mot-de-passe-oublie" class="text-xs text-red-600 hover:underline">Mot de passe oublié ?</a>
           </div>
         </div>
 

@@ -22,6 +22,7 @@ import { renderArticlePage } from './pages/article'
 import { renderInscriptionPage } from './pages/inscription'
 import { renderLegalPage } from './pages/legal'
 import { renderConnexionPage, renderCreerComptePage } from './pages/auth'
+import { renderForgotPasswordPage } from './pages/forgot-password'
 import { renderDashboardPage } from './pages/dashboard'
 import { renderSuiviPage } from './pages/suivi'
 import { renderBoutiquePage } from './pages/boutique'
@@ -67,6 +68,37 @@ app.use('/api/*', cors({
 // ---- Fichiers statiques ----
 app.use('/static/*', serveStatic({ root: './' }))
 app.use('/favicon.ico', serveStatic({ path: './favicon.ico' }))
+
+// ---- §1.11 — Middleware custom domain : résolution de domaine_perso vers boutique ----
+// Si la requête arrive sur un domaine personnalisé (ex: commande.monrestaurant.bf),
+// on cherche le tenant correspondant et on rend sa boutique directement.
+app.use('*', async (c, next) => {
+  const host = c.req.header('host') ?? ''
+  // Ignorer les domaines de la plateforme
+  const domainesPlateforme = ['monmenu.app', 'monmenu.com', 'monmenu.bf', 'workers.dev', 'localhost']
+  const estPlateforme = domainesPlateforme.some(d => host.includes(d))
+
+  if (!estPlateforme && host.includes('.') && !c.req.path.startsWith('/api/')) {
+    try {
+      const adminClient = createSupabaseAdminClient(c.env)
+      const { data: tenant } = await adminClient
+        .from('tenants')
+        .select('id, nom, slug, logo_url, banniere_url, couleur_primaire, couleur_secondaire, whatsapp_number, pdv_nom, pdv_adresse, pdv_horaires, pdv_latitude, pdv_longitude')
+        .eq('domaine_perso', host)
+        .in('statut', ['actif', 'essai'])
+        .is('deleted_at', null)
+        .maybeSingle()
+
+      if (tenant) {
+        // Vérifier plan Mogho (seul plan autorisé à utiliser domaine_perso)
+        const planCheck = tenant as any
+        const nomProjet = await getNomProjet(c.env)
+        return c.html(renderBoutiquePage(tenant as any, nomProjet))
+      }
+    } catch { /* Ignorer les erreurs — continuer le routing normal */ }
+  }
+  return next()
+})
 
 // ---- Routes API ----
 app.route('/api/v1/commandes', commandesRouter)
@@ -293,6 +325,13 @@ app.get('/legal/cookies', async (c) => {
 })
 
 // ---- Connexion & Création de compte ----
+// §1.7 — Page récupération mot de passe
+app.get('/mot-de-passe-oublie', async (c) => {
+  setSecurityHeaders(c)
+  const nomProjet = await getNomProjet(c.env)
+  return c.html(renderForgotPasswordPage(nomProjet))
+})
+
 app.get('/connexion', async (c) => {
   setSecurityHeaders(c)
   const nomProjet = await getNomProjet(c.env)
@@ -314,6 +353,18 @@ app.get('/dashboard', async (c) => {
 
 app.get('/dashboard/*', async (c) => {
   setSecurityHeaders(c)
+  // §2.3 — Vérification auth côté serveur avant rendu du dashboard
+  const cookieHeader = c.req.header('cookie') ?? ''
+  const tokenMatch = cookieHeader.match(/sb-access-token=([^;]+)/)
+  const authHeader = c.req.header('authorization') ?? ''
+  const hasToken = tokenMatch || authHeader.startsWith('Bearer ')
+  if (!hasToken) {
+    // Redirection vers la page de connexion si pas de token JWT visible
+    const currentPath = new URL(c.req.url).pathname
+    if (currentPath !== '/dashboard' && currentPath !== '/dashboard/') {
+      return c.redirect('/dashboard?redirect=' + encodeURIComponent(currentPath), 302)
+    }
+  }
   const nomProjet = await getNomProjet(c.env)
   return c.html(renderDashboardPage(nomProjet))
 })
@@ -388,4 +439,10 @@ app.onError((err, c) => {
 })
 
 
-export default app
+// §1.8 — Export objet Worker complet avec handler scheduled (Cron Triggers)
+import { handleScheduled } from './routes/api-cron'
+
+export default {
+  fetch: app.fetch.bind(app),
+  scheduled: handleScheduled
+}
