@@ -1,8 +1,8 @@
 // MonMenu — Scripts globaux
 'use strict';
 
-// ---- Menu mobile toggle ----
 document.addEventListener('DOMContentLoaded', () => {
+  // ---- Menu mobile toggle ----
   const menuToggle = document.getElementById('menu-toggle');
   const mobileMenu = document.getElementById('mobile-menu');
   if (menuToggle && mobileMenu) {
@@ -17,27 +17,56 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // ---- Mode sombre/clair ----
   initDarkMode();
-
-  // ---- Cookie banner ----
   initCookieBanner();
 });
 
-// ---- Mode sombre ----
+// ---------------------------------------------------------------------
+// Mode clair / sombre — 3 états explicites :
+//   'system' (par défaut) → suit la préférence de l'OS, réagit en direct
+//   'light'  → forcé, indépendant de l'OS
+//   'dark'   → forcé, indépendant de l'OS
+// La classe "dark" est posée sur <html> (stratégie Tailwind darkMode:'class').
+// ---------------------------------------------------------------------
+const CLE_THEME = 'monmenu-theme';
+const prefersSombre = window.matchMedia('(prefers-color-scheme: dark)');
+
+function appliquerTheme(theme) {
+  const doitEtreSombre = theme === 'dark' || (theme === 'system' && prefersSombre.matches);
+  document.documentElement.classList.toggle('dark', doitEtreSombre);
+  mettreAJourIconeToggle(theme);
+}
+
+function mettreAJourIconeToggle(theme) {
+  const btn = document.getElementById('dark-toggle');
+  if (!btn) return;
+  const icon = btn.querySelector('i');
+  if (!icon) return;
+  // Icône reflète l'état ACTUEL, pour indiquer ce que l'on va basculer
+  const map = { system: 'fa-circle-half-stroke', light: 'fa-sun', dark: 'fa-moon' };
+  icon.className = 'fa-solid ' + (map[theme] || 'fa-circle-half-stroke');
+  btn.setAttribute('aria-label', 'Thème actuel : ' + theme + '. Cliquer pour changer.');
+}
+
 function initDarkMode() {
-  const stored = localStorage.getItem('color-scheme');
-  if (stored === 'light') {
-    document.body.classList.add('light-mode');
-  } else if (stored === 'dark') {
-    document.body.classList.remove('light-mode');
-  }
-  // Bouton toggle si présent
+  const theme = localStorage.getItem(CLE_THEME) || 'system';
+  appliquerTheme(theme);
+
+  // Réagit en direct si l'utilisateur change la préférence de son OS
+  // (uniquement pertinent quand le thème choisi est 'system')
+  prefersSombre.addEventListener('change', () => {
+    const themeCourant = localStorage.getItem(CLE_THEME) || 'system';
+    if (themeCourant === 'system') appliquerTheme('system');
+  });
+
   const darkToggle = document.getElementById('dark-toggle');
   if (darkToggle) {
     darkToggle.addEventListener('click', () => {
-      const isLight = document.body.classList.toggle('light-mode');
-      localStorage.setItem('color-scheme', isLight ? 'light' : 'dark');
+      const actuel = localStorage.getItem(CLE_THEME) || 'system';
+      // Cycle : system -> light -> dark -> system ...
+      const suivant = actuel === 'system' ? 'light' : actuel === 'light' ? 'dark' : 'system';
+      localStorage.setItem(CLE_THEME, suivant);
+      appliquerTheme(suivant);
     });
   }
 }
