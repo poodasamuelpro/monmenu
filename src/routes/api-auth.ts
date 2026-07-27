@@ -109,15 +109,16 @@ authRouter.post('/login', async (c) => {
 
 // POST /api/v1/auth/register — Inscription restaurant
 // Auth Supabase + tenant/utilisateur créés dans Supabase (application)
-// Plans/pays lus depuis D1 (site web) pour la copie des métadonnées
+// Plan gratuit : nom lu depuis D1 (site web), mais pays_id doit être lu
+// depuis SUPABASE (pas D1) car la contrainte FK tenants_pays_id_fkey
+// pointe vers la table "pays" de Supabase, pas celle de D1. Les deux
+// bases ont des UUID générés indépendamment — un ID D1 ne peut jamais
+// satisfaire une contrainte FK Supabase. (CORRIGÉ — bug identifié le 27/07)
 authRouter.post('/register', async (c) => {
   setSecurityHeaders(c)
   const ip = c.req.header('CF-Connecting-IP') ?? 'unknown'
 
   // Rate limiting : 15 inscriptions / heure par IP
-  // (CORRIGÉ — passé de 3 à 15/heure à la demande de Samuel, pour laisser
-  // plus de marge pendant les tests et l'usage réel. À resurveiller selon
-  // la consommation / le taux d'abus observé.)
   const rateLimit = await checkRateLimit(`auth_register:${ip}`, 15, 3600000)
   if (!rateLimit.allowed) {
     return c.json({ error: 'Trop de tentatives. Réessayez dans une heure.' }, 429)
@@ -146,9 +147,6 @@ authRouter.post('/register', async (c) => {
     return c.json({ error: 'Numéro WhatsApp invalide.' }, 422)
   }
 
-  // CORRIGÉ — import statique de sanitizeSlug en haut du fichier au lieu
-  // d'un `await import('../lib/security')` dynamique, qui peut mal se
-  // bundler avec esbuild/Wrangler et provoquer un crash silencieux au runtime.
   let slug = sanitizeSlug(nom_restaurant)
   if (!slug) slug = 'restaurant-' + Date.now().toString(36)
 
@@ -183,15 +181,23 @@ authRouter.post('/register', async (c) => {
     return c.json({ error: authError?.message ?? 'Erreur lors de la création du compte.' }, 500)
   }
 
-  // Récupérer plan gratuit depuis D1 (SITE WEB) — lecture uniquement pour nom du plan
+  // Récupérer plan gratuit depuis D1 (SITE WEB) — lecture uniquement pour nom du plan.
+  // NOTE : plan_id est ici utilisé tel quel dans l'insert Supabase ci-dessous.
+  // Si "tenants_plan_id_fkey" existe aussi côté Supabase, ce même problème
+  // d'UUID cross-database s'appliquera à plan_id — à vérifier si l'inscription
+  // échoue de nouveau avec une erreur "tenants_plan_id_fkey".
   const planGratuit = await c.env.DB
     .prepare("SELECT id, nom FROM plans WHERE nom = 'Gratuit' OR ordre_affichage = 0 LIMIT 1")
     .first<{ id: string; nom: string }>()
 
-  // Récupérer ID pays Burkina Faso depuis D1 (SITE WEB) — lecture uniquement
-  const pays = await c.env.DB
-    .prepare("SELECT id FROM pays WHERE code_iso = 'BF' LIMIT 1")
-    .first<{ id: string }>()
+  // CORRIGÉ — pays_id lu depuis SUPABASE (pas D1), car c'est la table
+  // Supabase "pays" que la contrainte FK tenants_pays_id_fkey vérifie.
+  const { data: paysSupabase } = await adminClient
+    .from('pays')
+    .select('id')
+    .eq('code_iso', 'BF')
+    .limit(1)
+    .maybeSingle()
 
   const now = new Date().toISOString()
 
@@ -199,7 +205,7 @@ authRouter.post('/register', async (c) => {
   const { data: newTenant, error: tenantInsertError } = await adminClient
     .from('tenants')
     .insert({
-      pays_id: pays?.id ?? null,
+      pays_id: paysSupabase?.id ?? null,
       nom: nom_restaurant,
       slug,
       whatsapp_number: whatsapp_number.replace(/\s/g, ''),
@@ -213,7 +219,7 @@ authRouter.post('/register', async (c) => {
     .single()
 
   if (tenantInsertError || !newTenant) {
-    console.error('Erreur création tenant Supabase:', tenantInsertError)
+    console.error('Erreur création tenant Supabase:', tenantInsertError?.message, tenantInsertError?.details)
     return c.json({ error: 'Erreur lors de la création du restaurant.' }, 500)
   }
 
