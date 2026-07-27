@@ -269,7 +269,7 @@ app.get('/blog', async (c) => {
   try {
     articles = await getArticlesPublies(c.env)
   } catch (err) {
-    console.error('[Blog] Erreur récupération articles:', err)
+    console.error('[Blog] Erreur récupération articles:', err instanceof Error ? err.message : err)
   }
 
   return c.html(renderBlogPage(nomProjet, articles))
@@ -312,7 +312,7 @@ app.get('/blog/:slug', async (c) => {
     }
     article = data
   } catch (err) {
-    console.error('[Blog] Erreur récupération article:', err)
+    console.error('[Blog] Erreur récupération article:', err instanceof Error ? err.message : err)
   }
 
   if (!article) {
@@ -454,8 +454,14 @@ app.notFound((c) => {
 })
 
 // ---- Erreurs globales ----
+// CORRIGÉ : on loggait l'objet Error entier, ce qui fait que Cloudflare
+// n'affichait que la stack trace minifiée, jamais err.message.
+// On log maintenant explicitement le message + la stack pour pouvoir
+// diagnostiquer les 500 (ex: variable d'env manquante, binding KV absent, etc.)
 app.onError((err, c) => {
-  console.error('[MonMenu Error]', err)
+  const message = err instanceof Error ? err.message : String(err)
+  const stack = err instanceof Error ? err.stack : undefined
+  console.error('[MonMenu Error]', message, stack ? `\n${stack}` : '')
   return c.json({ error: 'Erreur interne du serveur.' }, 500)
 })
 
