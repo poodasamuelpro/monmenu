@@ -1,4 +1,10 @@
 // src/pages/auth.ts — Connexion + Création de compte (pages séparées)
+// §2 — Migration cookies httpOnly : les fetch() vers /api/v1/auth/*
+// utilisent désormais credentials:'include' pour que le navigateur envoie
+// et accepte le cookie httpOnly posé par le serveur. Le token n'est plus
+// stocké dans localStorage (il n'est de toute façon plus lisible en JS
+// puisqu'il est httpOnly) — seules les infos non sensibles du tenant
+// (nom, slug, couleur) restent en localStorage pour un affichage rapide.
 import { renderHead } from '../components/head'
 
 // ==============================
@@ -92,16 +98,20 @@ export function renderConnexionPage(nomProjet: string): string {
       const password = document.getElementById('login-password').value;
 
       try {
+        // §2 — credentials:'include' permet au navigateur d'accepter le
+        // cookie httpOnly posé par le serveur (Set-Cookie sur la réponse).
         const res = await fetch('/api/v1/auth/login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
           body: JSON.stringify({ email, password })
         });
         const data = await res.json();
         if (res.ok && data.success) {
-          localStorage.setItem('monmenu_auth_token', data.access_token);
-          localStorage.setItem('monmenu_refresh_token', data.refresh_token);
-          localStorage.setItem('monmenu_tenant', JSON.stringify(data.tenant));
+          // Le token vit désormais dans un cookie httpOnly — plus besoin
+          // (et plus possible) de le stocker en JS. On garde uniquement
+          // les infos d'affichage non sensibles du tenant.
+          if (data.tenant) localStorage.setItem('monmenu_tenant', JSON.stringify(data.tenant));
           window.location.href = '/dashboard/commandes';
         } else {
           errEl.textContent = data.error || 'Identifiants incorrects.';
@@ -292,17 +302,20 @@ export function renderCreerComptePage(nomProjet: string): string {
       };
 
       try {
+        // §2 — credentials:'include' pour accepter le cookie httpOnly
+        // posé par le serveur si la session est créée immédiatement.
         const res = await fetch('/api/v1/auth/register', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
           body: JSON.stringify(payload)
         });
         const data = await res.json();
         if (res.ok && data.success) {
-          if (data.access_token) {
-            localStorage.setItem('monmenu_auth_token', data.access_token);
-            if (data.refresh_token) localStorage.setItem('monmenu_refresh_token', data.refresh_token);
-            if (data.tenant) localStorage.setItem('monmenu_tenant', JSON.stringify(data.tenant));
+          if (data.tenant) {
+            // Session immédiate (cookie déjà posé par le serveur) : on
+            // garde uniquement les infos d'affichage non sensibles.
+            localStorage.setItem('monmenu_tenant', JSON.stringify(data.tenant));
             successEl.textContent = 'Compte créé ! Redirection vers votre tableau de bord...';
             successEl.classList.remove('hidden');
             setTimeout(() => { window.location.href = '/dashboard/commandes'; }, 2000);
