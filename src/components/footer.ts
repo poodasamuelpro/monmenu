@@ -18,7 +18,7 @@ export function renderFooter(nomProjet: string): string {
           <span>${nomProjet}</span>
         </a>
         <p class="text-sm text-gray-400 leading-relaxed mb-5">
-          La solution complète de commande en ligne pour restaurants. Augmentez vos ventes et simplifiez votre gestion sans aucune commission.
+          La solution qui simplifie la commande en ligne pour les restaurants. Gagnez du temps, vendez plus, sans commission.
         </p>
 
         <!-- Réseaux sociaux -->
@@ -89,13 +89,6 @@ export function renderFooter(nomProjet: string): string {
       <p class="text-xs text-gray-500">
         &copy; ${year} ${nomProjet}. Tous droits réservés.
       </p>
-      <div class="flex items-center gap-4 text-xs text-gray-500">
-        <span class="flex items-center gap-1.5">
-          Propulsé par une technologie innovante
-        </span>
-        <span class="hidden sm:inline">·</span>
-        <span class="hidden sm:inline">v2.1</span>
-      </div>
     </div>
   </div>
 </footer>`
