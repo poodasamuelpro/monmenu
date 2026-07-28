@@ -194,7 +194,7 @@ export function renderHomePage(nomProjet: string, locale: string = 'fr'): string
       </div>
 
       <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
-        ${isEn ? [
+        ${(isEn ? [
           { icon: 'fa-mobile-screen-button', title: 'Online Shop', desc: 'Your menu accessible via a unique link or QR code. No app to download.', accent: 'rouge' },
           { icon: 'fa-brands fa-whatsapp', title: 'WhatsApp Notifications', desc: 'Every order arrives instantly on your WhatsApp, ready to confirm.', accent: 'bleu' },
           { icon: 'fa-chart-line', title: 'Dashboard', desc: 'Clear statistics, full history and real-time menu management.', accent: 'noir' },
@@ -208,7 +208,7 @@ export function renderHomePage(nomProjet: string, locale: string = 'fr'): string
           { icon: 'fa-location-dot', title: 'Livraison géolocalisée', desc: "Frais de livraison calculés automatiquement selon la distance, l'heure et la météo.", accent: 'bleu' },
           { icon: 'fa-qrcode', title: 'QR Code imprimable', desc: "Généré automatiquement pour chaque boutique, à afficher dans votre établissement.", accent: 'rouge' },
           { icon: 'fa-palette', title: 'Personnalisation', desc: 'Votre boutique à votre image : logo et couleurs, indépendants de la charte MonMenu.', accent: 'noir' },
-        ]}.map(f => {
+        ]).map(f => {
           const styles = {
             rouge: 'text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/40',
             bleu: 'text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/40',
@@ -216,11 +216,11 @@ export function renderHomePage(nomProjet: string, locale: string = 'fr'): string
           }[f.accent as 'rouge' | 'bleu' | 'noir']
           return `
           <article class="bg-gray-50 dark:bg-gray-900/60 rounded-xl p-6 border border-gray-100 dark:border-gray-800 hover:shadow-md dark:hover:shadow-none dark:hover:border-gray-700 transition-all card-hover">
-            <div class="w-11 h-11 \${styles} rounded-lg flex items-center justify-center mb-5 text-xl">
-              <i class="fa-solid \${f.icon}" aria-hidden="true"></i>
+            <div class="w-11 h-11 ${styles} rounded-lg flex items-center justify-center mb-5 text-xl">
+              <i class="fa-solid ${f.icon}" aria-hidden="true"></i>
             </div>
-            <h3 class="text-lg font-bold text-gray-900 dark:text-white mb-2">\${f.title}</h3>
-            <p class="text-sm text-gray-600 dark:text-gray-400 leading-relaxed">\${f.desc}</p>
+            <h3 class="text-lg font-bold text-gray-900 dark:text-white mb-2">${f.title}</h3>
+            <p class="text-sm text-gray-600 dark:text-gray-400 leading-relaxed">${f.desc}</p>
           </article>`
         }).join('')}
       </div>
@@ -235,34 +235,34 @@ export function renderHomePage(nomProjet: string, locale: string = 'fr'): string
       <div class="grid lg:grid-cols-2 gap-16 items-center">
         <div>
           <h2 class="text-3xl sm:text-4xl font-extrabold text-gray-900 dark:text-white mb-6">
-            \${isEn ? 'Ready in 3 steps' : 'Prêt en 3 étapes'}
+            ${isEn ? 'Ready in 3 steps' : 'Prêt en 3 étapes'}
           </h2>
           <div class="space-y-8">
             <div class="flex gap-5">
               <div class="flex-shrink-0 w-10 h-10 rounded-full bg-red-600 text-white flex items-center justify-center font-bold shadow-lg shadow-red-200 dark:shadow-none">1</div>
               <div>
-                <h3 class="text-xl font-bold text-gray-900 dark:text-white mb-1">\${isEn ? 'Register your restaurant' : 'Inscrivez votre restaurant'}</h3>
-                <p class="text-gray-600 dark:text-gray-400">\${isEn ? 'Create your account and fill in your basic information in 2 minutes.' : 'Créez votre compte et renseignez vos informations de base en 2 minutes.'}</p>
+                <h3 class="text-xl font-bold text-gray-900 dark:text-white mb-1">${isEn ? 'Register your restaurant' : 'Inscrivez votre restaurant'}</h3>
+                <p class="text-gray-600 dark:text-gray-400">${isEn ? 'Create your account and fill in your basic information in 2 minutes.' : 'Créez votre compte et renseignez vos informations de base en 2 minutes.'}</p>
               </div>
             </div>
             <div class="flex gap-5">
               <div class="flex-shrink-0 w-10 h-10 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold shadow-lg shadow-blue-200 dark:shadow-none">2</div>
               <div>
-                <h3 class="text-xl font-bold text-gray-900 dark:text-white mb-1">\${isEn ? 'Add your products' : 'Ajoutez vos produits'}</h3>
-                <p class="text-gray-600 dark:text-gray-400">\${isEn ? 'Import your menu, add photos and set your prices.' : 'Importez votre menu, ajoutez des photos et fixez vos prix.'}</p>
+                <h3 class="text-xl font-bold text-gray-900 dark:text-white mb-1">${isEn ? 'Add your products' : 'Ajoutez vos produits'}</h3>
+                <p class="text-gray-600 dark:text-gray-400">${isEn ? 'Import your menu, add photos and set your prices.' : 'Importez votre menu, ajoutez des photos et fixez vos prix.'}</p>
               </div>
             </div>
             <div class="flex gap-5">
               <div class="flex-shrink-0 w-10 h-10 rounded-full bg-gray-900 dark:bg-white dark:text-gray-900 text-white flex items-center justify-center font-bold">3</div>
               <div>
-                <h3 class="text-xl font-bold text-gray-900 dark:text-white mb-1">\${isEn ? 'Start selling' : 'Commencez à vendre'}</h3>
-                <p class="text-gray-600 dark:text-gray-400">\${isEn ? 'Share your link and receive your first orders on WhatsApp.' : 'Partagez votre lien et recevez vos premières commandes sur WhatsApp.'}</p>
+                <h3 class="text-xl font-bold text-gray-900 dark:text-white mb-1">${isEn ? 'Start selling' : 'Commencez à vendre'}</h3>
+                <p class="text-gray-600 dark:text-gray-400">${isEn ? 'Share your link and receive your first orders on WhatsApp.' : 'Partagez votre lien et recevez vos premières commandes sur WhatsApp.'}</p>
               </div>
             </div>
           </div>
           <div class="mt-10">
             <a href="/inscription" class="text-red-600 dark:text-red-400 font-bold flex items-center gap-2 hover:underline">
-              \${isEn ? 'Create my shop now' : 'Créer ma boutique maintenant'}
+              ${isEn ? 'Create my shop now' : 'Créer ma boutique maintenant'}
               <i class="fa-solid fa-arrow-right" aria-hidden="true"></i>
             </a>
           </div>
@@ -280,8 +280,8 @@ export function renderHomePage(nomProjet: string, locale: string = 'fr'): string
                 <i class="fa-brands fa-whatsapp text-green-600 text-xl" aria-hidden="true"></i>
              </div>
              <div>
-                <div class="text-[10px] text-gray-500 uppercase font-bold tracking-wider">\${isEn ? 'New order' : 'Nouvelle commande'}</div>
-                <div class="text-sm font-bold text-gray-900 dark:text-white">\${isEn ? 'Received in 0.5s' : 'Reçue en 0.5s'}</div>
+                <div class="text-[10px] text-gray-500 uppercase font-bold tracking-wider">${isEn ? 'New order' : 'Nouvelle commande'}</div>
+                <div class="text-sm font-bold text-gray-900 dark:text-white">${isEn ? 'Received in 0.5s' : 'Reçue en 0.5s'}</div>
              </div>
           </div>
         </div>
@@ -296,16 +296,16 @@ export function renderHomePage(nomProjet: string, locale: string = 'fr'): string
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
       <div class="text-center mb-14">
         <h2 class="text-3xl sm:text-4xl font-extrabold text-gray-900 dark:text-white mb-4">
-          \${isEn ? 'Simple and transparent pricing' : 'Des tarifs simples et transparents'}
+          ${isEn ? 'Simple and transparent pricing' : 'Des tarifs simples et transparents'}
         </h2>
         <p class="text-lg text-gray-600 dark:text-gray-300 max-w-2xl mx-auto">
-          \${isEn ? 'No hidden fees. No commission on your sales. Cancel anytime.' : 'Aucun frais caché. Aucune commission sur vos ventes. Annulez à tout moment.'}
+          ${isEn ? 'No hidden fees. No commission on your sales. Cancel anytime.' : 'Aucun frais caché. Aucune commission sur vos ventes. Annulez à tout moment.'}
         </p>
       </div>
 
       <div id="plans-container" class="grid sm:grid-cols-2 lg:grid-cols-4 gap-6">
         <!-- Chargé dynamiquement via /api/v1/plans -->
-        \${[1, 2, 3, 4].map(() => \`
+        ${[1, 2, 3, 4].map(() => `
           <div class="animate-pulse bg-gray-50 dark:bg-gray-900/50 rounded-2xl p-8 h-96 border border-gray-100 dark:border-gray-800">
             <div class="h-4 bg-gray-200 dark:bg-gray-800 rounded w-1/2 mb-6"></div>
             <div class="h-10 bg-gray-200 dark:bg-gray-800 rounded w-3/4 mb-4"></div>
@@ -315,13 +315,13 @@ export function renderHomePage(nomProjet: string, locale: string = 'fr'): string
               <div class="h-3 bg-gray-200 dark:bg-gray-800 rounded w-4/6"></div>
             </div>
           </div>
-        \`).join('')}
+        `).join('')}
       </div>
 
       <div class="mt-12 text-center">
         <p class="text-gray-500 dark:text-gray-400 text-sm">
           <i class="fa-solid fa-circle-info mr-1" aria-hidden="true"></i>
-          \${isEn ? 'All plans include 24/7 technical support and automatic updates.' : 'Tous les plans incluent le support technique 24/7 et les mises à jour automatiques.'}
+          ${isEn ? 'All plans include 24/7 technical support and automatic updates.' : 'Tous les plans incluent le support technique 24/7 et les mises à jour automatiques.'}
         </p>
       </div>
     </div>
@@ -333,11 +333,11 @@ export function renderHomePage(nomProjet: string, locale: string = 'fr'): string
   <section class="py-20 bg-gray-50 dark:bg-[#0B0A09]/50" id="faq">
     <div class="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8">
       <div class="text-center mb-12">
-        <h2 class="text-3xl font-extrabold text-gray-900 dark:text-white">\${isEn ? 'Frequently Asked Questions' : 'Questions fréquentes'}</h2>
+        <h2 class="text-3xl font-extrabold text-gray-900 dark:text-white">${isEn ? 'Frequently Asked Questions' : 'Questions fréquentes'}</h2>
       </div>
 
       <div class="space-y-4">
-        \${(isEn ? [
+        ${(isEn ? [
           { q: 'Is it really 0% commission?', a: 'Yes. Unlike other platforms that take 15% to 30% on each order, MonMenu charges only a fixed monthly or annual subscription. All your sales revenue goes directly to you.' },
           { q: 'Do I need a computer to manage my shop?', a: 'No. The entire dashboard is "mobile-first". You can manage your products, prices and orders directly from your smartphone.' },
           { q: 'How do customers pay?', a: 'MonMenu facilitates order taking. Payment is made directly between you and the customer (cash on delivery, mobile money, etc.) according to your usual methods.' },
@@ -349,14 +349,14 @@ export function renderHomePage(nomProjet: string, locale: string = 'fr'): string
           { q: 'Is it available in my country?', a: 'MonMenu is optimized for West and Central Africa (Senegal, Ivory Coast, Cameroon, Mali, Burkina Faso, etc.) but works globally.' },
         ] : [
           { q: 'Est-ce vraiment 0% de commission ?', a: "Oui. Contrairement aux autres plateformes qui prennent 15% à 30% sur chaque commande, MonMenu ne facture qu'un abonnement fixe mensuel ou annuel. Tout le revenu de vos ventes vous revient directement." },
-          { q: 'Ai-je besoin d'un ordinateur pour gérer ma boutique ?', a: 'Non. Tout le tableau de bord est "mobile-first". Vous pouvez gérer vos produits, vos prix et vos commandes directement depuis votre smartphone.' },
+          { q: 'Ai-je besoin d\'un ordinateur pour gérer ma boutique ?', a: 'Non. Tout le tableau de bord est "mobile-first". Vous pouvez gérer vos produits, vos prix et vos commandes directement depuis votre smartphone.' },
           { q: 'Comment les clients payent-ils ?', a: 'MonMenu facilite la prise de commande. Le paiement se fait directement entre vous et le client (espèces à la livraison, mobile money, etc.) selon vos méthodes habituelles.' },
           { q: 'Puis-je utiliser mon propre nom de domaine ?', a: 'Oui, avec les plans Professionnel et Entreprise, vous pouvez lier votre propre domaine (ex: www.votre-restaurant.com) à votre boutique.' },
           { q: 'WhatsApp est-il obligatoire ?', a: 'WhatsApp est notre canal de notification privilégié car utilisé par tous en Afrique, mais vous recevez aussi toutes les commandes dans votre tableau de bord en temps réel.' },
           { q: 'Combien de temps pour être en ligne ?', a: 'Si vous avez votre menu prêt, vous pouvez être en ligne en moins de 10 minutes. L\'inscription est instantanée.' },
           { q: 'Y a-t-il un engagement ?', a: 'Non. Vous pouvez résilier votre abonnement à tout moment depuis votre tableau de bord. Aucun frais de sortie.' },
           { q: 'Fournissez-vous des livreurs ?', a: 'Non, MonMenu est un outil technique. Vous utilisez vos propres livreurs ou votre partenaire habituel. Nous fournissons l\'outil de géolocalisation pour simplifier leur travail.' },
-          { q: 'Est-ce disponible dans mon pays ?', a: 'MonMenu est optimisé pour l\'Afrique de l'Ouest et Centrale (Sénégal, Côte d\'Ivoire, Cameroun, Mali, Burkina Faso, etc.) mais fonctionne partout dans le monde.' },
+          { q: 'Est-ce disponible dans mon pays ?', a: 'MonMenu est optimisé pour l\'Afrique de l\'Ouest et Centrale (Sénégal, Côte d\'Ivoire, Cameroun, Mali, Burkina Faso, etc.) mais fonctionne partout dans le monde.' },
         ]).map((item, idx) => `
           <div class="bg-white dark:bg-gray-900 rounded-xl border border-gray-100 dark:border-gray-800 overflow-hidden">
             <button class="w-full px-6 py-5 text-left flex items-center justify-between font-bold text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors"
@@ -385,17 +385,17 @@ export function renderHomePage(nomProjet: string, locale: string = 'fr'): string
         </svg>
 
         <h2 class="text-3xl sm:text-4xl font-extrabold mb-6 relative z-10">
-          \${isEn ? 'Ready to boost your sales?' : 'Prêt à booster vos ventes ?'}
+          ${isEn ? 'Ready to boost your sales?' : 'Prêt à booster vos ventes ?'}
         </h2>
         <p class="text-lg opacity-90 mb-10 max-w-xl mx-auto relative z-10">
-          \${isEn ? 'Join hundreds of restaurants already using MonMenu to simplify their online ordering.' : 'Rejoignez des centaines de restaurants qui utilisent déjà MonMenu pour simplifier leur commande en ligne.'}
+          ${isEn ? 'Join hundreds of restaurants already using MonMenu to simplify their online ordering.' : 'Rejoignez des centaines de restaurants qui utilisent déjà MonMenu pour simplifier leur commande en ligne.'}
         </p>
         <div class="flex flex-col sm:flex-row justify-center gap-4 relative z-10">
           <a href="/inscription" class="bg-white text-red-600 font-bold px-8 py-4 rounded-xl hover:bg-gray-50 transition-colors shadow-lg">
-            \${isEn ? 'Create my shop' : 'Créer ma boutique'}
+            ${isEn ? 'Create my shop' : 'Créer ma boutique'}
           </a>
           <a href="/contact" class="bg-red-700 text-white font-bold px-8 py-4 rounded-xl hover:bg-red-800 transition-colors border border-red-500">
-            \${isEn ? 'Contact sales' : 'Contacter un conseiller'}
+            ${isEn ? 'Contact sales' : 'Contacter un conseiller'}
           </a>
         </div>
       </div>
@@ -408,7 +408,7 @@ export function renderHomePage(nomProjet: string, locale: string = 'fr'): string
   <script>
     async function loadPlans() {
       const container = document.getElementById('plans-container');
-      const isEn = \${isEn};
+      const isEn = ${isEn};
       try {
         const res = await fetch('/api/v1/plans');
         const plans = await res.json();
@@ -442,5 +442,5 @@ export function renderHomePage(nomProjet: string, locale: string = 'fr'): string
     loadPlans();
   </script>
 </body>
-</html>\`;
+</html>`;
 }
