@@ -7,6 +7,13 @@
 // GET  /api/v1/commandes/suivi/:token - Suivi commande (public)
 // PATCH /api/v1/commandes/:id/statut - Mise à jour statut (AUTH REQUISE via dashboard)
 // POST /api/v1/commandes/valider-promo - Vérifier un code promo
+//
+// FIX (cohérence avec whatsapp.ts) — genererMessageCommande() prend désormais
+// un paramètre "origin" (domaine dynamique) au lieu d'utiliser un domaine
+// codé en dur. On construit cet origin ici avec new URL(c.req.url).origin,
+// exactement comme déjà fait pour le QR code et les médias R2 ailleurs dans
+// le code, pour que le lien de suivi WhatsApp pointe toujours vers le bon
+// domaine (production, preview *.workers.dev, ou domaine personnalisé).
 
 import { Hono } from 'hono'
 import type { Env } from '../types/database'
@@ -308,8 +315,12 @@ commandesRouter.post('/', async (c) => {
   }
 
   // §1.9 — WhatsApp notification avec mode livraison / à emporter
+  // FIX : origin dynamique passé à genererMessageCommande (voir whatsapp.ts)
+  // pour que le lien de suivi inséré dans le message soit toujours correct,
+  // quel que soit le domaine sur lequel tourne le Worker.
+  const origin = new URL(c.req.url).origin
   const modeLivraison = (data.mode_livraison ?? 'livraison') as 'livraison' | 'emporter'
-  const messageWhatsApp = genererMessageCommande(commandeComplete as any, tenantRow as any, modeLivraison)
+  const messageWhatsApp = genererMessageCommande(commandeComplete as any, tenantRow as any, origin, modeLivraison)
   const lienWhatsApp = genererLienWhatsApp(tenantRow.whatsapp_number, messageWhatsApp)
 
   c.executionCtx.waitUntil(
