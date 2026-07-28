@@ -1,13 +1,25 @@
 // src/pages/boutique.ts — Page boutique d'un restaurant (vue client)
 // ⚠️ TOUJOURS en mode LIGHT uniquement — pas de dark mode ici
 //
-// FIX (popup suivi + bouton panier) —
-//   1. #track-order-btn contient désormais un badge #track-order-status,
-//      rafraîchi en direct par boutique.js (actualiserBadgeSuivi), pour que
-//      le client voie l'avancement de sa commande sans rouvrir la page suivi.
-//   2. #cart-btn (bouton panier flottant) est réduit et repositionné en bas
-//      à DROITE (bottom-5 right-4) au lieu du centre, comme demandé — plus
-//      discret, ne masque plus le contenu central sur mobile.
+// FIX v2 (suite retours) —
+//   1. #track-order-btn déplacé du header vers un bouton flottant EN BAS À
+//      GAUCHE (symétrique du bouton panier en bas à droite), avec un badge
+//      de statut affichant soit "Suivre ma commande" (aucune commande /
+//      statut inconnu), soit le libellé exact du statut en cours
+//      (ex : "En préparation"), rafraîchi en direct par boutique.js.
+//   2. #cart-btn (bouton panier flottant) reste en bas à DROITE.
+//   3. Bouton "retour en haut" (#back-to-top-btn) : masqué par défaut,
+//      affiché par boutique.js quand l'utilisateur approche du bas de page,
+//      ramène en douceur tout en haut (bannière/header).
+//   4. Liens WhatsApp (contact direct restaurant, header + footer) : numéro
+//      normalisé via formatWhatsAppNumber() pour éviter les liens cassés
+//      quand le numéro est saisi avec "00" au lieu de "+", espaces, tirets,
+//      parenthèses, etc.
+//   5. Images légèrement réduites (bannière, logo médaillon, logo footer).
+//   6. Footer horaires : jours strictement à GAUCHE, horaires strictement à
+//      DROITE (alignement explicite, plus de rendu "centré"), police agrandie.
+//   7. Modales (panier / checkout) : hauteur et défilement adaptés mobile
+//      (meilleur usage de l'écran, scroll interne plus fluide).
 import { renderHead, jsonLdRestaurant } from '../components/head'
 
 export interface TenantBoutique {
@@ -24,6 +36,22 @@ export interface TenantBoutique {
   pdv_horaires?: string | null
   pdv_latitude?: number | null
   pdv_longitude?: number | null
+}
+
+// §WhatsApp — Normalise un numéro pour un lien wa.me fiable :
+//  - retire tout ce qui n'est pas un chiffre ou un "+"
+//  - convertit un préfixe "00" (convention internationale alternative au
+//    "+") en "+" avant de le retirer, pour ne pas générer un numéro erroné
+//    du type wa.me/0022670000000 (qui ne fonctionne pas)
+//  - retire enfin le "+" car wa.me n'accepte que des chiffres
+// ⚠️ Ceci ne peut PAS deviner un indicatif pays manquant : si le restaurant
+// a enregistré un numéro local sans indicatif (ex: "70 00 00 00"), le lien
+// restera invalide. Le champ "Numéro WhatsApp" dans Paramètres doit exiger
+// la saisie avec indicatif (+226...).
+function formatWhatsAppNumber(numeroRaw: string | null | undefined): string {
+  let n = (numeroRaw || '').replace(/[^0-9+]/g, '')
+  if (n.startsWith('00')) n = '+' + n.slice(2)
+  return n.replace(/\D/g, '')
 }
 
 // Calcul ouvert/fermé depuis JSONB horaires
@@ -79,9 +107,11 @@ function calculerStatutHoraire(horaireRaw: string | null | undefined): { ouvert:
 }
 
 // Génère un tableau HTML des horaires hebdomadaires depuis le JSONB
+// §Footer — jours strictement alignés à gauche, horaires strictement à
+// droite (colonnes de largeurs fixes), police agrandie (text-xs -> text-sm).
 function renderHorairesTable(horaireRaw: string | null | undefined): string {
   if (!horaireRaw) {
-    return `<p class="text-xs text-gray-500">Horaires non renseignés.</p>`
+    return `<p class="text-sm text-gray-500">Horaires non renseignés.</p>`
   }
 
   let horaires: Record<string, { ouvert?: boolean; debut?: string; fin?: string; open?: boolean; start?: string; end?: string }> | null = null
@@ -91,7 +121,7 @@ function renderHorairesTable(horaireRaw: string | null | undefined): string {
     return `<div class="text-sm text-gray-400 whitespace-pre-line leading-relaxed">${horaireRaw}</div>`
   }
 
-  if (!horaires) return `<p class="text-xs text-gray-500">Horaires non renseignés.</p>`
+  if (!horaires) return `<p class="text-sm text-gray-500">Horaires non renseignés.</p>`
 
   const joursFr = ['lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche']
   const joursEn = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
@@ -112,12 +142,12 @@ function renderHorairesTable(horaireRaw: string | null | undefined): string {
     const plage = (estOuvert && debut && fin) ? `${debut} – ${fin}` : (estOuvert ? 'Ouvert' : 'Fermé')
 
     return `<tr class="${estAujourdhui ? 'font-semibold bg-gray-800' : ''}">
-      <td class="py-1.5 pr-3 text-${estAujourdhui ? 'white' : 'gray-400'} text-xs">${joursLabels[jour]}${estAujourdhui ? ' ●' : ''}</td>
-      <td class="py-1.5 text-xs ${estOuvert ? 'text-gray-200' : 'text-gray-500'}">${plage}</td>
+      <td class="py-2 pl-2 pr-3 text-left align-middle text-${estAujourdhui ? 'white' : 'gray-400'} text-sm whitespace-nowrap">${joursLabels[jour]}${estAujourdhui ? ' ●' : ''}</td>
+      <td class="py-2 pr-2 text-right align-middle text-sm whitespace-nowrap ${estOuvert ? 'text-gray-200' : 'text-gray-500'}">${plage}</td>
     </tr>`
   })
 
-  return `<table class="w-full">${lignes.join('')}</table>`
+  return `<table class="w-full table-fixed"><colgroup><col style="width:40%"><col style="width:60%"></colgroup>${lignes.join('')}</table>`
 }
 
 export function renderBoutiquePage(tenant: TenantBoutique, nomProjet: string): string {
@@ -131,6 +161,7 @@ export function renderBoutiquePage(tenant: TenantBoutique, nomProjet: string): s
   // Calcul statut horaire depuis JSONB — recalculé côté client par
   // boutique.js (estOuvertMaintenant) pour rester exact toute la session.
   const statutHoraire = calculerStatutHoraire(tenant.pdv_horaires)
+  const whatsappNumeroPropre = formatWhatsAppNumber(tenant.whatsapp_number)
 
   return `${renderHead(
     `${tenant.nom} — Commander en ligne | ${nomProjet}`,
@@ -168,6 +199,7 @@ export function renderBoutiquePage(tenant: TenantBoutique, nomProjet: string): s
       --color-primary: ${primaryColor};
       --color-secondary: ${secondaryColor};
     }
+    html { scroll-behavior: smooth; }
     .btn-primary { background-color: var(--color-primary); color: white; }
     .btn-primary:hover { filter: brightness(0.9); }
     .text-primary { color: var(--color-primary); }
@@ -176,24 +208,23 @@ export function renderBoutiquePage(tenant: TenantBoutique, nomProjet: string): s
     .scrollbar-hide::-webkit-scrollbar { display: none; }
     .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
 
-    /* §Images — tailles FIXES quelle que soit la photo fournie par le
-       restaurant : object-fit: cover recadre toujours au centre, jamais
-       d'étirement ni de débordement. C'est ce qui garantit un rendu
-       homogène (bannière, logo, photos produits) indépendamment du format
-       source de l'image uploadée. */
+    /* §Images — tailles FIXES, légèrement réduites par rapport à la version
+       précédente, quelle que soit la photo fournie par le restaurant :
+       object-fit: cover recadre toujours au centre, jamais d'étirement ni
+       de débordement. */
     .boutique-banniere {
       background-size: cover;
       background-position: center;
-      height: 140px; /* hauteur fixe et raisonnable, jamais "trop grande" */
+      height: 124px; /* réduit de 140px -> 124px */
     }
     .logo-medaillon {
-      width: 72px;
-      height: 72px;
+      width: 64px; /* réduit de 72px -> 64px */
+      height: 64px;
       object-fit: cover;
     }
     .logo-footer {
-      width: 40px;
-      height: 40px;
+      width: 36px; /* réduit de 40px -> 36px */
+      height: 36px;
       object-fit: cover;
     }
 
@@ -202,11 +233,37 @@ export function renderBoutiquePage(tenant: TenantBoutique, nomProjet: string): s
     #statut-horaire-badge { background-color: ${primaryColor}1A; color: ${primaryColor}; }
     #statut-horaire-badge.statut-ferme { background-color: #FEE2E2; color: #DC2626; }
 
-    /* §UX — le panier flottant se masque en douceur quand le footer est visible.
-       FIX : plus de translate horizontal (-50%) car le bouton n'est plus centré
-       mais ancré à droite — seul un léger décalage vertical est appliqué. */
-    #cart-btn { transition: opacity .2s ease, transform .2s ease; }
-    #cart-btn.cart-btn-masque { opacity: 0; transform: translateY(16px) scale(.95); pointer-events: none; }
+    /* §UX — boutons flottants bas de page : panier (droite) + suivi de
+       commande (gauche), sur la même ligne. Se masquent en douceur quand le
+       footer entre dans le viewport (évite la superposition visuelle avec
+       les horaires/contact du footer). */
+    #cart-btn, #track-order-btn-wrap { transition: opacity .2s ease, transform .2s ease; }
+    #cart-btn.cart-btn-masque, #track-order-btn-wrap.cart-btn-masque { opacity: 0; transform: translateY(16px) scale(.95); pointer-events: none; }
+
+    /* §Retour en haut — masqué par défaut, affiché par boutique.js quand on
+       approche du bas de la page. Positionné au-dessus du bouton panier
+       pour ne jamais le chevaucher. */
+    #back-to-top-btn {
+      opacity: 0;
+      transform: translateY(12px) scale(.9);
+      pointer-events: none;
+      transition: opacity .2s ease, transform .2s ease;
+    }
+    #back-to-top-btn.visible {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+      pointer-events: auto;
+    }
+
+    /* §Scroll modales — meilleur rendu mobile : la feuille occupe presque
+       tout l'écran (au lieu de 85vh fixe), avec un défilement interne fluide
+       (momentum iOS) et sans rebond qui entraîne le fond derrière elle. */
+    .sheet-modal {
+      max-height: 94vh;
+      max-height: 94dvh;
+      overscroll-behavior: contain;
+      -webkit-overflow-scrolling: touch;
+    }
   </style>
 
   <!-- En-tête boutique : bannière + logo médaillon + nom -->
@@ -219,24 +276,16 @@ export function renderBoutiquePage(tenant: TenantBoutique, nomProjet: string): s
       <div class="absolute inset-0 bg-gradient-to-t from-black/25 via-transparent to-transparent pointer-events-none"></div>
 
       <!-- Logo médaillon, taille fixe, chevauche la bannière -->
-      <div class="absolute -bottom-7 left-4">
+      <div class="absolute -bottom-6 left-4">
         ${tenant.logo_url
           ? `<img src="${tenant.logo_url}" alt="${tenant.nom}" class="logo-medaillon rounded-2xl border-4 border-white shadow-lg bg-white">`
-          : `<div class="w-[72px] h-[72px] rounded-2xl flex items-center justify-center text-white font-bold text-2xl border-4 border-white shadow-lg" style="background-color:${primaryColor}">${tenant.nom.charAt(0)}</div>`
+          : `<div class="w-16 h-16 rounded-2xl flex items-center justify-center text-white font-bold text-xl border-4 border-white shadow-lg" style="background-color:${primaryColor}">${tenant.nom.charAt(0)}</div>`
         }
       </div>
 
-      <!-- Actions rapides (WhatsApp + suivi) en haut à droite de la bannière -->
+      <!-- Action rapide WhatsApp (contact direct), en haut à droite de la bannière -->
       <div class="absolute top-3 right-3 flex items-center gap-2">
-        <!-- FIX suivi — bouton toujours affiché tant qu'une commande a été
-             passée sur cet appareil (plus de limite 48h), avec un badge de
-             statut (#track-order-status) rafraîchi en direct par boutique.js. -->
-        <a id="track-order-btn" href="#" class="hidden flex-shrink-0 items-center gap-1.5 text-xs font-semibold text-gray-700 bg-white/95 backdrop-blur px-3 py-2 rounded-xl shadow-sm hover:bg-white transition-colors">
-          <i class="fa-solid fa-receipt"></i>
-          <span class="hidden sm:inline">Suivre ma commande</span>
-          <span id="track-order-status" class="text-[10px] font-bold text-primary"></span>
-        </a>
-        <a href="https://wa.me/${tenant.whatsapp_number.replace(/[^0-9]/g, '')}"
+        <a href="https://wa.me/${whatsappNumeroPropre}"
            target="_blank" rel="noopener"
            class="flex-shrink-0 w-10 h-10 rounded-xl bg-green-500 hover:bg-green-600 flex items-center justify-center text-white shadow-sm transition-colors"
            title="Contacter sur WhatsApp">
@@ -246,7 +295,7 @@ export function renderBoutiquePage(tenant: TenantBoutique, nomProjet: string): s
     </div>
 
     <!-- Nom + adresse, sous le logo -->
-    <div class="max-w-3xl mx-auto px-4 pt-9 pb-3">
+    <div class="max-w-3xl mx-auto px-4 pt-8 pb-3">
       <h1 class="font-bold text-xl text-gray-900 truncate">${tenant.nom}</h1>
       ${tenant.pdv_adresse ? `<div class="text-xs text-gray-400 truncate mt-0.5"><i class="fa-solid fa-location-dot mr-1"></i>${tenant.pdv_adresse}</div>` : ''}
     </div>
@@ -278,8 +327,25 @@ export function renderBoutiquePage(tenant: TenantBoutique, nomProjet: string): s
     </div>
   </main>
 
-  <!-- Bouton panier flottant — FIX : réduit et déplacé en bas à DROITE
-       (bottom-5 right-4) au lieu d'être centré, taille et paddings réduits. -->
+  <!-- §Retour en haut — visible uniquement en approchant du bas de page (géré en JS) -->
+  <button id="back-to-top-btn" onclick="scrollToTop()"
+    class="fixed bottom-24 right-4 z-40 w-11 h-11 rounded-full bg-gray-900/90 backdrop-blur text-white shadow-lg flex items-center justify-center hover:bg-gray-900 transition-colors"
+    aria-label="Revenir en haut de la page">
+    <i class="fa-solid fa-arrow-up"></i>
+  </button>
+
+  <!-- Bouton suivi de commande flottant — EN BAS À GAUCHE, symétrique du
+       panier. Masqué tant qu'aucune commande n'a été passée sur cet
+       appareil ; affiche le statut exact une fois une commande passée. -->
+  <div id="track-order-btn-wrap" class="fixed bottom-5 left-4 z-40 hidden">
+    <a id="track-order-btn" href="#"
+      class="flex items-center gap-2 bg-white border border-gray-200 text-gray-800 font-semibold px-4 py-2.5 rounded-xl shadow-lg text-sm hover:bg-gray-50 transition-colors">
+      <i class="fa-solid fa-receipt text-primary"></i>
+      <span id="track-order-label">Suivre ma commande</span>
+    </a>
+  </div>
+
+  <!-- Bouton panier flottant — EN BAS À DROITE -->
   <div id="cart-btn" class="fixed bottom-5 right-4 z-40 hidden">
     <button onclick="openCart()"
       class="btn-primary font-semibold px-4 py-2.5 rounded-xl shadow-lg flex items-center gap-2 min-w-[180px] justify-between relative text-sm">
@@ -297,8 +363,8 @@ export function renderBoutiquePage(tenant: TenantBoutique, nomProjet: string): s
   <!-- Modal Panier -->
   <div id="cart-modal" class="fixed inset-0 z-50 hidden">
     <div class="absolute inset-0 bg-black/50" onclick="closeCart()"></div>
-    <div class="absolute bottom-0 left-0 right-0 bg-white rounded-t-2xl max-h-[85vh] overflow-y-auto">
-      <div class="sticky top-0 bg-white border-b border-gray-100 px-4 py-4 flex items-center justify-between">
+    <div class="sheet-modal absolute bottom-0 left-0 right-0 bg-white rounded-t-2xl overflow-y-auto flex flex-col">
+      <div class="sticky top-0 bg-white border-b border-gray-100 px-4 py-4 flex items-center justify-between z-10">
         <button onclick="closeCart()" class="flex items-center gap-1.5 p-2 -ml-2 hover:bg-gray-100 rounded-lg transition-colors text-sm font-medium text-gray-600" aria-label="Retour">
           <i class="fa-solid fa-arrow-left"></i> Retour
         </button>
@@ -308,17 +374,17 @@ export function renderBoutiquePage(tenant: TenantBoutique, nomProjet: string): s
         </button>
       </div>
       <div id="cart-items" class="px-4 py-4 divide-y divide-gray-100"></div>
-      <div id="cart-footer" class="sticky bottom-0 bg-white border-t border-gray-100 p-4"></div>
+      <div id="cart-footer" class="sticky bottom-0 bg-white border-t border-gray-100 p-4 mt-auto"></div>
     </div>
   </div>
 
   <!-- Modal Checkout (confirmation / paiement) -->
   <div id="checkout-modal" class="fixed inset-0 z-50 hidden">
     <div class="absolute inset-0 bg-black/50" onclick="closeCheckout()"></div>
-    <div class="absolute bottom-0 left-0 right-0 bg-white rounded-t-2xl max-h-[95vh] overflow-y-auto">
+    <div class="sheet-modal absolute bottom-0 left-0 right-0 bg-white rounded-t-2xl overflow-y-auto">
       <!-- §Retour — Bouton retour explicite (icône + texte) toujours visible
            en haut de la confirmation de commande / paiement. -->
-      <div class="sticky top-0 bg-white border-b border-gray-100 px-4 py-4 flex items-center gap-3">
+      <div class="sticky top-0 bg-white border-b border-gray-100 px-4 py-4 flex items-center gap-3 z-10">
         <button onclick="closeCheckout()" class="flex items-center gap-1.5 p-2 -ml-2 hover:bg-gray-100 rounded-lg transition-colors text-sm font-medium text-gray-600" aria-label="Retour au panier">
           <i class="fa-solid fa-arrow-left"></i> Retour
         </button>
@@ -467,13 +533,13 @@ export function renderBoutiquePage(tenant: TenantBoutique, nomProjet: string): s
           <div class="flex items-center gap-3 mb-3">
             ${tenant.logo_url
               ? `<img src="${tenant.logo_url}" alt="${tenant.nom}" class="logo-footer rounded-lg object-cover border border-gray-700">`
-              : `<div class="w-10 h-10 rounded-lg flex items-center justify-center text-white font-bold text-base flex-shrink-0" style="background-color:${primaryColor}">${tenant.nom.charAt(0)}</div>`
+              : `<div class="w-9 h-9 rounded-lg flex items-center justify-center text-white font-bold text-sm flex-shrink-0" style="background-color:${primaryColor}">${tenant.nom.charAt(0)}</div>`
             }
             <span class="font-bold text-lg">${tenant.nom}</span>
           </div>
 
           <div class="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Contact</div>
-          <a href="https://wa.me/${tenant.whatsapp_number.replace(/[^0-9]/g, '')}"
+          <a href="https://wa.me/${whatsappNumeroPropre}"
              target="_blank" rel="noopener"
              class="inline-flex items-center gap-2 text-sm text-green-400 hover:text-green-300 transition-colors font-medium">
             <i class="fa-brands fa-whatsapp text-base"></i>
@@ -492,8 +558,9 @@ export function renderBoutiquePage(tenant: TenantBoutique, nomProjet: string): s
           </a>` : ''}
         </div>
 
-        <!-- Horaires calculés depuis JSONB — toujours affiché (avec repli) -->
-        <div class="sm:w-56">
+        <!-- Horaires calculés depuis JSONB — toujours affiché (avec repli).
+             §Footer — jours à gauche / horaires à droite, police agrandie. -->
+        <div class="sm:w-64 w-full">
           <div class="font-semibold text-sm mb-3 text-gray-300 flex items-center gap-2">
             <i class="fa-regular fa-clock"></i> Horaires
           </div>
