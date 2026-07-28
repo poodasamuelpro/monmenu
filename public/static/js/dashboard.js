@@ -1,4 +1,5 @@
-// MonMenu — Dashboard restaurant (JS côté client)
+// MonMenu — Dashboard restaurant (v1.5.0 — notification WhatsApp au client
+// lors de la confirmation de commande)
 //
 // CHANGELOG de ce fichier par rapport à la version précédente :
 //   ... (voir historique v1.4.0 dans les sections ci-dessous, inchangées)
@@ -240,8 +241,8 @@ async function loadCommandes() {
   content.innerHTML = `
     <div class="flex flex-wrap gap-2 mb-5">
       <button onclick="filtrerCommandes(null)" class="statut-filter-btn active px-3 py-1.5 rounded-lg text-xs font-semibold bg-red-600 text-white">Toutes</button>
-      \${['en_attente','confirmee','en_preparation','en_livraison','livree','annulee'].map(s =>
-        \`<button onclick="filtrerCommandes('\${s}')" class="statut-filter-btn px-3 py-1.5 rounded-lg text-xs font-semibold border border-gray-200 text-gray-600 hover:border-red-300 hover:text-red-600 transition-colors">\${s.replace(/_/g,' ')}</button>\`
+      ${['en_attente','confirmee','en_preparation','en_livraison','livree','annulee'].map(s =>
+        `<button onclick="filtrerCommandes('${s}')" class="statut-filter-btn px-3 py-1.5 rounded-lg text-xs font-semibold border border-gray-200 text-gray-600 hover:border-red-300 hover:text-red-600 transition-colors">${s.replace(/_/g,' ')}</button>`
       ).join('')}
       <button onclick="loadCommandes()" class="ml-auto flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-700 border border-gray-200 rounded-lg px-3 py-1.5 transition-colors">
         <i class="fa-solid fa-rotate-right"></i> Actualiser
@@ -255,7 +256,7 @@ async function loadCommandes() {
         <i class="fa-solid fa-circle-notch fa-spin text-2xl mb-3 block"></i>
         <p class="text-sm">Chargement...</p>
       </div>
-    </div>\`;
+    </div>`;
   await fetchCommandes();
 
   // §2 — Supabase Realtime remplace le polling 30s (setInterval supprimé)
@@ -297,10 +298,10 @@ async function fetchCommandes() {
     const data = await res.json();
     renderCommandes(data.commandes || [], listEl, data.total || 0);
   } catch {
-    listEl.innerHTML = \`<div class="bg-red-50 border border-red-100 rounded-xl p-4 text-center text-sm text-red-600">
+    listEl.innerHTML = `<div class="bg-red-50 border border-red-100 rounded-xl p-4 text-center text-sm text-red-600">
       <i class="fa-solid fa-circle-exclamation mr-1"></i> Erreur de chargement.
       <button onclick="fetchCommandes()" class="underline ml-1">Réessayer</button>
-    </div>\`;
+    </div>`;
   }
 }
 
@@ -312,11 +313,11 @@ function renderCommandes(commandes, container, total) {
   commandes.forEach(cmd => { _commandeRegistry[cmd.id] = cmd; });
 
   if (!commandes.length) {
-    container.innerHTML = \`<div class="text-center py-16 text-gray-400">
+    container.innerHTML = `<div class="text-center py-16 text-gray-400">
       <i class="fa-regular fa-clipboard text-5xl mb-3 block opacity-40"></i>
-      <p class="font-medium text-gray-500">Aucune commande \${currentFilter ? 'avec ce statut' : ''}</p>
+      <p class="font-medium text-gray-500">Aucune commande ${currentFilter ? 'avec ce statut' : ''}</p>
       <p class="text-xs mt-1">Les nouvelles commandes apparaissent ici automatiquement.</p>
-    </div>\`;
+    </div>`;
     return;
   }
   const STATUTS = {
@@ -327,7 +328,7 @@ function renderCommandes(commandes, container, total) {
     livree:         { label:'Livrée',        icon:'fa-check-double', cls:'statut-livree' },
     annulee:        { label:'Annulée',       icon:'fa-xmark',        cls:'statut-annulee' }
   };
-  const totalBadge = total > commandes.length ? \`<p class="text-xs text-gray-400 mb-3">\${total} commande(s) au total — 50 premières affichées</p>\` : '';
+  const totalBadge = total > commandes.length ? `<p class="text-xs text-gray-400 mb-3">${total} commande(s) au total — 50 premières affichées</p>` : '';
   container.innerHTML = totalBadge + commandes.map(cmd => {
     const statut = STATUTS[cmd.statut] || { label:cmd.statut, icon:'fa-circle', cls:'' };
     const items = typeof cmd.items_json === 'string' ? JSON.parse(cmd.items_json) : (cmd.items_json || []);
@@ -335,122 +336,353 @@ function renderCommandes(commandes, container, total) {
     let metadata = {};
     try { if (cmd.metadata) metadata = JSON.parse(cmd.metadata); } catch {}
     const remiseInfo = metadata.remise_promo > 0
-      ? \`<span class="text-xs text-green-600 bg-green-50 px-2 py-0.5 rounded">-\${(metadata.remise_promo||0).toLocaleString('fr-FR')} FCFA promo</span>\` : '';
+      ? `<span class="text-xs text-green-600 bg-green-50 px-2 py-0.5 rounded">-${(metadata.remise_promo||0).toLocaleString('fr-FR')} FCFA promo</span>` : '';
     const actions = [];
     if (cmd.statut === 'en_attente') {
-      actions.push(\`<button onclick="changerStatut('\${cmd.id}','confirmee')" class="bg-blue-600 text-white text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-blue-700"><i class="fa-solid fa-check mr-1"></i>Confirmer</button>\`);
-      actions.push(\`<button onclick="changerStatut('\${cmd.id}','annulee')" class="border border-red-200 text-red-600 text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-red-50">Annuler</button>\`);
+      actions.push(`<button onclick="changerStatut('${cmd.id}','confirmee')" class="bg-blue-600 text-white text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-blue-700"><i class="fa-solid fa-check mr-1"></i>Confirmer</button>`);
+      actions.push(`<button onclick="changerStatut('${cmd.id}','annulee')" class="border border-red-200 text-red-600 text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-red-50">Annuler</button>`);
     }
-    if (cmd.statut === 'confirmee') actions.push(\`<button onclick="changerStatut('\${cmd.id}','en_preparation')" class="bg-orange-500 text-white text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-orange-600"><i class="fa-solid fa-fire-burner mr-1"></i>Préparer</button>\`);
-    if (cmd.statut === 'en_preparation') actions.push(\`<button onclick="changerStatut('\${cmd.id}','en_livraison')" class="bg-purple-600 text-white text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-purple-700"><i class="fa-solid fa-motorcycle mr-1"></i>En livraison</button>\`);
-    if (cmd.statut === 'en_livraison') actions.push(\`<button onclick="changerStatut('\${cmd.id}','livree')" class="bg-green-600 text-white text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-green-700"><i class="fa-solid fa-check-double mr-1"></i>Livrée</button>\`);
-    return \`<div class="bg-white border border-gray-100 rounded-xl p-4 hover:shadow-sm transition-shadow mb-3">
+    if (cmd.statut === 'confirmee') actions.push(`<button onclick="changerStatut('${cmd.id}','en_preparation')" class="bg-orange-500 text-white text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-orange-600"><i class="fa-solid fa-fire-burner mr-1"></i>Préparer</button>`);
+    if (cmd.statut === 'en_preparation') actions.push(`<button onclick="changerStatut('${cmd.id}','en_livraison')" class="bg-purple-600 text-white text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-purple-700"><i class="fa-solid fa-motorcycle mr-1"></i>En livraison</button>`);
+    if (cmd.statut === 'en_livraison') actions.push(`<button onclick="changerStatut('${cmd.id}','livree')" class="bg-green-600 text-white text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-green-700"><i class="fa-solid fa-check-double mr-1"></i>Livrée</button>`);
+    return `<div class="bg-white border border-gray-100 rounded-xl p-4 hover:shadow-sm transition-shadow mb-3">
       <div class="flex items-start justify-between gap-3 mb-2">
         <div>
           <div class="flex items-center gap-2 mb-0.5">
-            <span class="font-bold text-gray-900">\${escHtml(cmd.client_nom)}</span>
-            <span class="text-xs text-gray-400">\${dateStr}</span>
+            <span class="font-bold text-gray-900">${escHtml(cmd.client_nom)}</span>
+            <span class="text-xs text-gray-400">${dateStr}</span>
           </div>
           <div class="flex items-center gap-2">
-            <span class="text-xs font-mono text-gray-400">#\${cmd.id.split('-')[0].toUpperCase()}</span>
-            <span class="text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider \${statut.cls}">
-              <i class="fa-solid \${statut.icon} mr-1"></i>\${statut.label}
-            </span>
+            <span class="text-xs text-gray-400 font-mono">#${cmd.id ? cmd.id.slice(0,8).toUpperCase() : '—'}</span>
+            ${cmd.client_telephone ? `<a href="tel:${escHtml(cmd.client_telephone)}" class="text-xs text-blue-600 hover:underline"><i class="fa-solid fa-phone text-xs mr-0.5"></i>${escHtml(cmd.client_telephone)}</a>` : ''}
           </div>
         </div>
-        <div class="text-right">
-          <div class="font-bold text-gray-900">\${(cmd.total_ttc || 0).toLocaleString('fr-FR')} FCFA</div>
-          <div class="text-[10px] text-gray-400 uppercase font-semibold">\${cmd.type_retrait === 'livraison' ? 'Livraison' : 'Sur place'}</div>
+        <span class="statut-badge ${statut.cls} flex-shrink-0"><i class="fa-solid ${statut.icon} text-xs"></i> ${statut.label}</span>
+      </div>
+      <div class="text-xs text-gray-600 bg-gray-50 rounded-lg px-3 py-2 mb-3">${items.map(i => `<span>${escHtml(i.nom)} ×${i.quantite}</span>`).join(' · ')}</div>
+      ${cmd.client_adresse ? `<div class="text-xs text-gray-500 mb-2"><i class="fa-solid fa-location-dot mr-1 text-gray-300"></i>${escHtml(cmd.client_adresse)}</div>` : ''}
+      ${cmd.notes ? `<div class="text-xs text-orange-600 bg-orange-50 rounded-lg px-3 py-1.5 mb-2"><i class="fa-solid fa-comment mr-1"></i>${escHtml(cmd.notes)}</div>` : ''}
+      <div class="flex items-center justify-between flex-wrap gap-2">
+        <div class="flex items-center gap-2 flex-wrap">
+          <div class="font-bold text-sm">${(cmd.montant_total||0).toLocaleString('fr-FR')} FCFA</div>
+          ${remiseInfo}
+          ${cmd.frais_livraison > 0 ? `<span class="text-xs text-gray-400">+${(cmd.frais_livraison).toLocaleString('fr-FR')} liv.</span>` : ''}
         </div>
+        <div class="flex gap-2 flex-wrap">${actions.join('')}</div>
       </div>
-      <div class="bg-gray-50 rounded-lg p-3 my-3">
-        <ul class="text-xs space-y-1.5 text-gray-600">
-          \${items.map(it => \`
-            <li class="flex justify-between">
-              <span><strong>\${it.quantite}x</strong> \${escHtml(it.nom)}</span>
-              <span class="text-gray-400">\${(it.prix_unitaire * it.quantite).toLocaleString('fr-FR')}</span>
-            </li>
-          \`).join('')}
-        </ul>
-        \${cmd.frais_livraison > 0 ? \`<div class="flex justify-between text-[10px] text-gray-400 mt-2 pt-2 border-t border-gray-200"><span>Frais de livraison</span><span>+\${cmd.frais_livraison.toLocaleString('fr-FR')}</span></div>\` : ''}
-        \${remiseInfo ? \`<div class="flex justify-between text-[10px] mt-1"><span>Remise promo</span><span>\${remiseInfo}</span></div>\` : ''}
-      </div>
-      \${cmd.adresse_livraison ? \`<div class="text-xs text-gray-500 mb-4 flex items-start gap-1.5 bg-blue-50/50 p-2 rounded-lg border border-blue-100/50"><i class="fa-solid fa-location-dot mt-0.5 text-blue-400"></i>\${escHtml(cmd.adresse_livraison)}</div>\` : ''}
-      <div class="flex items-center justify-between gap-2">
-        <div class="flex items-center gap-2">\${actions.join('')}</div>
-        <div class="flex gap-2">
-          <a href="https://wa.me/\${cmd.client_tel.replace(/[^0-9]/g,'')}" target="_blank" class="w-8 h-8 rounded-lg border border-gray-200 flex items-center justify-center text-green-600 hover:bg-green-50" title="Contacter le client"><i class="fa-brands fa-whatsapp"></i></a>
-          <button onclick="imprimerTicket('\${cmd.id}')" class="w-8 h-8 rounded-lg border border-gray-200 flex items-center justify-center text-gray-500 hover:bg-gray-50" title="Imprimer"><i class="fa-solid fa-print"></i></button>
-        </div>
-      </div>
-    </div>\`;
+    </div>`;
   }).join('');
+}
+
+// §WhatsApp — Construit le message de confirmation envoyé au CLIENT quand le
+// restaurant clique sur "Confirmer" (statut en_attente → confirmee). Inclut
+// le récap de commande et le lien de suivi (domaine dynamique via
+// window.location.origin — s'adapte automatiquement .workers.dev / domaine
+// personnalisé, comme partout ailleurs dans le code).
+function construireMessageConfirmationClient(cmd) {
+  const items = typeof cmd.items_json === 'string' ? JSON.parse(cmd.items_json) : (cmd.items_json || []);
+  const lignes = items.map(i => `  - ${i.nom} x${i.quantite}`).join('\n');
+  const nomRestaurant = (tenantData && tenantData.nom) ? tenantData.nom : 'notre restaurant';
+  const lienSuivi = window.location.origin + '/suivi/' + cmd.token_suivi;
+
+  let msg = `Bonjour ${cmd.client_nom},\n\n`;
+  msg += `Votre commande chez *${nomRestaurant}* est *confirmée* ✅\n\n`;
+  msg += `*Récapitulatif :*\n${lignes}\n\n`;
+  msg += `*Total :* ${(cmd.montant_total || 0).toLocaleString('fr-FR')} FCFA\n`;
+  if (cmd.frais_livraison > 0) msg += `*Frais de livraison :* ${(cmd.frais_livraison).toLocaleString('fr-FR')} FCFA\n`;
+  msg += `\nSuivez votre commande en temps réel ici :\n${lienSuivi}`;
+  return msg;
+}
+
+// §WhatsApp — Construit un lien wa.me vers le numéro du CLIENT (pas celui du
+// restaurant) avec le message pré-rempli.
+function genererLienWhatsAppClient(numero, message) {
+  const numeroNettoye = (numero || '').replace(/\D/g, '');
+  return `https://wa.me/${numeroNettoye}?text=${encodeURIComponent(message)}`;
+}
+
+// FIX WhatsApp confirmation — Lorsqu'une commande passe à "confirmee", un
+// onglet WhatsApp s'ouvre automatiquement vers le CLIENT pour le notifier
+// (récap + lien de suivi). Aucune redirection automatique pour les autres
+// statuts (Préparer/En livraison/Livrée) : le livreur contacte directement
+// le client, qui suit l'avancement sur sa page de suivi.
+//
+// Popup-safe : la fenêtre WhatsApp est ouverte de façon SYNCHRONE au moment
+// du clic (avant tout `await`), puis redirigée vers le vrai lien une fois le
+// PATCH de statut confirmé côté serveur. Si le PATCH échoue, la fenêtre est
+// simplement fermée (pas de notification envoyée pour un statut non
+// appliqué).
+async function changerStatut(commandeId, newStatut) {
+  const labels = { confirmee:'Confirmer', en_preparation:'Mettre en préparation', en_livraison:'Marquer en livraison', livree:'Marquer comme livrée', annulee:'Annuler' };
+  if (!confirm((labels[newStatut]||newStatut) + ' cette commande ?')) return;
+
+  const doitNotifierClient = newStatut === 'confirmee';
+  let whatsappWindow = null;
+  if (doitNotifierClient) {
+    whatsappWindow = window.open('about:blank', '_blank');
+  }
+
+  try {
+    const res = await fetch('/api/v1/dashboard/commandes/' + commandeId + '/statut', {
+      method: 'PATCH',
+      headers: { 'Content-Type':'application/json', 'X-Requested-With':'XMLHttpRequest' },
+      credentials: 'include',
+      body: JSON.stringify({ statut: newStatut })
+    });
+
+    if (res.ok) {
+      if (doitNotifierClient) {
+        const cmd = _commandeRegistry[commandeId];
+        if (cmd && cmd.client_telephone) {
+          const message = construireMessageConfirmationClient(cmd);
+          const lien = genererLienWhatsAppClient(cmd.client_telephone, message);
+          if (whatsappWindow) whatsappWindow.location.href = lien;
+          else window.open(lien, '_blank');
+        } else if (whatsappWindow) {
+          whatsappWindow.close();
+        }
+      }
+      await fetchCommandes();
+    } else {
+      if (whatsappWindow) whatsappWindow.close();
+      alert('Erreur lors de la mise à jour du statut.');
+    }
+  } catch {
+    if (whatsappWindow) whatsappWindow.close();
+    alert('Erreur réseau.');
+  }
 }
 
 function filtrerCommandes(statut) {
   currentFilter = statut;
-  document.querySelectorAll('.statut-filter-btn').forEach(btn => {
-    btn.classList.remove('bg-red-600','text-white','active');
-    btn.classList.add('border-gray-200','text-gray-600');
-    if ((!statut && btn.textContent === 'Toutes') || (statut && btn.onclick.toString().includes(statut))) {
-      btn.classList.add('bg-red-600','text-white','active');
-      btn.classList.remove('border-gray-200','text-gray-600');
-    }
+  document.querySelectorAll('.statut-filter-btn').forEach(b => {
+    b.classList.remove('bg-red-600','text-white');
+    b.classList.add('border','border-gray-200','text-gray-600');
   });
+  const activeBtn = statut
+    ? document.querySelector(`[onclick="filtrerCommandes('${statut}')"]`)
+    : document.querySelector(`[onclick="filtrerCommandes(null)"]`);
+  if (activeBtn) { activeBtn.classList.add('bg-red-600','text-white'); activeBtn.classList.remove('border','border-gray-200','text-gray-600'); }
   fetchCommandes();
 }
 
-/**
- * §WhatsApp — Met à jour le statut d'une commande.
- * FIX : Si passage en "confirmee", ouvre WhatsApp vers le CLIENT avec le récap.
- */
-async function changerStatut(id, statut) {
-  // §WhatsApp — Ouverture préventive d'un onglet vide pour contourner le blocage popup.
-  // Indispensable car l'ouverture doit être synchrone avec le clic utilisateur.
-  let waWindow = null;
-  if (statut === 'confirmee') {
-    waWindow = window.open('about:blank', '_blank');
-  }
-
+async function exportCommandes() {
+  const dateDebut = new Date(Date.now() - 30*86400000).toISOString().split('T')[0];
+  const dateFin = new Date().toISOString().split('T')[0];
   try {
-    const res = await fetch('/api/v1/dashboard/commandes/' + id + '/statut', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ statut }),
-      credentials: 'include'
-    });
-    if (res.ok) {
-      // §WhatsApp — Si confirmation, on peuple l'onglet ouvert précédemment.
-      if (statut === 'confirmee' && waWindow) {
-        const cmd = _commandeRegistry[id];
-        if (cmd) {
-          const items = typeof cmd.items_json === 'string' ? JSON.parse(cmd.items_json) : (cmd.items_json || []);
-          const urlSuivi = window.location.origin + '/suivi/' + cmd.id;
-          const msg = `*COMMANDE CONFIRMÉE* ✅\n\n` +
-                      `Bonjour *${cmd.client_nom}*, votre commande chez *${tenantData?.nom || 'notre restaurant'}* est confirmée !\n\n` +
-                      `*Récapitulatif :*\n` +
-                      items.map(it => `- ${it.quantite}x ${it.nom}`).join('\n') +
-                      `\n\n*Total :* ${(cmd.total_ttc || 0).toLocaleString('fr-FR')} FCFA\n\n` +
-                      `📱 Vous pouvez suivre l'avancement en direct ici : \n${urlSuivi}\n\n` +
-                      `Merci de votre confiance !`;
-          
-          waWindow.location.href = `https://wa.me/\${cmd.client_tel.replace(/[^0-9]/g,'')}?text=\${encodeURIComponent(msg)}`;
-        } else {
-          waWindow.close();
-        }
-      }
-      fetchCommandes();
-    } else {
-      if (waWindow) waWindow.close();
-      const err = await res.json();
-      alert("Erreur : " + (err.error || "Action impossible"));
-    }
-  } catch (e) {
-    if (waWindow) waWindow.close();
-    alert("Erreur réseau");
-  }
+    const res = await fetch(`/api/v1/dashboard/commandes/export-csv?date_debut=${dateDebut}&date_fin=${dateFin}`, { credentials: 'include' });
+    if (!res.ok) { alert('Erreur export.'); return; }
+    const blob = await res.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `commandes_${dateFin}.csv`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  } catch { alert('Erreur réseau.'); }
 }
 
-// ... (Le reste du fichier dashboard.js : loadMenu, loadStatistiques, etc. reste identique à la version précédente)
-// ... (Pour la brièveté, j'ai omis les sections inchangées mais elles sont présentes dans le fichier final)
-function escHtml(s) { if(!s)return ''; const m={'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":"&#039;"}; return String(s).replace(/[&<>"']/g, k=>m[k]); }
+// ==============================
+// SECTION MENU
+// ==============================
+async function loadMenu() {
+  const content = document.getElementById('dashboard-content');
+  content.innerHTML = `<div class="text-center py-8"><i class="fa-solid fa-circle-notch fa-spin text-xl text-gray-400"></i></div>`;
+  try {
+    const res = await fetch('/api/v1/dashboard/menu', { credentials: 'include' });
+    if (!res.ok) throw new Error();
+    const data = await res.json();
+    renderMenuEditor(data.categories || [], content);
+  } catch { content.innerHTML = '<p class="text-red-500 text-sm p-4">Erreur de chargement du menu.</p>'; }
+}
+
+function renderMenuEditor(categories, container) {
+  container.innerHTML = `
+    <div class="flex items-center justify-between mb-5">
+      <p class="text-sm text-gray-500">${categories.length} catégorie(s)</p>
+      <button onclick="showAddCategorieModal()" class="bg-red-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-red-700 transition-colors flex items-center gap-1.5">
+        <i class="fa-solid fa-plus text-xs"></i> Nouvelle catégorie
+      </button>
+    </div>
+    ${categories.length === 0 ? `
+      <div class="text-center py-16 border-2 border-dashed border-gray-200 rounded-2xl">
+        <i class="fa-solid fa-book-open text-4xl text-gray-200 mb-4 block"></i>
+        <p class="font-semibold text-gray-500 mb-2">Menu vide</p>
+        <p class="text-sm text-gray-400 mb-5">Commencez par créer votre première catégorie (ex: Entrées, Plats, Boissons).</p>
+        <button onclick="showAddCategorieModal()" class="bg-red-600 text-white text-sm font-semibold px-5 py-2.5 rounded-xl hover:bg-red-700">
+          <i class="fa-solid fa-plus mr-1.5"></i> Créer une catégorie
+        </button>
+      </div>` :
+    categories.map(cat => `
+      <div class="bg-white border border-gray-100 rounded-xl mb-4">
+        <div class="flex items-center justify-between px-5 py-3.5 border-b border-gray-50">
+          <div>
+            <h3 class="font-bold text-gray-900">${escHtml(cat.nom)}</h3>
+            ${cat.description ? `<p class="text-xs text-gray-400">${escHtml(cat.description)}</p>` : ''}
+          </div>
+          <div class="flex gap-2">
+            <button onclick="showAddProduitModal('${cat.id}')" class="text-xs bg-blue-50 text-blue-600 font-semibold px-3 py-1.5 rounded-lg hover:bg-blue-100 transition-colors">
+              <i class="fa-solid fa-plus mr-1"></i>Produit
+            </button>
+            <button onclick="showEditCategorieModal('${cat.id}','${escJs(cat.nom)}')" class="text-xs bg-gray-50 text-gray-600 font-semibold px-3 py-1.5 rounded-lg hover:bg-gray-100">
+              <i class="fa-solid fa-pen text-xs"></i>
+            </button>
+            <button onclick="supprimerCategorie('${cat.id}')" class="text-xs bg-red-50 text-red-500 font-semibold px-3 py-1.5 rounded-lg hover:bg-red-100">
+              <i class="fa-solid fa-trash text-xs"></i>
+            </button>
+          </div>
+        </div>
+        <div class="divide-y divide-gray-50">
+          ${(cat.produits||[]).length === 0 ? `<div class="px-5 py-4 text-xs text-gray-400 italic">Aucun produit.</div>` :
+          (cat.produits||[]).map(p => `
+            <div class="flex items-center gap-4 px-5 py-3 hover:bg-gray-50">
+              ${p.photo_url ? `<img src="${escHtml(p.photo_url)}" alt="${escHtml(p.nom)}" class="w-12 h-12 rounded-lg object-cover flex-shrink-0 border border-gray-100">` :
+                `<div class="w-12 h-12 bg-gray-100 rounded-lg flex items-center justify-center flex-shrink-0"><i class="fa-solid fa-utensils text-gray-300 text-sm"></i></div>`}
+              <div class="flex-1 min-w-0">
+                <div class="font-semibold text-sm text-gray-900 truncate">${escHtml(p.nom)}</div>
+                ${p.description ? `<div class="text-xs text-gray-400 truncate">${escHtml(p.description)}</div>` : ''}
+                <div class="text-xs font-bold text-gray-700 mt-0.5">${(p.prix||0).toLocaleString('fr-FR')} FCFA</div>
+              </div>
+              <div class="flex items-center gap-2 flex-shrink-0">
+                <span class="text-xs px-2 py-0.5 rounded-full cursor-pointer ${p.disponible ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}"
+                  onclick="toggleDisponible('${p.id}',${p.disponible?1:0})" title="${p.disponible?'Désactiver':'Activer'}">${p.disponible?'Dispo':'Indispo'}</span>
+                <button onclick="showEditProduitModal('${p.id}','${escJs(p.nom)}','${escJs(p.description||'')}',${p.prix},'${escJs(p.photo_url||'')}')" class="p-1.5 text-gray-400 hover:text-blue-600" title="Modifier">
+                  <i class="fa-solid fa-pen text-xs"></i>
+                </button>
+                <button onclick="supprimerProduit('${p.id}')" class="p-1.5 text-gray-400 hover:text-red-500" title="Supprimer">
+                  <i class="fa-solid fa-trash text-xs"></i>
+                </button>
+              </div>
+            </div>`).join('')}
+        </div>
+      </div>`).join('')}`;
+}
+
+// --- Catégories modals ---
+function showAddCategorieModal() {
+  showModal('Nouvelle catégorie', `
+    <form onsubmit="submitAddCategorie(event)" class="space-y-4">
+      <div>
+        <label class="block text-sm font-semibold text-gray-700 mb-1.5">Nom *</label>
+        <input id="cat-nom" type="text" required maxlength="100" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200" placeholder="Entrées, Plats, Boissons...">
+      </div>
+      <button type="submit" class="w-full bg-red-600 text-white font-bold py-3 rounded-xl hover:bg-red-700">Créer la catégorie</button>
+    </form>`);
+}
+async function submitAddCategorie(e) {
+  e.preventDefault();
+  const nom = document.getElementById('cat-nom').value.trim();
+  try {
+    const res = await fetch('/api/v1/dashboard/categories', {
+      method:'POST', headers:{'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials:'include',
+      body: JSON.stringify({ nom })
+    });
+    if (res.ok) { closeModal(); loadMenu(); }
+    else { const d = await res.json(); alert(d.error||'Erreur'); }
+  } catch { alert('Erreur réseau.'); }
+}
+function showEditCategorieModal(catId, nom) {
+  showModal('Modifier la catégorie', `
+    <form onsubmit="submitEditCategorie(event,'${catId}')" class="space-y-4">
+      <div>
+        <label class="block text-sm font-semibold text-gray-700 mb-1.5">Nom *</label>
+        <input id="edit-cat-nom" type="text" required maxlength="100" value="${escHtml(nom)}" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200">
+      </div>
+      <button type="submit" class="w-full bg-blue-600 text-white font-bold py-3 rounded-xl hover:bg-blue-700">Enregistrer</button>
+    </form>`);
+}
+async function submitEditCategorie(e, catId) {
+  e.preventDefault();
+  const nom = document.getElementById('edit-cat-nom').value.trim();
+  try {
+    const res = await fetch('/api/v1/dashboard/categories/' + catId, {
+      method:'PATCH', headers:{'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials:'include',
+      body: JSON.stringify({ nom })
+    });
+    if (res.ok) { closeModal(); loadMenu(); }
+    else { const d = await res.json(); alert(d.error||'Erreur'); }
+  } catch { alert('Erreur réseau.'); }
+}
+async function supprimerCategorie(catId) {
+  if (!confirm('Supprimer cette catégorie ? Elle doit être vide.')) return;
+  try {
+    const res = await fetch('/api/v1/dashboard/categories/' + catId, {
+      method:'DELETE', headers:{'X-Requested-With':'XMLHttpRequest'}, credentials:'include'
+    });
+    if (res.ok) loadMenu();
+    else { const d = await res.json(); alert(d.error||'Impossible de supprimer.'); }
+  } catch { alert('Erreur réseau.'); }
+}
+
+// --- Produits modals ---
+function showAddProduitModal(categorieId) {
+  showModal('Nouveau produit', `
+    <form onsubmit="submitAddProduit(event,'${categorieId}')" class="space-y-4">
+      <div>
+        <label class="block text-sm font-semibold text-gray-700 mb-1.5">Nom *</label>
+        <input id="prod-nom" type="text" required maxlength="200" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200" placeholder="Thiéboudienne, Jus de bissap...">
+      </div>
+      <div>
+        <label class="block text-sm font-semibold text-gray-700 mb-1.5">Description</label>
+        <textarea id="prod-desc" rows="2" maxlength="500" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200 resize-none"></textarea>
+      </div>
+      <div>
+        <label class="block text-sm font-semibold text-gray-700 mb-1.5">Prix (FCFA) *</label>
+        <input id="prod-prix" type="number" required min="0" max="999999" step="50" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200" placeholder="2500">
+      </div>
+      <div>
+        <label class="block text-sm font-semibold text-gray-700 mb-1.5">Photo (optionnel — JPEG/PNG/WebP, max 5 MB)</label>
+        <input id="prod-photo" type="file" accept="image/jpeg,image/png,image/webp" class="w-full text-sm text-gray-600 border border-gray-200 rounded-xl px-3 py-2.5">
+        <div id="upload-progress" class="hidden mt-2 text-xs text-blue-600"><i class="fa-solid fa-circle-notch fa-spin mr-1"></i>Téléversement...</div>
+        <div id="photo-preview" class="hidden mt-2"></div>
+      </div>
+      <button type="submit" class="w-full bg-red-600 text-white font-bold py-3 rounded-xl hover:bg-red-700">Ajouter le produit</button>
+    </form>`);
+}
+async function submitAddProduit(e, categorieId) {
+  e.preventDefault();
+  const nom = document.getElementById('prod-nom').value.trim();
+  const description = document.getElementById('prod-desc').value.trim();
+  const prix = parseFloat(document.getElementById('prod-prix').value);
+  const photoInput = document.getElementById('prod-photo');
+  if (!nom || isNaN(prix)) { alert('Nom et prix requis.'); return; }
+  let photo_url = null;
+  if (photoInput && photoInput.files && photoInput.files[0]) {
+    const uploadDiv = document.getElementById('upload-progress');
+    if (uploadDiv) uploadDiv.classList.remove('hidden');
+    try {
+      const fd = new FormData();
+      fd.append('file', photoInput.files[0]);
+      const upRes = await fetch('/api/v1/dashboard/upload-image', {
+        method:'POST', headers:{'X-Requested-With':'XMLHttpRequest'}, credentials:'include', body: fd
+      });
+      if (upRes.ok) { const upData = await upRes.json(); photo_url = upData.url;
+        const prev = document.getElementById('photo-preview');
+        if (prev) { prev.innerHTML = `<img src="${upData.url}" class="w-16 h-16 rounded-lg object-cover border border-green-200">`; prev.classList.remove('hidden'); }
+      } else { const err = await upRes.json(); alert('Erreur upload : '+(err.error||'Échec')); }
+    } catch { alert('Erreur upload.'); }
+    if (uploadDiv) uploadDiv.classList.add('hidden');
+  }
+  try {
+    const res = await fetch('/api/v1/dashboard/produits', {
+      method:'POST', headers:{'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials:'include',
+      body: JSON.stringify({ categorie_id: categorieId, nom, description, prix, disponible:true, photo_url })
+    });
+    if (res.ok) { closeModal(); loadMenu(); }
+    else { const d = await res.json(); alert(d.error||'Erreur'); }
+  } catch { alert('Erreur réseau.'); }
+}
+
+function showEditProduitModal(prodId, nom, description, prix, photoUrl) {
+  showModal('Modifier le produit', `
+    <form onsubmit="submitEditProduit(event,'${prodId}')" class="space-y-4">
+      <div>
+        <label class="block text-sm font-semibold text-gray-700 mb-1.5">Nom *</label>
+        <input id="edit-prod-nom" type="text" required maxlength="200" value="${escHtml(nom)}" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200">
+      </div>
+      <div>
+        <label class="block text-sm font-semibold text-gray-700 mb-1.5">Description</label>
+        <textarea id="edit-prod-desc" rows="2" maxlength="500" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200 resize-none">${escHtml(description)}</textarea>
+      </div>
+      <div>
+        <label class="block text-sm font-semibold text-gray-700 mb-1.5">Prix (FCFA) *</label>
+   
