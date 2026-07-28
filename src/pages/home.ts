@@ -447,13 +447,20 @@ export function renderHomePage(nomProjet: string, locale: string = 'fr'): string
             return list;
           }
 
+          const maxPrix = Math.max.apply(null, plans.map(function (p) { return p.prix_mensuel || 0; }));
+
           container.innerHTML = plans.map(function (p) {
             const f = p.fonctionnalites || {};
             const isPopular = !!f.recommande;
+            const isTopTier = !isPopular && p.prix_mensuel === maxPrix && maxPrix > 0;
+            const accentBorder = isPopular
+              ? 'border-red-500 ring-4 ring-red-500/10'
+              : (isTopTier ? 'border-blue-500 ring-4 ring-blue-500/10' : 'border-gray-100 dark:border-gray-800');
             const features = buildFeatures(f);
             return \`
-            <div class="bg-white dark:bg-gray-900 rounded-2xl p-8 border \${isPopular ? 'border-red-500 ring-4 ring-red-500/10' : 'border-gray-100 dark:border-gray-800'} flex flex-col relative">
+            <div class="bg-white dark:bg-gray-900 rounded-2xl p-8 border \${accentBorder} flex flex-col relative">
               \${isPopular ? \`<span class="absolute -top-4 left-1/2 -translate-x-1/2 bg-red-600 text-white text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-widest">\${isEn ? 'Most Popular' : 'Le plus populaire'}</span>\` : ''}
+              \${isTopTier ? \`<span class="absolute -top-4 left-1/2 -translate-x-1/2 bg-blue-600 text-white text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-widest">\${isEn ? 'Best Value' : 'Meilleure valeur'}</span>\` : ''}
               <h3 class="text-lg font-bold text-gray-900 dark:text-white mb-2">\${p.nom}</h3>
               \${f.sous_titre ? \`<p class="text-xs text-gray-500 dark:text-gray-400 mb-4">\${f.sous_titre}</p>\` : ''}
               <div class="mb-6">
@@ -470,7 +477,7 @@ export function renderHomePage(nomProjet: string, locale: string = 'fr'): string
                 \`;
                 }).join('')}
               </ul>
-              <a href="/inscription?plan=\${p.id}" class="w-full py-3 rounded-xl font-bold text-center transition-all \${isPopular ? 'bg-red-600 text-white hover:bg-red-700 shadow-lg shadow-red-200 dark:shadow-none' : 'bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-white hover:bg-gray-200 dark:hover:bg-gray-700'}">
+              <a href="/inscription?plan=\${p.id}" class="w-full py-3 rounded-xl font-bold text-center transition-all bg-red-600 text-white hover:bg-red-700 shadow-lg shadow-red-200 dark:shadow-none">
                 \${isEn ? 'Choose this plan' : 'Choisir ce plan'}
               </a>
             </div>
