@@ -1,4 +1,5 @@
-// src/pages/boutique.ts — Page boutique d'un restaurant (vue client) 
+// src/pages/boutique.ts — Page boutique d'un restaurant (vue client)
+// ⚠️ TOUJOURS en mode LIGHT uniquement — pas de dark mode ici
 import { renderHead, jsonLdRestaurant } from '../components/head'
 
 export interface TenantBoutique {
@@ -17,14 +18,106 @@ export interface TenantBoutique {
   pdv_longitude?: number | null
 }
 
+// Calcul ouvert/fermé depuis JSONB horaires
+// Format attendu : { "lundi": { "ouvert": true, "debut": "08:00", "fin": "22:00" }, ... }
+// ou format alternatif string : on fait le mieux possible
+function calculerStatutHoraire(horaireRaw: string | null | undefined): { ouvert: boolean; label: string } {
+  if (!horaireRaw) return { ouvert: false, label: 'Horaires non disponibles' }
+
+  let horaires: Record<string, { ouvert?: boolean; debut?: string; fin?: string; open?: boolean; start?: string; end?: string }> | null = null
+
+  try {
+    horaires = typeof horaireRaw === 'string' ? JSON.parse(horaireRaw) : horaireRaw
+  } catch {
+    return { ouvert: false, label: 'Horaires non disponibles' }
+  }
+
+  if (!horaires) return { ouvert: false, label: 'Horaires non disponibles' }
+
+  const jours = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi']
+  const joursEn = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']
+  const now = new Date()
+  const jourIdx = now.getDay() // 0=dim, 1=lun...
+  const jourFr = jours[jourIdx]
+  const jourEn = joursEn[jourIdx]
+
+  const entry = horaires[jourFr] || horaires[jourEn] || null
+  if (!entry) return { ouvert: false, label: 'Fermé aujourd\'hui' }
+
+  const estOuvert = entry.ouvert !== false && entry.open !== false
+  if (!estOuvert) return { ouvert: false, label: 'Fermé aujourd\'hui' }
+
+  const debut = entry.debut || entry.start || null
+  const fin = entry.fin || entry.end || null
+
+  if (!debut || !fin) return { ouvert: true, label: 'Ouvert' }
+
+  // Vérifier si on est dans la plage horaire
+  const [hD, mD] = debut.split(':').map(Number)
+  const [hF, mF] = fin.split(':').map(Number)
+  const nowMin = now.getHours() * 60 + now.getMinutes()
+  const debutMin = hD * 60 + mD
+  const finMin = hF * 60 + mF
+
+  if (nowMin >= debutMin && nowMin < finMin) {
+    return { ouvert: true, label: `Ouvert — jusqu'à ${fin}` }
+  } else if (nowMin < debutMin) {
+    return { ouvert: false, label: `Ouvre à ${debut}` }
+  } else {
+    return { ouvert: false, label: `Fermé — ouvre demain à ${debut}` }
+  }
+}
+
+// Génère un tableau HTML des horaires hebdomadaires depuis le JSONB
+function renderHorairesTable(horaireRaw: string | null | undefined): string {
+  if (!horaireRaw) return ''
+
+  let horaires: Record<string, { ouvert?: boolean; debut?: string; fin?: string; open?: boolean; start?: string; end?: string }> | null = null
+  try {
+    horaires = typeof horaireRaw === 'string' ? JSON.parse(horaireRaw) : horaireRaw
+  } catch {
+    return `<div class="text-sm text-gray-400 whitespace-pre-line leading-relaxed">${horaireRaw}</div>`
+  }
+
+  if (!horaires) return ''
+
+  const joursFr = ['lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche']
+  const joursEn = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+  const joursLabels: Record<string, string> = {
+    lundi: 'Lun', mardi: 'Mar', mercredi: 'Mer', jeudi: 'Jeu',
+    vendredi: 'Ven', samedi: 'Sam', dimanche: 'Dim'
+  }
+
+  const jourActuelIdx = new Date().getDay() // 0=dim
+  const jourActuelFr = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'][jourActuelIdx]
+
+  const lignes = joursFr.map((jour, i) => {
+    const entry = horaires![jour] || horaires![joursEn[i]] || null
+    const estAujourdhui = jour === jourActuelFr
+    const estOuvert = entry && entry.ouvert !== false && entry.open !== false
+    const debut = entry?.debut || entry?.start || null
+    const fin = entry?.fin || entry?.end || null
+    const plage = (estOuvert && debut && fin) ? `${debut} – ${fin}` : (estOuvert ? 'Ouvert' : 'Fermé')
+
+    return `<tr class="${estAujourdhui ? 'font-semibold bg-gray-50' : ''}">
+      <td class="py-1 pr-3 text-gray-${estAujourdhui ? '900' : '500'} text-xs">${joursLabels[jour]}${estAujourdhui ? ' ●' : ''}</td>
+      <td class="py-1 text-xs ${estOuvert ? 'text-gray-700' : 'text-gray-400'}">${plage}</td>
+    </tr>`
+  })
+
+  return `<table class="w-full">${lignes.join('')}</table>`
+}
+
 export function renderBoutiquePage(tenant: TenantBoutique, nomProjet: string): string {
   const primaryColor = tenant.couleur_primaire || '#DC2626'
   const secondaryColor = tenant.couleur_secondaire || '#1D4ED8'
   const currentYear = new Date().getFullYear()
 
-  // §4 — URL relative (pas de domaine .app statique)
   const boutiqueUrl = `/${tenant.slug}`
   const description = `Commandez vos plats chez ${tenant.nom} sur ${nomProjet}. Livraison ou retrait sur place.`
+
+  // Calcul statut horaire depuis JSONB
+  const statutHoraire = calculerStatutHoraire(tenant.pdv_horaires)
 
   return `${renderHead(
     `${tenant.nom} — Commander en ligne | ${nomProjet}`,
@@ -50,11 +143,13 @@ export function renderBoutiquePage(tenant: TenantBoutique, nomProjet: string): s
         { lang: 'fr', url: boutiqueUrl },
         { lang: 'x-default', url: boutiqueUrl }
       ],
-      extra: `<!-- Leaflet CSS — carte interactive livraison (§1.1) -->
+      extra: `<!-- Leaflet CSS — carte interactive livraison -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.css">`
     }
   )}
-<body class="font-sans bg-gray-50 dark:bg-gray-900 transition-colors">
+<!-- Forcer le mode light sur la boutique — pas de dark mode -->
+<script>document.documentElement.classList.remove('dark');</script>
+<body class="font-sans bg-gray-50 transition-colors">
   <style>
     :root {
       --color-primary: ${primaryColor};
@@ -68,27 +163,21 @@ export function renderBoutiquePage(tenant: TenantBoutique, nomProjet: string): s
   </style>
 
   <!-- En-tête boutique -->
-  <header class="bg-white dark:bg-gray-800 shadow-sm sticky top-0 z-30 transition-colors">
+  <header class="bg-white shadow-sm sticky top-0 z-30 transition-colors">
     ${tenant.banniere_url ? `<div class="h-32 bg-cover bg-center" style="background-image:url('${tenant.banniere_url}')"></div>` : ''}
     <div class="max-w-3xl mx-auto px-4 py-4 flex items-center gap-4">
       ${tenant.logo_url
-        ? `<img src="${tenant.logo_url}" alt="${tenant.nom}" class="w-14 h-14 rounded-xl object-cover border border-gray-100 dark:border-gray-700 shadow-sm flex-shrink-0">`
+        ? `<img src="${tenant.logo_url}" alt="${tenant.nom}" class="w-14 h-14 rounded-xl object-cover border border-gray-100 shadow-sm flex-shrink-0">`
         : `<div class="w-14 h-14 rounded-xl flex items-center justify-center text-white font-bold text-xl flex-shrink-0" style="background-color:${primaryColor}">${tenant.nom.charAt(0)}</div>`
       }
       <div class="flex-1 min-w-0">
-        <h1 class="font-bold text-xl text-gray-900 dark:text-white truncate">${tenant.nom}</h1>
-        <div class="flex items-center gap-1.5 text-xs text-green-600 dark:text-green-400">
+        <h1 class="font-bold text-xl text-gray-900 truncate">${tenant.nom}</h1>
+        <div class="flex items-center gap-1.5 text-xs ${statutHoraire.ouvert ? 'text-green-600' : 'text-orange-500'}">
           <i class="fa-solid fa-circle text-xs"></i>
-          <span>Ouvert — Commande en ligne</span>
+          <span>${statutHoraire.label}</span>
         </div>
-        ${tenant.pdv_adresse ? `<div class="text-xs text-gray-400 dark:text-gray-500 truncate mt-0.5"><i class="fa-solid fa-location-dot mr-1"></i>${tenant.pdv_adresse}</div>` : ''}
+        ${tenant.pdv_adresse ? `<div class="text-xs text-gray-400 truncate mt-0.5"><i class="fa-solid fa-location-dot mr-1"></i>${tenant.pdv_adresse}</div>` : ''}
       </div>
-      <!-- Bouton dark mode (§1.2) -->
-      <button id="dark-toggle" type="button"
-        class="w-9 h-9 rounded-lg border border-gray-200 dark:border-gray-600 flex items-center justify-center text-gray-600 dark:text-gray-300 hover:border-red-300 transition-colors flex-shrink-0"
-        aria-label="Changer de thème">
-        <i class="fa-solid fa-circle-half-stroke text-sm" aria-hidden="true"></i>
-      </button>
       <a href="https://wa.me/${tenant.whatsapp_number.replace(/[^0-9]/g, '')}"
          target="_blank" rel="noopener"
          class="flex-shrink-0 w-10 h-10 rounded-xl bg-green-500 hover:bg-green-600 flex items-center justify-center text-white transition-colors"
@@ -97,7 +186,7 @@ export function renderBoutiquePage(tenant: TenantBoutique, nomProjet: string): s
       </a>
     </div>
     <!-- Catégories sticky -->
-    <div class="border-t border-gray-100 dark:border-gray-700 overflow-x-auto scrollbar-hide">
+    <div class="border-t border-gray-100 overflow-x-auto scrollbar-hide">
       <nav class="max-w-3xl mx-auto px-4 flex gap-1 py-2" id="categories-nav"></nav>
     </div>
   </header>
@@ -105,7 +194,7 @@ export function renderBoutiquePage(tenant: TenantBoutique, nomProjet: string): s
   <!-- Menu -->
   <main class="max-w-3xl mx-auto px-4 py-6 pb-32" id="menu-content">
     <div class="space-y-2" id="menu-skeleton">
-      ${Array(4).fill('<div class="animate-pulse bg-gray-200 dark:bg-gray-700 rounded-xl h-20"></div>').join('')}
+      ${Array(4).fill('<div class="animate-pulse bg-gray-200 rounded-xl h-20"></div>').join('')}
     </div>
   </main>
 
@@ -126,112 +215,112 @@ export function renderBoutiquePage(tenant: TenantBoutique, nomProjet: string): s
   <!-- Modal Panier -->
   <div id="cart-modal" class="fixed inset-0 z-50 hidden">
     <div class="absolute inset-0 bg-black/50" onclick="closeCart()"></div>
-    <div class="absolute bottom-0 left-0 right-0 bg-white dark:bg-gray-800 rounded-t-2xl max-h-[85vh] overflow-y-auto">
-      <div class="sticky top-0 bg-white dark:bg-gray-800 border-b border-gray-100 dark:border-gray-700 px-4 py-4 flex items-center justify-between">
-        <h2 class="font-bold text-lg text-gray-900 dark:text-white">Votre commande</h2>
-        <button onclick="closeCart()" class="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors" aria-label="Fermer">
-          <i class="fa-solid fa-xmark text-gray-600 dark:text-gray-300"></i>
+    <div class="absolute bottom-0 left-0 right-0 bg-white rounded-t-2xl max-h-[85vh] overflow-y-auto">
+      <div class="sticky top-0 bg-white border-b border-gray-100 px-4 py-4 flex items-center justify-between">
+        <h2 class="font-bold text-lg text-gray-900">Votre commande</h2>
+        <button onclick="closeCart()" class="p-2 hover:bg-gray-100 rounded-lg transition-colors" aria-label="Fermer">
+          <i class="fa-solid fa-xmark text-gray-600"></i>
         </button>
       </div>
-      <div id="cart-items" class="px-4 py-4 divide-y divide-gray-100 dark:divide-gray-700"></div>
-      <div id="cart-footer" class="sticky bottom-0 bg-white dark:bg-gray-800 border-t border-gray-100 dark:border-gray-700 p-4"></div>
+      <div id="cart-items" class="px-4 py-4 divide-y divide-gray-100"></div>
+      <div id="cart-footer" class="sticky bottom-0 bg-white border-t border-gray-100 p-4"></div>
     </div>
   </div>
 
   <!-- Modal Checkout -->
   <div id="checkout-modal" class="fixed inset-0 z-50 hidden">
     <div class="absolute inset-0 bg-black/50" onclick="closeCheckout()"></div>
-    <div class="absolute bottom-0 left-0 right-0 bg-white dark:bg-gray-800 rounded-t-2xl max-h-[95vh] overflow-y-auto">
-      <div class="sticky top-0 bg-white dark:bg-gray-800 border-b border-gray-100 dark:border-gray-700 px-4 py-4 flex items-center gap-3">
-        <button onclick="closeCheckout()" class="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors" aria-label="Retour">
-          <i class="fa-solid fa-arrow-left text-gray-600 dark:text-gray-300"></i>
+    <div class="absolute bottom-0 left-0 right-0 bg-white rounded-t-2xl max-h-[95vh] overflow-y-auto">
+      <div class="sticky top-0 bg-white border-b border-gray-100 px-4 py-4 flex items-center gap-3">
+        <button onclick="closeCheckout()" class="p-2 hover:bg-gray-100 rounded-lg transition-colors" aria-label="Retour">
+          <i class="fa-solid fa-arrow-left text-gray-600"></i>
         </button>
-        <h2 class="font-bold text-lg text-gray-900 dark:text-white">Finaliser la commande</h2>
+        <h2 class="font-bold text-lg text-gray-900">Finaliser la commande</h2>
       </div>
       <form id="checkout-form" class="px-4 py-6 space-y-5" onsubmit="submitOrder(event)">
         <div>
-          <label class="block text-sm font-semibold text-gray-700 dark:text-gray-200 mb-1.5">
+          <label class="block text-sm font-semibold text-gray-700 mb-1.5">
             Votre prénom et nom <span class="text-red-500">*</span>
           </label>
           <input id="client-nom" type="text" required minlength="2" maxlength="100"
-            class="w-full border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200 focus:border-red-400 placeholder-gray-400 dark:placeholder-gray-500"
+            class="w-full border border-gray-200 bg-white text-gray-900 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200 focus:border-red-400 placeholder-gray-400"
             placeholder="Fatou Traoré">
         </div>
         <div>
-          <label class="block text-sm font-semibold text-gray-700 dark:text-gray-200 mb-1.5">
+          <label class="block text-sm font-semibold text-gray-700 mb-1.5">
             Téléphone <span class="text-red-500">*</span>
           </label>
           <input id="client-tel" type="tel" required
-            class="w-full border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200 focus:border-red-400 placeholder-gray-400 dark:placeholder-gray-500"
+            class="w-full border border-gray-200 bg-white text-gray-900 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200 focus:border-red-400 placeholder-gray-400"
             placeholder="+226 70 00 00 00">
         </div>
 
         <div>
-          <div class="text-sm font-semibold text-gray-700 dark:text-gray-200 mb-2">
+          <div class="text-sm font-semibold text-gray-700 mb-2">
             Mode de livraison <span class="text-red-500">*</span>
           </div>
           <div class="grid grid-cols-2 gap-3">
-            <label class="border border-gray-200 dark:border-gray-600 rounded-xl p-3 cursor-pointer hover:border-red-300 transition-colors has-[:checked]:border-red-500 has-[:checked]:bg-red-50 dark:has-[:checked]:bg-red-900/20">
+            <label class="border border-gray-200 rounded-xl p-3 cursor-pointer hover:border-red-300 transition-colors has-[:checked]:border-red-500 has-[:checked]:bg-red-50">
               <input type="radio" name="livraison-type" value="livraison" class="sr-only" checked>
               <div class="flex flex-col gap-1">
-                <i class="fa-solid fa-motorcycle text-gray-500 dark:text-gray-400 text-sm"></i>
-                <span class="text-sm font-semibold text-gray-900 dark:text-white">Livraison</span>
-                <span class="text-xs text-gray-500 dark:text-gray-400">À domicile</span>
+                <i class="fa-solid fa-motorcycle text-gray-500 text-sm"></i>
+                <span class="text-sm font-semibold text-gray-900">Livraison</span>
+                <span class="text-xs text-gray-500">À domicile</span>
               </div>
             </label>
-            <label class="border border-gray-200 dark:border-gray-600 rounded-xl p-3 cursor-pointer hover:border-red-300 transition-colors has-[:checked]:border-red-500 has-[:checked]:bg-red-50 dark:has-[:checked]:bg-red-900/20">
+            <label class="border border-gray-200 rounded-xl p-3 cursor-pointer hover:border-red-300 transition-colors has-[:checked]:border-red-500 has-[:checked]:bg-red-50">
               <input type="radio" name="livraison-type" value="emporter" class="sr-only">
               <div class="flex flex-col gap-1">
-                <i class="fa-solid fa-bag-shopping text-gray-500 dark:text-gray-400 text-sm"></i>
-                <span class="text-sm font-semibold text-gray-900 dark:text-white">À emporter</span>
-                <span class="text-xs text-gray-500 dark:text-gray-400">Sur place</span>
+                <i class="fa-solid fa-bag-shopping text-gray-500 text-sm"></i>
+                <span class="text-sm font-semibold text-gray-900">À emporter</span>
+                <span class="text-xs text-gray-500">Sur place</span>
               </div>
             </label>
           </div>
         </div>
 
         <div id="map-section">
-          <label class="block text-sm font-semibold text-gray-700 dark:text-gray-200 mb-1.5">
+          <label class="block text-sm font-semibold text-gray-700 mb-1.5">
             Votre adresse de livraison <span class="text-red-500">*</span>
           </label>
           <div class="relative mb-2">
-            <i class="fa-solid fa-location-dot absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 dark:text-gray-500"></i>
+            <i class="fa-solid fa-location-dot absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"></i>
             <input id="client-adresse" type="text"
-              class="w-full border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-xl pl-9 pr-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200 focus:border-red-400 placeholder-gray-400 dark:placeholder-gray-500"
+              class="w-full border border-gray-200 bg-white text-gray-900 rounded-xl pl-9 pr-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200 focus:border-red-400 placeholder-gray-400"
               placeholder="Quartier, rue, repère...">
           </div>
-  <!-- Carte livraison placeholder (initialisée par boutique.js quand mode livraison actif) -->
+          <!-- Carte livraison placeholder -->
           <div id="carte-livraison"
-            class="w-full h-48 bg-gray-100 dark:bg-gray-700 rounded-xl border border-gray-200 dark:border-gray-600 overflow-hidden">
-            <div class="flex items-center justify-center h-full text-gray-500 dark:text-gray-400 text-sm" id="carte-placeholder">
+            class="w-full h-48 bg-gray-100 rounded-xl border border-gray-200 overflow-hidden">
+            <div class="flex items-center justify-center h-full text-gray-500 text-sm" id="carte-placeholder">
               <div class="text-center">
-                <i class="fa-solid fa-map text-3xl text-gray-300 dark:text-gray-600 mb-2 block"></i>
+                <i class="fa-solid fa-map text-3xl text-gray-300 mb-2 block"></i>
                 <span>Carte de livraison</span><br>
                 <button type="button" onclick="geolocaliser()"
-                  class="mt-2 text-xs text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1 mx-auto">
+                  class="mt-2 text-xs text-blue-600 hover:underline flex items-center gap-1 mx-auto">
                   <i class="fa-solid fa-location-crosshairs"></i> Utiliser ma position
                 </button>
               </div>
             </div>
           </div>
-          <div id="frais-livraison-detail" class="mt-2 text-xs text-gray-500 dark:text-gray-400"></div>
+          <div id="frais-livraison-detail" class="mt-2 text-xs text-gray-500"></div>
         </div>
 
         <div>
-          <label class="block text-sm font-semibold text-gray-700 dark:text-gray-200 mb-1.5">Notes (facultatif)</label>
+          <label class="block text-sm font-semibold text-gray-700 mb-1.5">Notes (facultatif)</label>
           <textarea id="client-notes" maxlength="500" rows="2"
-            class="w-full border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200 focus:border-red-400 resize-none placeholder-gray-400 dark:placeholder-gray-500"
+            class="w-full border border-gray-200 bg-white text-gray-900 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200 focus:border-red-400 resize-none placeholder-gray-400"
             placeholder="Instructions particulières, étage, code..."></textarea>
         </div>
 
         <!-- Code promo -->
         <div>
-          <label class="block text-sm font-semibold text-gray-700 dark:text-gray-200 mb-1.5">
+          <label class="block text-sm font-semibold text-gray-700 mb-1.5">
             <i class="fa-solid fa-ticket mr-1"></i> Code promo (facultatif)
           </label>
           <div class="flex gap-2">
             <input id="promo-input" type="text" maxlength="20" autocomplete="off"
-              class="flex-1 border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-xl px-4 py-3 text-sm uppercase tracking-widest focus:outline-none focus:ring-2 focus:ring-red-200 focus:border-red-400 placeholder-gray-400 dark:placeholder-gray-500"
+              class="flex-1 border border-gray-200 bg-white text-gray-900 rounded-xl px-4 py-3 text-sm uppercase tracking-widest focus:outline-none focus:ring-2 focus:ring-red-200 focus:border-red-400 placeholder-gray-400"
               placeholder="EX : PROMO20"
               onkeydown="if(event.key==='Enter'){event.preventDefault();appliquerCodePromo();}">
             <button id="promo-btn" type="button" onclick="appliquerCodePromo()"
@@ -243,21 +332,21 @@ export function renderBoutiquePage(tenant: TenantBoutique, nomProjet: string): s
         </div>
 
         <!-- Récapitulatif -->
-        <div class="bg-gray-50 dark:bg-gray-700/50 rounded-xl p-4">
+        <div class="bg-gray-50 rounded-xl p-4">
           <div class="flex justify-between text-sm mb-1">
-            <span class="text-gray-600 dark:text-gray-300">Sous-total</span>
-            <span id="recap-sous-total" class="font-semibold text-gray-900 dark:text-white">0 FCFA</span>
+            <span class="text-gray-600">Sous-total</span>
+            <span id="recap-sous-total" class="font-semibold text-gray-900">0 FCFA</span>
           </div>
           <div id="recap-promo-row" class="flex justify-between text-sm mb-1 hidden">
-            <span class="text-green-600 dark:text-green-400 font-medium"><i class="fa-solid fa-ticket mr-1"></i>Remise promo</span>
-            <span id="recap-remise" class="font-semibold text-green-600 dark:text-green-400">— FCFA</span>
+            <span class="text-green-600 font-medium"><i class="fa-solid fa-ticket mr-1"></i>Remise promo</span>
+            <span id="recap-remise" class="font-semibold text-green-600">— FCFA</span>
           </div>
           <div class="flex justify-between text-sm mb-3">
-            <span class="text-gray-600 dark:text-gray-300">Frais de livraison</span>
-            <span id="recap-livraison" class="font-semibold text-gray-900 dark:text-white">— FCFA</span>
+            <span class="text-gray-600">Frais de livraison</span>
+            <span id="recap-livraison" class="font-semibold text-gray-900">— FCFA</span>
           </div>
-          <div class="flex justify-between font-bold text-base border-t border-gray-200 dark:border-gray-600 pt-2">
-            <span class="text-gray-900 dark:text-white">Total</span>
+          <div class="flex justify-between font-bold text-base border-t border-gray-200 pt-2">
+            <span class="text-gray-900">Total</span>
             <span id="recap-total" class="text-primary">— FCFA</span>
           </div>
         </div>
@@ -267,7 +356,7 @@ export function renderBoutiquePage(tenant: TenantBoutique, nomProjet: string): s
           <i class="fa-brands fa-whatsapp"></i>
           <span>Confirmer et envoyer sur WhatsApp</span>
         </button>
-        <p class="text-xs text-gray-400 dark:text-gray-500 text-center">
+        <p class="text-xs text-gray-400 text-center">
           En confirmant, vous serez redirigé vers WhatsApp pour finaliser avec le restaurant.
         </p>
       </form>
@@ -307,13 +396,13 @@ export function renderBoutiquePage(tenant: TenantBoutique, nomProjet: string): s
           </a>` : ''}
         </div>
 
-        <!-- Horaires -->
+        <!-- Horaires calculés depuis JSONB -->
         ${tenant.pdv_horaires ? `
         <div class="sm:w-56">
-          <div class="font-semibold text-sm mb-2 text-gray-300 flex items-center gap-2">
+          <div class="font-semibold text-sm mb-3 text-gray-300 flex items-center gap-2">
             <i class="fa-regular fa-clock"></i> Horaires
           </div>
-          <div class="text-sm text-gray-400 whitespace-pre-line leading-relaxed">${tenant.pdv_horaires}</div>
+          ${renderHorairesTable(tenant.pdv_horaires)}
         </div>` : ''}
       </div>
 
@@ -328,20 +417,14 @@ export function renderBoutiquePage(tenant: TenantBoutique, nomProjet: string): s
     </div>
   </footer>
 
-  <!-- Leaflet JS — carte interactive (§1.1) -->
+  <!-- Leaflet JS — carte interactive -->
   <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.js"></script>
   <script src="/static/js/main.js"></script>
   <script src="/static/js/boutique.js"></script>
   <script>
-    // §2.4 : TENANT_ID retiré de la variable globale exposée.
-    // L'API utilise TENANT_SLUG (non sensible) pour identifier le tenant.
-    // TENANT_ID (UUID interne) n'est plus exposé côté client.
     const TENANT_SLUG = '${tenant.slug}';
     const WHATSAPP_NUMBER = '${tenant.whatsapp_number}';
     const PRIMARY_COLOR = '${primaryColor}';
-    // initBoutique reçoit maintenant le slug (non sensible) uniquement.
-    // L'API /api/v1/commandes accepte tenant_id via le champ tenant_slug
-    // résolu côté serveur, OU on le passe via une requête préalable au tenant.
     if (typeof initBoutique === 'function') initBoutique(TENANT_SLUG, TENANT_SLUG);
   </script>
 </body>

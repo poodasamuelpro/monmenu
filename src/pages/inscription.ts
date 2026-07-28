@@ -211,7 +211,7 @@ export function renderInscriptionPage(nomProjet: string): string {
             successEl.textContent = data.message || 'Compte créé ! Redirection vers votre tableau de bord...';
             successEl.classList.remove('hidden');
             e.target.reset();
-            setTimeout(() => { window.location.href = '/dashboard/commandes'; }, 2000);
+            setTimeout(() => { window.location.href = '/bienvenue'; }, 2000);
           } else {
             successEl.textContent = 'Compte créé ! Vérifiez votre email pour confirmer, puis connectez-vous.';
             successEl.classList.remove('hidden');

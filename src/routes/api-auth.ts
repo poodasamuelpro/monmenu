@@ -326,6 +326,7 @@ authRouter.post('/register', async (c) => {
     slug: newTenant.slug,
     tenant_id: newTenant.id,
     boutique_url: `/${newTenant.slug}`,
+    redirect_to: '/bienvenue',
     ...(authData.session ? {
       tenant: {
         id: newTenant.id,

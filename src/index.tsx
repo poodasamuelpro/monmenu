@@ -29,6 +29,9 @@ import { renderDashboardPage } from './pages/dashboard'
 import { renderSuiviPage } from './pages/suivi'
 import { renderBoutiquePage } from './pages/boutique'
 import { render404Page } from './pages/not-found'
+import { renderBienvenuePage } from './pages/bienvenue'
+import { renderFonctionnalitesPage } from './pages/fonctionnalites'
+import { renderTarifsPage } from './pages/tarifs'
 
 const app = new Hono<{ Bindings: Env }>()
 
@@ -258,7 +261,8 @@ app.get('/suivi/:token', async (c) => {
   setSecurityHeaders(c)
   const token = c.req.param('token')
   const nomProjet = await getNomProjet(c.env)
-  return c.html(renderSuiviPage(token, nomProjet))
+  const locale = resolveLocale(c)
+  return c.html(renderSuiviPage(token, nomProjet, locale))
 })
 
 // ---- Page d'accueil ----
@@ -278,11 +282,27 @@ app.get('/', async (c) => {
 // IMPORTANT : Ces routes DOIVENT être définies AVANT /:slug
 // sinon Hono capture tout avec le paramètre générique
 
-// "Fonctionnalités" et "Tarifs" ne sont plus des pages séparées :
-// ce sont des sections de la page d'accueil (#fonctionnalites / #tarifs).
-// On redirige les anciennes URLs pour ne pas casser les liens existants / le SEO.
-app.get('/fonctionnalites', (c) => c.redirect('/#fonctionnalites', 301))
-app.get('/tarifs', (c) => c.redirect('/#tarifs', 301))
+// ---- Page Fonctionnalités (i18n) ----
+app.get('/fonctionnalites', async (c) => {
+  setSecurityHeaders(c)
+  const nomProjet = await getNomProjet(c.env)
+  const locale = resolveLocale(c)
+  if (c.req.query('lang') === 'en' || c.req.query('lang') === 'fr') {
+    c.header('Set-Cookie', `monmenu-lang=${locale}; Path=/; Max-Age=31536000; SameSite=Lax`)
+  }
+  return c.html(renderFonctionnalitesPage(nomProjet, locale))
+})
+
+// ---- Page Tarifs (i18n) ----
+app.get('/tarifs', async (c) => {
+  setSecurityHeaders(c)
+  const nomProjet = await getNomProjet(c.env)
+  const locale = resolveLocale(c)
+  if (c.req.query('lang') === 'en' || c.req.query('lang') === 'fr') {
+    c.header('Set-Cookie', `monmenu-lang=${locale}; Path=/; Max-Age=31536000; SameSite=Lax`)
+  }
+  return c.html(renderTarifsPage(nomProjet, locale))
+})
 
 app.get('/contact', async (c) => {
   setSecurityHeaders(c)
@@ -319,7 +339,11 @@ app.get('/blog', async (c) => {
     console.error('[Blog] Erreur récupération articles:', err instanceof Error ? err.message : err)
   }
 
-  return c.html(renderBlogPage(nomProjet, articles))
+  const locale = resolveLocale(c)
+  if (c.req.query('lang') === 'en' || c.req.query('lang') === 'fr') {
+    c.header('Set-Cookie', `monmenu-lang=${locale}; Path=/; Max-Age=31536000; SameSite=Lax`)
+  }
+  return c.html(renderBlogPage(nomProjet, articles, locale))
 })
 
 async function getArticlesPublies(env: Env) {
@@ -363,32 +387,38 @@ app.get('/blog/:slug', async (c) => {
   }
 
   if (!article) {
-    return c.html(render404Page(), 404)
+    const nomP = await getNomProjet(c.env)
+    return c.html(render404Page(nomP, 'fr'), 404)
   }
 
-  return c.html(renderArticlePage(nomProjet, article))
+  const locale = resolveLocale(c)
+  return c.html(renderArticlePage(nomProjet, article, locale))
 })
 
 // ---- Pages légales ----
 app.get('/legal/cgu', async (c) => {
   setSecurityHeaders(c)
   const nomProjet = await getNomProjet(c.env)
-  return c.html(renderLegalPage('cgu', nomProjet))
+  const locale = resolveLocale(c)
+  return c.html(renderLegalPage('cgu', nomProjet, locale))
 })
 app.get('/legal/confidentialite', async (c) => {
   setSecurityHeaders(c)
   const nomProjet = await getNomProjet(c.env)
-  return c.html(renderLegalPage('confidentialite', nomProjet))
+  const locale = resolveLocale(c)
+  return c.html(renderLegalPage('confidentialite', nomProjet, locale))
 })
 app.get('/legal/mentions', async (c) => {
   setSecurityHeaders(c)
   const nomProjet = await getNomProjet(c.env)
-  return c.html(renderLegalPage('mentions', nomProjet))
+  const locale = resolveLocale(c)
+  return c.html(renderLegalPage('mentions', nomProjet, locale))
 })
 app.get('/legal/cookies', async (c) => {
   setSecurityHeaders(c)
   const nomProjet = await getNomProjet(c.env)
-  return c.html(renderLegalPage('cookies', nomProjet))
+  const locale = resolveLocale(c)
+  return c.html(renderLegalPage('cookies', nomProjet, locale))
 })
 
 // ---- Connexion & Création de compte ----
@@ -450,6 +480,29 @@ app.get('/dashboard/*', async (c) => {
   return c.html(renderDashboardPage(nomProjet, c.env.SUPABASE_URL, c.env.SUPABASE_ANON_KEY))
 })
 
+// ---- Page Bienvenue — onboarding post-inscription (page PRIVÉE, auth requise) ----
+app.get('/bienvenue', async (c) => {
+  setSecurityHeaders(c)
+
+  const token = getCookie(c, ACCESS_TOKEN_COOKIE)
+  if (!token) {
+    return c.redirect('/connexion', 302)
+  }
+
+  try {
+    const supabase = createSupabaseClient(c.env)
+    const { data: { user }, error } = await supabase.auth.getUser(token)
+    if (error || !user) {
+      return c.redirect('/connexion', 302)
+    }
+  } catch {
+    return c.redirect('/connexion', 302)
+  }
+
+  const nomProjet = await getNomProjet(c.env)
+  return c.html(renderBienvenuePage(nomProjet))
+})
+
 // ---- Page boutique restaurant (DOIT être EN DERNIER — route générique) ----
 // Cette route /:slug capture tout ce qui n'a pas été intercepté avant.
 // Elle cherche le slug dans Supabase — si non trouvé → 404
@@ -501,7 +554,8 @@ app.get('/:slug', async (c) => {
   }
 
   if (!tenant) {
-    return c.html(render404Page(), 404)
+    const nomP = await getNomProjet(c.env)
+    return c.html(render404Page(nomP, 'fr'), 404)
   }
 
   const nomProjet = await getNomProjet(c.env)
@@ -509,8 +563,9 @@ app.get('/:slug', async (c) => {
 })
 
 // ---- 404 ----
-app.notFound((c) => {
-  return c.html(render404Page(), 404)
+app.notFound(async (c) => {
+  const nomP = await getNomProjet(c.env).catch(() => 'MonMenu')
+  return c.html(render404Page(nomP, 'fr'), 404)
 })
 
 // ---- Erreurs globales ----

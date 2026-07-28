@@ -4,15 +4,17 @@
 import { renderHead } from '../components/head'
 import { renderNav } from '../components/nav'
 import { renderFooter } from '../components/footer'
+import { getTranslations } from '../i18n'
 
-export function renderTarifsPage(nomProjet: string): string {
+export function renderTarifsPage(nomProjet: string, locale: string = 'fr'): string {
+  const t = getTranslations(locale)
   return `${renderHead(
-    `Tarifs — ${nomProjet}`,
-    `Tarifs transparents sans commission pour votre restaurant. Choisissez votre forfait mensuel ou annuel. Gratuit pour commencer.`,
+    `${t.tarifs.meta_title} — ${nomProjet}`,
+    t.tarifs.meta_desc,
     nomProjet
   )}
-<body class="font-sans bg-white text-gray-900">
-  ${renderNav(nomProjet, 'tarifs')}
+<body class="font-sans bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 transition-colors">
+  ${renderNav(nomProjet, 'tarifs', locale)}
 
   <!-- Hero tarifs -->
   <section class="py-16 bg-gradient-to-b from-gray-50 to-white" aria-labelledby="pricing-hero-heading">
@@ -223,7 +225,7 @@ export function renderTarifsPage(nomProjet: string): string {
     </div>
   </section>
 
-  ${renderFooter(nomProjet)}
+  ${renderFooter(nomProjet, locale)}
   <script src="/static/js/main.js"></script>
   <script>
     let deviseCourante = 'FCFA';

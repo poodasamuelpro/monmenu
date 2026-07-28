@@ -1401,4 +1401,105 @@ dashboardRouter.get('/stats-journalieres', async (c) => {
   return c.json({ stats: liste, totaux, periode_jours: jours })
 })
 
+// ---- POST /api/v1/dashboard/setup-restaurant — Onboarding bienvenue ----
+dashboardRouter.post('/setup-restaurant', async (c) => {
+  setSecurityHeaders(c)
+  const auth = await verifyAuth(c)
+  if (!auth) return c.json({ error: 'Non authentifié.' }, 401)
+
+  let formData: FormData
+  try {
+    formData = await c.req.formData()
+  } catch {
+    return c.json({ error: 'Formulaire multipart invalide.' }, 400)
+  }
+
+  const supabase = createSupabaseClientWithToken(c.env, auth.token)
+  const origin = new URL(c.req.url).origin
+
+  const nom          = (formData.get('nom') as string | null)?.trim() || null
+  const adresse      = (formData.get('adresse') as string | null)?.trim() || null
+  const telephone    = (formData.get('telephone') as string | null)?.trim() || null
+  const couleurPrim  = (formData.get('couleur_primaire') as string | null)?.trim() || '#DC2626'
+  const couleurSec   = (formData.get('couleur_secondaire') as string | null)?.trim() || '#1D4ED8'
+  const horairesRaw  = (formData.get('horaires') as string | null) || null
+
+  let horairesJson: Record<string, unknown> | null = null
+  if (horairesRaw) {
+    try { horairesJson = JSON.parse(horairesRaw) } catch { /* ignore */ }
+  }
+
+  // Upload logo si fourni
+  let logoUrl: string | null = null
+  const logoFile = formData.get('logo') as File | null
+  if (logoFile && logoFile.size > 0 && c.env.R2_MEDIA) {
+    const ext = (logoFile.type.split('/')[1] || 'jpg').replace('jpeg', 'jpg')
+    const key = `${auth.tenant_id}/logo-${Date.now()}.${ext}`
+    const buffer = await logoFile.arrayBuffer()
+    await c.env.R2_MEDIA.put(key, buffer, {
+      httpMetadata: { contentType: logoFile.type },
+      customMetadata: { tenant_id: auth.tenant_id }
+    })
+    logoUrl = `${origin}/api/v1/media/${encodeURIComponent(key)}`
+  }
+
+  // Upload bannière si fournie
+  let banniereUrl: string | null = null
+  const banniereFile = formData.get('banniere') as File | null
+  if (banniereFile && banniereFile.size > 0 && c.env.R2_MEDIA) {
+    const ext = (banniereFile.type.split('/')[1] || 'jpg').replace('jpeg', 'jpg')
+    const key = `${auth.tenant_id}/banniere-${Date.now()}.${ext}`
+    const buffer = await banniereFile.arrayBuffer()
+    await c.env.R2_MEDIA.put(key, buffer, {
+      httpMetadata: { contentType: banniereFile.type },
+      customMetadata: { tenant_id: auth.tenant_id }
+    })
+    banniereUrl = `${origin}/api/v1/media/${encodeURIComponent(key)}`
+  }
+
+  // Mise à jour du tenant (nom, logo, bannière, couleurs)
+  const tenantUpdate: Record<string, unknown> = {
+    couleur_primaire: couleurPrim,
+    couleur_secondaire: couleurSec
+  }
+  if (nom) tenantUpdate.nom = nom
+  if (logoUrl) tenantUpdate.logo_url = logoUrl
+  if (banniereUrl) tenantUpdate.banniere_url = banniereUrl
+
+  const { error: errTenant } = await supabase
+    .from('tenants')
+    .update(tenantUpdate)
+    .eq('id', auth.tenant_id)
+
+  if (errTenant) {
+    return c.json({ error: 'Erreur mise à jour tenant.', detail: errTenant.message }, 500)
+  }
+
+  // Mise à jour du point de vente principal (adresse, horaires)
+  const pdvUpdate: Record<string, unknown> = {}
+  if (nom) pdvUpdate.nom = nom
+  if (adresse) pdvUpdate.adresse = adresse
+  if (horairesJson) pdvUpdate.horaires = horairesJson
+  if (telephone) pdvUpdate.telephone = telephone
+
+  if (Object.keys(pdvUpdate).length > 0) {
+    const { error: errPdv } = await supabase
+      .from('points_de_vente')
+      .update(pdvUpdate)
+      .eq('tenant_id', auth.tenant_id)
+      .eq('actif', true)
+
+    if (errPdv) {
+      console.error('Erreur mise à jour PDV:', errPdv.message)
+      // Non bloquant — on continue
+    }
+  }
+
+  return c.json({
+    success: true,
+    message: 'Restaurant configuré avec succès.',
+    redirect: '/dashboard/home'
+  })
+})
+
 export { dashboardRouter }

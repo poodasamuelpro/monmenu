@@ -4,15 +4,17 @@
 import { renderHead } from '../components/head'
 import { renderNav } from '../components/nav'
 import { renderFooter } from '../components/footer'
+import { getTranslations } from '../i18n'
 
-export function renderFonctionnalitesPage(nomProjet: string): string {
+export function renderFonctionnalitesPage(nomProjet: string, locale: string = 'fr'): string {
+  const t = getTranslations(locale)
   return `${renderHead(
-    `Fonctionnalités complètes — ${nomProjet}`,
-    `Découvrez toutes les fonctionnalités de ${nomProjet} : boutique en ligne, commandes WhatsApp, géolocalisation, QR code, tableau de bord restaurant, livreurs.`,
+    `${t.fonctionnalites.meta_title} — ${nomProjet}`,
+    t.fonctionnalites.meta_desc,
     nomProjet
   )}
-<body class="font-sans bg-white text-gray-900">
-  ${renderNav(nomProjet, 'fonctionnalites')}
+<body class="font-sans bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 transition-colors">
+  ${renderNav(nomProjet, 'fonctionnalites', locale)}
 
   <!-- Hero section -->
   <section class="py-16 bg-gradient-to-b from-gray-50 to-white" aria-labelledby="features-hero-heading">
@@ -235,7 +237,7 @@ export function renderFonctionnalitesPage(nomProjet: string): string {
     </div>
   </section>
 
-  ${renderFooter(nomProjet)}
+  ${renderFooter(nomProjet, locale)}
   <script src="/static/js/main.js"></script>
 </body>
 </html>`
