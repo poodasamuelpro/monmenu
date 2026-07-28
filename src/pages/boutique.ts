@@ -172,12 +172,20 @@ export function renderBoutiquePage(tenant: TenantBoutique, nomProjet: string): s
       }
       <div class="flex-1 min-w-0">
         <h1 class="font-bold text-xl text-gray-900 truncate">${tenant.nom}</h1>
-        <div class="flex items-center gap-1.5 text-xs ${statutHoraire.ouvert ? 'text-green-600' : 'text-orange-500'}">
+        <!-- FIX : badge horaires toujours en rouge (ouvert ou fermé), au lieu de
+             vert/orange selon le statut — demande explicite du restaurateur. -->
+        <div class="flex items-center gap-1.5 text-xs text-red-600">
           <i class="fa-solid fa-circle text-xs"></i>
           <span>${statutHoraire.label}</span>
         </div>
         ${tenant.pdv_adresse ? `<div class="text-xs text-gray-400 truncate mt-0.5"><i class="fa-solid fa-location-dot mr-1"></i>${tenant.pdv_adresse}</div>` : ''}
       </div>
+      <!-- FIX : bouton "Suivre ma commande" — affiché en JS (boutique.js) si une
+           commande récente (< 48h) est trouvée en localStorage pour cette boutique. -->
+      <a id="track-order-btn" href="#" class="hidden flex-shrink-0 items-center gap-1.5 text-xs font-semibold text-gray-600 border border-gray-200 hover:border-red-200 hover:text-red-600 px-3 py-2 rounded-xl transition-colors">
+        <i class="fa-solid fa-receipt"></i>
+        <span class="hidden sm:inline">Suivre ma commande</span>
+      </a>
       <a href="https://wa.me/${tenant.whatsapp_number.replace(/[^0-9]/g, '')}"
          target="_blank" rel="noopener"
          class="flex-shrink-0 w-10 h-10 rounded-xl bg-green-500 hover:bg-green-600 flex items-center justify-center text-white transition-colors"
