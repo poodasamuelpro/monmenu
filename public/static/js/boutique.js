@@ -11,6 +11,39 @@ let fraisLivraison = 0;
 let clientLat = null;
 let clientLon = null;
 
+// FIX — cette variable était utilisée dans renderProduitCard() mais jamais
+// déclarée : ça provoquait un ReferenceError qui plantait tout le rendu du
+// menu dès le premier produit (le squelette gris restait affiché pour
+// toujours, même quand l'API renvoyait bien les données).
+let _produitRegistry = {};
+
+// FIX — le clic sur les boutons +/- des cartes produits (data-action="add"/
+// "remove") n'était jamais écouté nulle part : les boutons existaient dans
+// le HTML mais rien ne réagissait au clic, donc impossible d'ajouter au
+// panier → le panier restait toujours vide → le bouton flottant "Voir le
+// panier" ne s'affichait jamais. On attache l'écouteur UNE SEULE FOIS sur
+// le conteneur parent (délégation d'événements), pas à chaque re-rendu.
+let _menuListenerAttache = false;
+function attacherEcouteurMenu() {
+  if (_menuListenerAttache) return;
+  const menuContent = document.getElementById('menu-content');
+  if (!menuContent) return;
+  menuContent.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-action]');
+    if (!btn) return;
+    const produitId = btn.getAttribute('data-produit-id');
+    const action = btn.getAttribute('data-action');
+    if (!produitId) return;
+    if (action === 'add') {
+      const produit = _produitRegistry[produitId];
+      if (produit) addToCart(produit);
+    } else if (action === 'remove') {
+      removeFromCart(produitId);
+    }
+  });
+  _menuListenerAttache = true;
+}
+
 // ---- Carte Leaflet (§1.1) ----
 let livraisonMap = null;
 let livraisonMarker = null;
@@ -30,7 +63,9 @@ async function initBoutique(tid, slug) {
   loadCart();
   await Promise.all([loadTenant(), loadMenu()]);
   renderMenu();
+  attacherEcouteurMenu();
   updateCartUI();
+  afficherBoutonSuiviSiCommandeRecente();
 }
 
 // ---- Panier (localStorage) ----
@@ -95,7 +130,7 @@ function renderMenu() {
     return;
   }
 
-  // Navigation catégories
+  // Navigation catégories — TOUTES les catégories créées, même sans produit
   if (categoriesNav) {
     categoriesNav.innerHTML = menuData.categories.map((cat, i) =>
       `<a href="#cat-${cat.id}" class="whitespace-nowrap px-3 py-1.5 rounded-lg text-sm font-medium ${i === 0 ? 'bg-red-600 text-white' : 'text-gray-600 hover:bg-gray-100'} transition-colors">${escHtml(cat.nom)}</a>`
@@ -103,25 +138,30 @@ function renderMenu() {
   }
 
   // Menu complet
+  // FIX — avant : `if (!categorie.produits || categorie.produits.length === 0) continue`
+  // sautait purement et simplement toute catégorie sans produit. Toutes les
+  // catégories créées doivent maintenant s'afficher, avec un message si vide.
   let html = '';
   for (const categorie of menuData.categories) {
-    if (!categorie.produits || categorie.produits.length === 0) continue;
     html += `<section id="cat-${categorie.id}" class="mb-8">`;
     html += `<h2 class="font-bold text-lg text-gray-900 mb-4 px-0">${escHtml(categorie.nom)}</h2>`;
-    html += `<div class="space-y-3">`;
-    for (const produit of categorie.produits) {
-      html += renderProduitCard(produit);
+    if (!categorie.produits || categorie.produits.length === 0) {
+      html += `<p class="text-sm text-gray-400 italic px-1">Aucun produit disponible pour le moment.</p>`;
+    } else {
+      html += `<div class="space-y-3">`;
+      for (const produit of categorie.produits) {
+        html += renderProduitCard(produit);
+      }
+      html += '</div>';
     }
-    html += '</div></section>';
+    html += '</section>';
   }
 
   if (menuContent) menuContent.innerHTML = html;
 }
 
 // §6.3 — Fix XSS : remplace onclick="addToCart(JSON.stringify(...))" par data-* + addEventListener
-// L'ancien pattern injectait du JSON dans un attribut onclick — fragile et XSS-risqué si un
-// nom de produit contient des guillemets ou du code. Le nouveau pattern utilise data-produit-id
-// et délègue les events via addEventListener sur le conteneur parent.
+// (délégation branchée dans attacherEcouteurMenu(), appelée une seule fois depuis initBoutique)
 function renderProduitCard(p) {
   const quantiteInCart = getQuantiteInCart(p.id);
   // Stocker les données produit dans un registre global (clé: id) pour éviter l'inline JSON
@@ -135,7 +175,7 @@ function renderProduitCard(p) {
       <div class="font-bold text-sm mt-2" style="color:${PRIMARY_COLOR}">${formatMontant(p.prix)}</div>
     </div>
     <div class="flex flex-col items-end gap-2 flex-shrink-0">
-      ${p.photo_url ? `<img src="${escHtml(p.photo_url)}" alt="${escHtml(p.nom)}" class="w-16 h-16 rounded-lg object-cover border border-gray-100" loading="lazy">` : ''}
+      ${p.photo_url ? `<img src="${escHtml(p.photo_url)}" alt="${escHtml(p.nom)}" class="w-16 h-16 rounded-lg object-cover border border-gray-100" loading="lazy">` : `<div class="w-16 h-16 rounded-lg bg-gray-100 flex items-center justify-center border border-gray-100"><i class="fa-solid fa-utensils text-gray-300"></i></div>`}
       ${p.disponible ? (
         quantiteInCart > 0 ?
         `<div class="flex items-center gap-2 bg-gray-50 rounded-xl p-1">
@@ -201,6 +241,28 @@ function updateCartUI() {
   if (cartTotal) cartTotal.textContent = formatMontant(total);
 }
 
+// ---- Suivi de commande (bouton dans l'en-tête) ----
+// FIX — fonctionnalité absente du code d'origine (visible sur le site
+// concurrent en référence). Après une commande réussie, on garde le lien de
+// suivi en local ; s'il existe et date de moins de 48h, on affiche un bouton
+// "Suivre ma commande" au chargement de la boutique.
+function afficherBoutonSuiviSiCommandeRecente() {
+  try {
+    const raw = localStorage.getItem('monmenu_dernier_suivi_' + tenantSlug);
+    if (!raw) return;
+    const info = JSON.parse(raw);
+    if (!info.url_suivi) return;
+    const dansLes48h = Date.now() - new Date(info.date).getTime() < 48 * 3600000;
+    if (!dansLes48h) return;
+
+    const btn = document.getElementById('track-order-btn');
+    if (btn) {
+      btn.href = info.url_suivi;
+      btn.classList.remove('hidden');
+    }
+  } catch {}
+}
+
 // ---- Modals ----
 function openCart() {
   renderCartModal();
@@ -231,13 +293,31 @@ function renderCartModal() {
         <div class="text-xs text-gray-500">${formatMontant(item.prix)} l'unité</div>
       </div>
       <div class="flex items-center gap-2 bg-gray-50 rounded-xl p-1">
-        <button onclick="removeFromCart('${item.produit_id}'); renderCartModal(); updateCartUI();" class="w-7 h-7 rounded-lg flex items-center justify-center text-gray-600 hover:bg-gray-200 font-bold">−</button>
+        <button data-cart-action="remove" data-produit-id="${escHtml(item.produit_id)}" class="w-7 h-7 rounded-lg flex items-center justify-center text-gray-600 hover:bg-gray-200 font-bold">−</button>
         <span class="text-sm font-bold w-6 text-center">${item.quantite}</span>
-        <button onclick="addToCart({id:'${item.produit_id}',nom:'${escHtml(item.nom)}',prix:${item.prix}}); renderCartModal(); updateCartUI();" class="w-7 h-7 rounded-xl flex items-center justify-center text-white font-bold" style="background-color:${PRIMARY_COLOR}">+</button>
+        <button data-cart-action="add" data-produit-id="${escHtml(item.produit_id)}" class="w-7 h-7 rounded-xl flex items-center justify-center text-white font-bold" style="background-color:${PRIMARY_COLOR}">+</button>
       </div>
       <div class="text-sm font-bold w-20 text-right">${formatMontant(item.prix * item.quantite)}</div>
     </div>
   `).join('');
+
+  // Délégation d'événements pour les boutons +/- de la modale panier
+  // (même logique que le menu — évite de rappeler addToCart avec des
+  // valeurs ré-échappées manuellement dans un attribut onclick).
+  itemsEl.querySelectorAll('[data-cart-action]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const produitId = btn.getAttribute('data-produit-id');
+      const action = btn.getAttribute('data-cart-action');
+      if (action === 'add') {
+        const item = cart.items.find(i => i.produit_id === produitId);
+        if (item) addToCart({ id: item.produit_id, nom: item.nom, prix: item.prix, photo_url: item.photo_url });
+      } else {
+        removeFromCart(produitId);
+      }
+      renderCartModal();
+      updateCartUI();
+    });
+  });
 
   const total = getCartTotal();
   footerEl.innerHTML = `
@@ -562,6 +642,17 @@ async function submitOrder(e) {
       saveCart();
       updateCartUI();
       promoAppliquee = null;
+
+      // FIX — garder le lien de suivi en local pour ré-afficher le bouton
+      // "Suivre ma commande" lors des prochaines visites de la boutique.
+      if (data.url_suivi) {
+        try {
+          localStorage.setItem('monmenu_dernier_suivi_' + tenantSlug, JSON.stringify({
+            url_suivi: data.url_suivi,
+            date: new Date().toISOString()
+          }));
+        } catch {}
+      }
 
       // Redirection WhatsApp
       if (data.lien_whatsapp) {
