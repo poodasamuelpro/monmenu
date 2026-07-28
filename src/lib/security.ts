@@ -1,5 +1,10 @@
 // Module sécurité : CSRF, rate limiting, validation, idempotency
 // Section 11 du cahier des charges
+//
+// FIX (correctif QR code) — api.qrserver.com ajouté à img-src ET connect-src
+// de la CSP, au même titre que mapbox/openstreetmap. Le dashboard charge
+// désormais l'image QR directement depuis qrserver.com (pas de proxy serveur),
+// donc le navigateur doit être autorisé à charger cette origine.
 
 import { Context } from 'hono'
 import { z } from 'zod'
@@ -155,8 +160,10 @@ export function setSecurityHeaders(c: Context, nonce?: string): void {
     `default-src 'self'; ` +
     `script-src 'self' ${scriptSrcDirective}; ` +
     `style-src 'self' 'unsafe-inline' cdn.tailwindcss.com cdn.jsdelivr.net api.mapbox.com fonts.googleapis.com; ` +
-    `img-src 'self' data: blob: *.mapbox.com *.openstreetmap.org *.supabase.co *.tile.openstreetmap.org; ` +
-    `connect-src 'self' *.supabase.co api.mapbox.com events.mapbox.com api.openweathermap.org graph.facebook.com nominatim.openstreetmap.org; ` +
+    // FIX QR code : api.qrserver.com ajouté (image du QR chargée directement
+    // par le dashboard, comme mapbox/openstreetmap déjà autorisés ici).
+    `img-src 'self' data: blob: *.mapbox.com *.openstreetmap.org *.supabase.co *.tile.openstreetmap.org api.qrserver.com; ` +
+    `connect-src 'self' *.supabase.co api.mapbox.com events.mapbox.com api.openweathermap.org graph.facebook.com nominatim.openstreetmap.org api.qrserver.com; ` +
     `font-src 'self' fonts.gstatic.com cdn.jsdelivr.net; ` +
     `frame-ancestors 'none';`
   )
