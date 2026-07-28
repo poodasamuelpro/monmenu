@@ -1,4 +1,9 @@
 // src/pages/suivi.ts
+//
+// FIX — l'historique de commande affichait toujours une note vide : le code
+// lisait h.commentaire, mais l'API (GET /api/v1/commandes/suivi/:token dans
+// api-commandes.ts) renvoie ce champ sous le nom "note" (voir aussi
+// l'interface CommandeHistorique dans types/database.ts). Corrigé ci-dessous.
 import { renderHead } from '../components/head'
 import { getTranslations } from '../i18n'
 
@@ -139,6 +144,10 @@ export function renderSuiviPage(token: string, nomProjet: string, locale: string
           \`;
           html += data.historique.map(h => {
             const s = STATUTS[h.nouveau_statut] || { label: h.nouveau_statut, color: 'text-gray-600', bg: 'bg-gray-100', icon: 'fa-circle' };
+            // FIX : le champ renvoyé par l'API s'appelle "note", pas "commentaire".
+            // Avec l'ancien nom, cette ligne ne s'affichait jamais même quand le
+            // restaurant avait bien laissé une note lors du changement de statut
+            // (ex: "Livreur en route, léger retard").
             return \`
               <div class="flex items-start gap-3">
                 <div class="w-7 h-7 rounded-full \${s.bg} flex items-center justify-center flex-shrink-0 mt-0.5">
@@ -147,7 +156,7 @@ export function renderSuiviPage(token: string, nomProjet: string, locale: string
                 <div>
                   <div class="text-sm font-semibold text-gray-900 dark:text-white">\${s.label}</div>
                   <div class="text-xs text-gray-500 dark:text-gray-400">\${new Date(h.timestamp).toLocaleString('${locale === 'en' ? 'en-US' : 'fr-FR'}')}</div>
-                  \${h.commentaire ? \`<div class="text-xs text-gray-600 dark:text-gray-300 mt-0.5">\${h.commentaire}</div>\` : ''}
+                  \${h.note ? \`<div class="text-xs text-gray-600 dark:text-gray-300 mt-0.5">\${h.note}</div>\` : ''}
                 </div>
               </div>
             \`;
