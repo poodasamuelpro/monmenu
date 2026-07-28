@@ -179,7 +179,7 @@ export function renderContactPage(nomProjet: string, whatsappSupport: string = '
       // Simulation envoi (à relier à une vraie API ou Brevo)
       await new Promise(r => setTimeout(r, 1500));
 
-      feedback.textContent = '${isEn ? '✓ Message sent successfully. We will reply within 24 hours to: ' : '✓ Message envoyé avec succès. Nous vous répondrons dans les 24 heures à l\\'adresse : '}' + email;
+      feedback.textContent = '${isEn ? '✓ Message sent successfully. We will reply within 24 hours to: ' : "✓ Message envoyé avec succès. Nous vous répondrons dans les 24 heures à l'adresse : "}' + email;
       feedback.className = 'px-4 py-3 rounded-xl text-sm bg-green-50 text-green-700 border border-green-200';
       feedback.classList.remove('hidden');
       e.target.reset();
