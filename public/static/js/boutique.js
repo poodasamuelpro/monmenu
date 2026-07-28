@@ -11,6 +11,15 @@ let fraisLivraison = 0;
 let clientLat = null;
 let clientLon = null;
 
+// §Horaires — Statut d'ouverture calculé côté client depuis pdv_horaires
+// (renvoyé par GET /api/v1/tenants/:slug). Optimiste par défaut (true) tant
+// que les données n'ont pas encore été chargées, pour ne pas faire clignoter
+// l'UI. Recalculé après loadTenant() puis toutes les 60s pour rester exact
+// même si l'utilisateur reste longtemps sur la page (ex: passage de l'heure
+// de fermeture pendant la navigation).
+let boutiqueOuverte = true;
+let _statutIntervalId = null;
+
 // Registre des produits (utilisé par renderProduitCard() pour retrouver
 // les infos produit lors d'un clic +/- sans passer par du JSON inline).
 let _produitRegistry = {};
@@ -29,6 +38,7 @@ function attacherEcouteurMenu() {
     const action = btn.getAttribute('data-action');
     if (!produitId) return;
     if (action === 'add') {
+      if (!boutiqueOuverte) return; // sécurité : jamais d'ajout hors horaires
       const produit = _produitRegistry[produitId];
       if (produit) addToCart(produit);
     } else if (action === 'remove') {
@@ -50,16 +60,28 @@ const DEVISE = 'FCFA';
 
 // ---- Init ----
 async function initBoutique(tid, slug) {
-  // §2.4 : tid est maintenant le slug (TENANT_ID retiré du HTML).
-  // tenantId sera résolu depuis l'API via loadTenant().
   tenantId = ''; // Sera rempli par loadTenant()
   tenantSlug = slug;
   loadCart();
   await Promise.all([loadTenant(), loadMenu()]);
+  actualiserStatutOuverture();
   renderMenu();
   attacherEcouteurMenu();
   updateCartUI();
   afficherBoutonSuiviSiCommandeRecente();
+  observerFooterPourPanierFlottant();
+
+  // Revérifie le statut d'ouverture toutes les 60s (ex : l'utilisateur reste
+  // sur la page au moment précis de l'ouverture/fermeture du restaurant).
+  if (_statutIntervalId) clearInterval(_statutIntervalId);
+  _statutIntervalId = setInterval(() => {
+    const etaitOuvert = boutiqueOuverte;
+    actualiserStatutOuverture();
+    if (etaitOuvert !== boutiqueOuverte) {
+      renderMenu();
+      updateCartUI();
+    }
+  }, 60000);
 }
 
 // ---- Panier (localStorage) ----
@@ -68,7 +90,6 @@ function loadCart() {
     const stored = localStorage.getItem('monmenu_cart_' + tenantSlug);
     if (stored) {
       const parsed = JSON.parse(stored);
-      // Invalider si > 24h
       if (parsed.updated_at && Date.now() - new Date(parsed.updated_at).getTime() < 86400000) {
         cart = parsed;
       }
@@ -97,7 +118,6 @@ async function loadTenant() {
     const res = await fetch('/api/v1/tenants/' + tenantSlug);
     if (res.ok) {
       tenantData = await res.json();
-      // §2.4 : tenantId résolu depuis l'API (non exposé dans le HTML)
       if (tenantData && tenantData.id) tenantId = tenantData.id;
       if (tenantData && tenantData.pdv_id) {
         pdvData = { id: tenantData.pdv_id, lat: tenantData.pdv_latitude, lon: tenantData.pdv_longitude };
@@ -113,6 +133,54 @@ async function loadMenu() {
   } catch (e) { console.error('loadMenu', e); }
 }
 
+// ---- Statut d'ouverture (miroir client de calculerStatutHoraire() côté serveur) ----
+function estOuvertMaintenant(horaireRaw) {
+  if (!horaireRaw) return false;
+  let horaires;
+  try {
+    horaires = typeof horaireRaw === 'string' ? JSON.parse(horaireRaw) : horaireRaw;
+  } catch { return false; }
+  if (!horaires) return false;
+
+  const jours = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'];
+  const joursEn = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+  const now = new Date();
+  const jourIdx = now.getDay();
+  const entry = horaires[jours[jourIdx]] || horaires[joursEn[jourIdx]] || null;
+  if (!entry) return false;
+
+  const estOuvertJour = entry.ouvert !== false && entry.open !== false;
+  if (!estOuvertJour) return false;
+
+  const debut = entry.debut || entry.start || null;
+  const fin = entry.fin || entry.end || null;
+  if (!debut || !fin) return true; // ouvert toute la journée si pas de plage précisée
+
+  const [hD, mD] = debut.split(':').map(Number);
+  const [hF, mF] = fin.split(':').map(Number);
+  const nowMin = now.getHours() * 60 + now.getMinutes();
+  const debutMin = hD * 60 + mD;
+  let finMin = hF * 60 + mF;
+  // Gère le cas d'une fermeture après minuit (ex: 10:00 - 00:00 → traité comme 24:00)
+  if (finMin <= debutMin) finMin += 24 * 60;
+
+  return nowMin >= debutMin && nowMin < finMin;
+}
+
+function actualiserStatutOuverture() {
+  boutiqueOuverte = tenantData ? estOuvertMaintenant(tenantData.pdv_horaires) : true;
+
+  // Met à jour la pastille de statut dans l'en-tête si elle existe déjà en DOM
+  const badge = document.getElementById('statut-horaire-badge');
+  if (badge) {
+    badge.classList.toggle('statut-ferme', !boutiqueOuverte);
+  }
+
+  // Bandeau d'avertissement au-dessus du menu, uniquement si fermé
+  const avertissement = document.getElementById('boutique-fermee-avertissement');
+  if (avertissement) avertissement.classList.toggle('hidden', boutiqueOuverte);
+}
+
 // ---- Rendu menu ----
 function renderMenu() {
   const skeleton = document.getElementById('menu-skeleton');
@@ -124,8 +192,6 @@ function renderMenu() {
     return;
   }
 
-  // Navigation catégories — pastilles arrondies, catégorie active en noir
-  // (façon capture de référence) ; toutes les catégories créées, même vides.
   if (categoriesNav) {
     categoriesNav.innerHTML = menuData.categories.map((cat, i) =>
       `<a href="#cat-${cat.id}" data-cat-pill="${cat.id}"
@@ -134,7 +200,6 @@ function renderMenu() {
     attacherEcouteurCategories();
   }
 
-  // Menu complet — grille de cartes produit (photo en haut, texte, prix en bas)
   let html = '';
   for (const categorie of menuData.categories) {
     html += `<section id="cat-${categorie.id}" class="mb-8 scroll-mt-32">`;
@@ -154,7 +219,6 @@ function renderMenu() {
   if (menuContent) menuContent.innerHTML = html;
 }
 
-// Met en surbrillance la pastille de catégorie visible au scroll et gère le clic
 let _catListenerAttache = false;
 function attacherEcouteurCategories() {
   if (_catListenerAttache) return;
@@ -173,14 +237,19 @@ function attacherEcouteurCategories() {
   _catListenerAttache = true;
 }
 
-// Carte produit — format visuel : photo carrée en haut, nom + description,
-// puis ligne "Prix — montant" en bas. Bouton d'ajout flottant sur la photo.
+// Carte produit — photo carrée (taille fixe, toujours recadrée en object-cover
+// pour que le rendu reste identique quelle que soit la taille/format de la
+// photo fournie par le restaurant), nom + description, puis "Prix — montant".
+// §Horaires — Si la boutique est fermée, TOUT bouton d'ajout disparaît,
+// quel que soit le statut `disponible` du produit : impossible de commander.
 function renderProduitCard(p) {
   const quantiteInCart = getQuantiteInCart(p.id);
   _produitRegistry[p.id] = { id: p.id, nom: p.nom, prix: p.prix, photo_url: p.photo_url };
 
   let controles;
-  if (!p.disponible) {
+  if (!boutiqueOuverte) {
+    controles = `<span class="absolute top-2 left-2 text-[11px] font-semibold text-white bg-gray-900/80 px-2 py-1 rounded-lg shadow-sm">Fermé</span>`;
+  } else if (!p.disponible) {
     controles = `<span class="absolute top-2 left-2 text-[11px] font-semibold text-gray-500 bg-white/90 px-2 py-1 rounded-lg shadow-sm">Indisponible</span>`;
   } else if (quantiteInCart > 0) {
     controles = `
@@ -198,9 +267,11 @@ function renderProduitCard(p) {
       </button>`;
   }
 
+  const assombri = (!p.disponible || !boutiqueOuverte) ? 'opacity-60' : '';
+
   return `
-  <div class="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden flex flex-col h-full ${!p.disponible ? 'opacity-60' : ''}">
-    <div class="relative w-full aspect-square bg-gray-50">
+  <div class="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden flex flex-col h-full ${assombri}">
+    <div class="relative w-full aspect-square bg-gray-50 overflow-hidden">
       ${p.photo_url
         ? `<img src="${escHtml(p.photo_url)}" alt="${escHtml(p.nom)}" class="w-full h-full object-cover" loading="lazy">`
         : `<div class="w-full h-full flex items-center justify-center"><i class="fa-solid fa-utensils text-3xl text-gray-300"></i></div>`
@@ -225,6 +296,7 @@ function getQuantiteInCart(produitId) {
 
 // ---- Panier actions ----
 function addToCart(produit) {
+  if (!boutiqueOuverte) return; // double sécurité
   const existing = cart.items.find(i => i.produit_id === produit.id);
   if (existing) {
     existing.quantite++;
@@ -239,7 +311,6 @@ function addToCart(produit) {
   }
   saveCart();
   updateCartUI();
-  // Mettre à jour la card
   renderMenu();
 }
 
@@ -256,16 +327,22 @@ function removeFromCart(produitId) {
   renderMenu();
 }
 
+// §Horaires — Le bouton panier flottant reste visible si des articles sont
+// déjà dedans (pour permettre de finaliser une commande passée avant la
+// fermeture), mais on affiche un badge "Fermé" dessus et le checkout est
+// bloqué dans openCheckout(). S'il est vide et fermé, on le masque.
 function updateCartUI() {
   const count = getCartCount();
   const total = getCartTotal();
   const cartBtn = document.getElementById('cart-btn');
   const cartCount = document.getElementById('cart-count');
   const cartTotal = document.getElementById('cart-total');
+  const cartFermeTag = document.getElementById('cart-ferme-tag');
 
   if (cartBtn) cartBtn.classList.toggle('hidden', count === 0);
   if (cartCount) cartCount.textContent = count;
   if (cartTotal) cartTotal.textContent = formatMontant(total);
+  if (cartFermeTag) cartFermeTag.classList.toggle('hidden', boutiqueOuverte);
 }
 
 // ---- Suivi de commande (bouton dans l'en-tête) ----
@@ -284,6 +361,22 @@ function afficherBoutonSuiviSiCommandeRecente() {
       btn.classList.remove('hidden');
     }
   } catch {}
+}
+
+// §UX — Masque le bouton panier flottant lorsque le footer entre dans le
+// viewport (évite qu'il se superpose visuellement aux horaires/contact du
+// footer, ce qui rendait la lecture confuse en bas de page).
+function observerFooterPourPanierFlottant() {
+  const footer = document.querySelector('footer');
+  const cartBtn = document.getElementById('cart-btn');
+  if (!footer || !cartBtn || !('IntersectionObserver' in window)) return;
+
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      cartBtn.classList.toggle('cart-btn-masque', entry.isIntersecting);
+    });
+  }, { threshold: 0.05 });
+  observer.observe(footer);
 }
 
 // ---- Modals ----
@@ -324,9 +417,9 @@ function renderCartModal() {
     </div>
   `).join('');
 
-  // Délégation d'événements pour les boutons +/- de la modale panier
   itemsEl.querySelectorAll('[data-cart-action]').forEach(btn => {
     btn.addEventListener('click', () => {
+      if (!boutiqueOuverte) return;
       const produitId = btn.getAttribute('data-produit-id');
       const action = btn.getAttribute('data-cart-action');
       if (action === 'add') {
@@ -341,35 +434,39 @@ function renderCartModal() {
   });
 
   const total = getCartTotal();
+  const boutonDesactive = !boutiqueOuverte;
   footerEl.innerHTML = `
     <div class="flex justify-between font-bold text-base mb-3">
       <span>Total articles</span>
       <span>${formatMontant(total)}</span>
     </div>
-    <button onclick="closeCart(); openCheckout();" class="w-full text-white font-bold py-3.5 rounded-xl flex items-center justify-center gap-2" style="background-color:${PRIMARY_COLOR}">
+    ${!boutiqueOuverte ? `<p class="text-xs text-center text-red-600 font-medium mb-2"><i class="fa-solid fa-circle-exclamation mr-1"></i>Le restaurant est actuellement fermé — la commande ne peut pas être finalisée.</p>` : ''}
+    <button ${boutonDesactive ? 'disabled' : ''} onclick="closeCart(); openCheckout();" class="w-full text-white font-bold py-3.5 rounded-xl flex items-center justify-center gap-2 ${boutonDesactive ? 'opacity-50 cursor-not-allowed' : ''}" style="background-color:${PRIMARY_COLOR}">
       <i class="fa-solid fa-arrow-right"></i> Passer à la commande
     </button>
   `;
 }
 
+// §Horaires — Verrou final avant ouverture du formulaire de paiement :
+// même si l'état a changé entre-temps (fermeture pendant la navigation),
+// impossible d'ouvrir le checkout hors horaires.
 function openCheckout() {
-  // Réinitialiser le code promo à l'ouverture
+  if (!boutiqueOuverte) {
+    alert('Le restaurant est actuellement fermé. Vous pourrez commander pendant ses horaires d\'ouverture.');
+    return;
+  }
   promoAppliquee = null;
   _resetPromoUI();
   updateCheckoutRecap();
   document.getElementById('checkout-modal').classList.remove('hidden');
   document.body.style.overflow = 'hidden';
-  // Écouter changements de mode de livraison
   document.querySelectorAll('input[name="livraison-type"]').forEach(radio => {
     radio.addEventListener('change', onLivraisonTypeChange);
   });
-  // Initialiser la carte + lancer la géolocalisation automatique si mode livraison
   const isLivraison = document.querySelector('input[name="livraison-type"]:checked')?.value === 'livraison';
   if (isLivraison) {
     setTimeout(() => initCartelivraison(), 200);
     if (clientLat === null || clientLon === null) {
-      // Demande automatique de la position au client — remplit adresse +
-      // frais de livraison sans action manuelle nécessaire.
       setTimeout(() => geolocaliser(), 300);
     } else {
       calculerFraisLivraison();
@@ -393,7 +490,6 @@ function onLivraisonTypeChange() {
       setTimeout(() => geolocaliser(), 200);
     }
   } else {
-    // Mode à emporter : pas de frais
     fraisLivraison = 0;
   }
   updateCheckoutRecap();
@@ -404,11 +500,9 @@ function initCartelivraison() {
   const container = document.getElementById('carte-livraison');
   if (!container) return;
 
-  // Vider le placeholder texte
   container.innerHTML = '';
   container.style.height = '220px';
 
-  // Coordonnées initiales : PDV du restaurant ou Ouagadougou par défaut
   const defaultLat = (pdvData && pdvData.lat) ? pdvData.lat : 12.3647;
   const defaultLon = (pdvData && pdvData.lon) ? pdvData.lon : -1.5321;
   const startLat = clientLat || defaultLat;
@@ -422,7 +516,6 @@ function initCartelivraison() {
       maxZoom: 19
     }).addTo(livraisonMap);
 
-    // Marker déplaçable pour la position client
     livraisonMarker = L.marker([startLat, startLon], { draggable: true }).addTo(livraisonMap);
     livraisonMarker.bindPopup('Votre position de livraison.<br>Déplacez-moi si besoin.').openPopup();
 
@@ -430,12 +523,10 @@ function initCartelivraison() {
       const pos = e.target.getLatLng();
       clientLat = pos.lat;
       clientLon = pos.lng;
-      // Géocodage inverse (Nominatim/OSM — gratuit)
       await geocoderInverse(pos.lat, pos.lng);
       await calculerFraisLivraison();
     });
 
-    // Marker fixe PDV (non draggable)
     if (pdvData && pdvData.lat && pdvData.lon) {
       L.marker([pdvData.lat, pdvData.lon], {
         icon: L.icon({
@@ -447,7 +538,6 @@ function initCartelivraison() {
       }).addTo(livraisonMap).bindPopup('Restaurant');
     }
   } else {
-    // Carte déjà créée : invalider la taille au cas où le container était caché
     livraisonMap.invalidateSize();
     livraisonMap.setView([startLat, startLon], clientLat ? 15 : 13);
     if (livraisonMarker) livraisonMarker.setLatLng([startLat, startLon]);
@@ -485,7 +575,6 @@ async function appliquerCodePromo() {
     return;
   }
 
-  // Désactiver pendant la requête
   if (btnEl) { btnEl.disabled = true; btnEl.textContent = '...'; }
 
   try {
@@ -549,7 +638,6 @@ function updateCheckoutRecap() {
   const isLivraison = document.querySelector('input[name="livraison-type"]:checked')?.value === 'livraison';
   const frais = isLivraison ? fraisLivraison : 0;
 
-  // Calculer remise
   let remise = 0;
   if (promoAppliquee) {
     if (promoAppliquee.type === 'pourcentage') {
@@ -557,7 +645,6 @@ function updateCheckoutRecap() {
     } else {
       remise = Math.min(promoAppliquee.valeur, sousTotal);
     }
-    // Stocker la remise recalculée
     promoAppliquee.remise = remise;
   }
 
@@ -571,22 +658,13 @@ function updateCheckoutRecap() {
   const el_tot = document.getElementById('recap-total');
 
   if (el_sous) el_sous.textContent = formatMontant(sousTotal);
-
-  // Ligne remise — afficher seulement si promo active
   if (el_promo) el_promo.style.display = promoAppliquee ? 'flex' : 'none';
   if (el_remise && promoAppliquee) el_remise.textContent = '− ' + formatMontant(remise);
-
   if (el_liv) el_liv.textContent = isLivraison ? (fraisLivraison > 0 ? formatMontant(fraisLivraison) : 'À calculer') : 'Gratuit';
   if (el_tot) el_tot.textContent = (isLivraison && fraisLivraison === 0) ? 'À calculer' : formatMontant(total);
 }
 
 // ---- Géolocalisation client (auto + bouton manuel) ----
-// §Géoloc — Utilise l'API navigator.geolocation pour récupérer la position
-// réelle du client, place le marqueur sur la carte, remplit automatiquement
-// le champ adresse (géocodage inverse Nominatim) et calcule les frais de
-// livraison via /api/v1/livraison/calcul. Si le client refuse ou que la
-// position est indisponible, un message clair invite à déplacer le repère
-// ou saisir l'adresse manuellement (aucun blocage du formulaire).
 function geolocaliser() {
   const detailEl = document.getElementById('frais-livraison-detail');
   if (!navigator.geolocation) {
@@ -599,17 +677,13 @@ function geolocaliser() {
     async (pos) => {
       clientLat = pos.coords.latitude;
       clientLon = pos.coords.longitude;
-      // Mettre à jour le marqueur sur la carte si elle est initialisée,
-      // sinon l'initialiser directement sur la position obtenue.
       if (livraisonMap && livraisonMarker) {
         livraisonMarker.setLatLng([clientLat, clientLon]);
         livraisonMap.setView([clientLat, clientLon], 16);
       } else {
         initCartelivraison();
       }
-      // Remplit automatiquement le champ #client-adresse
       await geocoderInverse(clientLat, clientLon);
-      // Calcule et affiche automatiquement les frais de livraison
       await calculerFraisLivraison();
     },
     (err) => {
@@ -648,6 +722,12 @@ async function calculerFraisLivraison() {
 // ---- Soumettre la commande ----
 async function submitOrder(e) {
   e.preventDefault();
+
+  if (!boutiqueOuverte) {
+    alert('Le restaurant est actuellement fermé. La commande ne peut pas être envoyée.');
+    return;
+  }
+
   const btn = document.getElementById('submit-btn');
   const nom = document.getElementById('client-nom')?.value?.trim();
   const tel = document.getElementById('client-tel')?.value?.trim();
@@ -659,14 +739,12 @@ async function submitOrder(e) {
   if (cart.items.length === 0) { alert('Votre panier est vide.'); return; }
 
   const isEmporter = modeType === 'emporter';
-  // §Géoloc — En mode livraison, on s'assure d'avoir une position avant
-  // l'envoi : si le client a refusé la géolocalisation, l'adresse saisie
-  // manuellement (ou déplacée sur la carte) reste acceptée.
   if (!isEmporter && (!adresse) && (clientLat === null || clientLon === null)) {
     alert('Merci de renseigner votre adresse ou d\'autoriser la géolocalisation, ou de déplacer le repère sur la carte.');
     return;
   }
 
+  const labelInitial = '<i class="fa-solid fa-check"></i> Confirmer';
   btn.disabled = true;
   btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Envoi en cours...';
 
@@ -677,7 +755,6 @@ async function submitOrder(e) {
     point_de_vente_id: pdvData ? pdvData.id : '',
     client_nom: nom,
     client_telephone: tel,
-    // En mode "à emporter", pas d'adresse ni de coordonnées
     client_adresse: isEmporter ? null : (adresse || null),
     client_latitude: isEmporter ? null : clientLat,
     client_longitude: isEmporter ? null : clientLon,
@@ -686,7 +763,6 @@ async function submitOrder(e) {
     mode_livraison: isEmporter ? 'emporter' : 'livraison',
     idempotency_key: idempotencyKey,
     notes: notes || null,
-    // Code promo : inclure uniquement si une promo a été validée
     code_promo: promoAppliquee ? promoAppliquee.code : undefined
   };
 
@@ -700,14 +776,11 @@ async function submitOrder(e) {
     const data = await res.json();
 
     if (res.ok && data.success) {
-      // Vider le panier
       cart = { items: [], tenant_id: tenantId, slug: tenantSlug };
       saveCart();
       updateCartUI();
       promoAppliquee = null;
 
-      // Garder le lien de suivi en local pour ré-afficher le bouton
-      // "Suivre ma commande" lors des prochaines visites de la boutique.
       if (data.url_suivi) {
         try {
           localStorage.setItem('monmenu_dernier_suivi_' + tenantSlug, JSON.stringify({
@@ -717,22 +790,19 @@ async function submitOrder(e) {
         } catch {}
       }
 
-      // Redirection WhatsApp
-      if (data.lien_whatsapp) {
-        window.open(data.lien_whatsapp, '_blank');
-      }
-
-      // Rediriger vers suivi
+      // La notification WhatsApp part côté serveur (envoyerNotificationWhatsApp) ;
+      // on ne redirige plus le navigateur du client vers WhatsApp — il est
+      // simplement redirigé vers sa page de suivi de commande.
       window.location.href = data.url_suivi || '/';
     } else {
       alert(data.error || 'Erreur lors de la commande. Réessayez.');
       btn.disabled = false;
-      btn.innerHTML = '<i class="fa-brands fa-whatsapp"></i> Confirmer et envoyer sur WhatsApp';
+      btn.innerHTML = labelInitial;
     }
   } catch (err) {
     alert('Erreur réseau. Vérifiez votre connexion et réessayez.');
     btn.disabled = false;
-    btn.innerHTML = '<i class="fa-brands fa-whatsapp"></i> Confirmer et envoyer sur WhatsApp';
+    btn.innerHTML = labelInitial;
   }
 }
 
