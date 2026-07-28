@@ -1,4 +1,4 @@
-// MonMenu — Dashboard restaurant (v1.5.0 — notification WhatsApp au client
+// MonMenu — Dashboard restaurant (v1.5.0 — notification WhatsApp au client 
 // lors de la confirmation de commande)
 //
 // CHANGELOG de ce fichier par rapport à la version précédente :
