@@ -13,6 +13,14 @@
 //  - Grille tarifaire à 4 plans, entièrement dynamique depuis D1 via
 //    /api/v1/plans — zéro prix codé en dur dans ce fichier.
 //  - FAQ étendue (9 questions), facilement extensible.
+//
+// AJOUT — Carrousel "Restaurants partenaires" (défilement infini) :
+//   Branché sur GET /api/v1/tenants (endpoint déjà existant côté API,
+//   voir api-tenants.ts) qui renvoie les tenants actifs avec logo.
+//   Section entièrement masquée si la liste est vide (aucune donnée
+//   fictive affichée) — respecte le cahier des charges §1.1/13.
+//   Placée juste après le Hero : c'est là que la preuve sociale a le
+//   plus d'impact, avant même le détail des fonctionnalités.
 // =============================================================
 import { renderHead, jsonLdOrganization, jsonLdWebSite } from '../components/head'
 import { renderNav } from '../components/nav'
@@ -42,6 +50,8 @@ export function renderHomePage(nomProjet: string, locale: string = 'fr'): string
     ? ['No commitment', 'Ready in minutes', 'French & English support']
     : ['Sans engagement', 'Prêt en quelques minutes', 'Support en français']
 
+  const partenairesLabel = isEn ? 'Trusted by restaurants across the region' : 'Ils nous font confiance'
+
   return `${renderHead(
     isEn ? `${nomProjet} — Order online at your favourite restaurants` : `${nomProjet} — Commandez en ligne dans vos restaurants préférés`,
     description,
@@ -60,6 +70,28 @@ export function renderHomePage(nomProjet: string, locale: string = 'fr'): string
     }
   )}
 <body class="font-sans bg-white dark:bg-[#0B0A09] text-gray-900 dark:text-gray-50 transition-colors">
+  <!-- §Partenaires — animation de défilement infini du carrousel de logos.
+       Tailwind n'a pas de keyframes prédéfinies pour ce type de marquee,
+       d'où ce petit bloc de style dédié. La durée est recalculée en JS
+       selon le nombre de logos (voir loadPartenaires()) pour garder une
+       vitesse de défilement constante quel que soit leur nombre. -->
+  <style>
+    @keyframes partenaires-marquee {
+      from { transform: translateX(0); }
+      to { transform: translateX(-50%); }
+    }
+    .partenaires-scroll {
+      animation: partenaires-marquee 30s linear infinite;
+      width: max-content;
+    }
+    .partenaires-scroll:hover {
+      animation-play-state: paused;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .partenaires-scroll { animation: none; }
+    }
+  </style>
+
   ${renderNav(nomProjet, 'accueil', locale)}
 
   <!-- ===================================================== -->
@@ -175,6 +207,28 @@ export function renderHomePage(nomProjet: string, locale: string = 'fr'): string
           </div>
         </div>
 
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================================================== -->
+  <!-- RESTAURANTS PARTENAIRES — carrousel dynamique          -->
+  <!-- AJOUT : chargé depuis GET /api/v1/tenants (tenants      -->
+  <!-- actifs avec logo). Section masquée tant qu'aucun        -->
+  <!-- restaurant actif n'a de logo — jamais de logos fictifs. -->
+  <!-- ===================================================== -->
+  <section class="py-14 bg-gray-50 dark:bg-[#0B0A09]/50 border-y border-gray-100 dark:border-gray-800" id="partenaires">
+    <div id="partenaires-container" class="hidden">
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mb-8 text-center">
+        <p class="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+          ${partenairesLabel}
+        </p>
+      </div>
+      <div class="relative w-full overflow-hidden">
+        <!-- Fondus sur les bords pour un effet de défilement propre -->
+        <div class="pointer-events-none absolute inset-y-0 left-0 w-16 sm:w-32 bg-gradient-to-r from-gray-50 dark:from-[#0B0A09] to-transparent z-10"></div>
+        <div class="pointer-events-none absolute inset-y-0 right-0 w-16 sm:w-32 bg-gradient-to-l from-gray-50 dark:from-[#0B0A09] to-transparent z-10"></div>
+        <div id="partenaires-track" class="flex items-center gap-14 partenaires-scroll py-2"></div>
       </div>
     </div>
   </section>
@@ -489,6 +543,52 @@ export function renderHomePage(nomProjet: string, locale: string = 'fr'): string
       }
     }
     loadPlans();
+  </script>
+
+  <!-- Script pour charger le carrousel des restaurants partenaires -->
+  <script>
+    // §Partenaires — charge les tenants actifs avec logo depuis
+    // GET /api/v1/tenants (endpoint public, voir api-tenants.ts).
+    // Section entièrement masquée si la liste est vide : aucune donnée
+    // fictive n'est jamais affichée à la place.
+    async function loadPartenaires() {
+      const container = document.getElementById('partenaires-container');
+      const track = document.getElementById('partenaires-track');
+      if (!container || !track) return;
+
+      try {
+        const res = await fetch('/api/v1/tenants?limit=16');
+        if (!res.ok) return;
+        const data = await res.json();
+        const tenants = Array.isArray(data) ? data : (data.tenants || []);
+
+        if (!tenants.length) return; // état vide honnête : section reste masquée
+
+        const itemHtml = function (tnt) {
+          const nom = String(tnt.nom || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+          const slug = String(tnt.slug || '');
+          const logo = String(tnt.logo_url || '');
+          return '<a href="/' + slug + '" title="' + nom + '" ' +
+            'class="flex-shrink-0 flex items-center justify-center h-14 w-32 grayscale hover:grayscale-0 opacity-70 hover:opacity-100 transition-all duration-300">' +
+            '<img src="' + logo + '" alt="' + nom + '" class="max-h-14 max-w-full object-contain" loading="lazy" ' +
+            'onerror="this.closest(\\'a\\').remove()">' +
+            '</a>';
+        };
+
+        // Liste dupliquée pour un défilement infini sans coupure visible
+        // (translateX(-50%) ramène exactement au début de la 2ᵉ copie).
+        track.innerHTML = tenants.map(itemHtml).join('') + tenants.map(itemHtml).join('');
+
+        // Vitesse de défilement constante quel que soit le nombre de logos.
+        track.style.animationDuration = Math.max(15, tenants.length * 3) + 's';
+
+        container.classList.remove('hidden');
+      } catch (err) {
+        console.error('Erreur chargement partenaires:', err);
+        // Échec silencieux côté UI : la section reste masquée.
+      }
+    }
+    loadPartenaires();
   </script>
 </body>
 </html>`;
