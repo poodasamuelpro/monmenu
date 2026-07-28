@@ -20,6 +20,10 @@ let clientLon = null;
 let boutiqueOuverte = true;
 let _statutIntervalId = null;
 
+// §Suivi — id de l'intervalle qui rafraîchit périodiquement le badge de
+// statut du bouton "Suivre ma commande" (voir actualiserBadgeSuivi()).
+let _suiviIntervalId = null;
+
 // Registre des produits (utilisé par renderProduitCard() pour retrouver
 // les infos produit lors d'un clic +/- sans passer par du JSON inline).
 let _produitRegistry = {};
@@ -346,20 +350,60 @@ function updateCartUI() {
 }
 
 // ---- Suivi de commande (bouton dans l'en-tête) ----
+// FIX suivi — Le bouton reste affiché en permanence dès qu'une commande a
+// été passée sur cet appareil, sans limite de temps (auparavant limité à
+// 48h, ce qui le faisait disparaître trop vite). En plus, on lance un
+// rafraîchissement périodique du statut affiché (badge #track-order-status)
+// pour que le client voie l'avancement sans avoir à rouvrir la page suivi.
 function afficherBoutonSuiviSiCommandeRecente() {
   try {
     const raw = localStorage.getItem('monmenu_dernier_suivi_' + tenantSlug);
     if (!raw) return;
     const info = JSON.parse(raw);
     if (!info.url_suivi) return;
-    const dansLes48h = Date.now() - new Date(info.date).getTime() < 48 * 3600000;
-    if (!dansLes48h) return;
 
     const btn = document.getElementById('track-order-btn');
     if (btn) {
       btn.href = info.url_suivi;
       btn.classList.remove('hidden');
     }
+
+    // Rafraîchit tout de suite, puis toutes les 30s tant que la page reste ouverte.
+    actualiserBadgeSuivi(info.url_suivi);
+    if (_suiviIntervalId) clearInterval(_suiviIntervalId);
+    _suiviIntervalId = setInterval(() => actualiserBadgeSuivi(info.url_suivi), 30000);
+  } catch {}
+}
+
+// FIX suivi — Interroge l'API de suivi public pour afficher un badge de
+// statut à jour sur le bouton "Suivre ma commande" (ex: "En préparation").
+// Échec silencieux (réseau, commande introuvable...) : on n'affiche rien de
+// cassé, le bouton garde simplement son dernier statut connu.
+async function actualiserBadgeSuivi(urlSuivi) {
+  const token = (urlSuivi || '').split('/').filter(Boolean).pop();
+  if (!token) return;
+  try {
+    const res = await fetch('/api/v1/commandes/suivi/' + token);
+    if (!res.ok) return;
+    const data = await res.json();
+    const statutLabels = {
+      en_attente: 'En attente', confirmee: 'Confirmée', en_preparation: 'En préparation',
+      en_livraison: 'En livraison', livree: 'Livrée', annulee: 'Annulée'
+    };
+    const statut = data && data.commande ? data.commande.statut : null;
+    const label = statutLabels[statut] || '';
+    const badge = document.getElementById('track-order-status');
+    if (badge) badge.textContent = label;
+
+    // Persiste le dernier statut connu (utile au prochain chargement de page).
+    try {
+      const raw = localStorage.getItem('monmenu_dernier_suivi_' + tenantSlug);
+      if (raw) {
+        const info = JSON.parse(raw);
+        info.statut = statut;
+        localStorage.setItem('monmenu_dernier_suivi_' + tenantSlug, JSON.stringify(info));
+      }
+    } catch {}
   } catch {}
 }
 
@@ -720,6 +764,14 @@ async function calculerFraisLivraison() {
 }
 
 // ---- Soumettre la commande ----
+// FIX WhatsApp — À la confirmation, la commande doit rediriger vers WhatsApp
+// du RESTAURANT avec le récap pré-rempli (lien_whatsapp renvoyé par
+// POST /api/v1/commandes), en plus de la redirection vers la page de suivi.
+// Pour éviter le blocage popup des navigateurs (qui n'autorisent l'ouverture
+// de fenêtre que si elle a lieu de façon SYNCHRONE dans le même geste
+// utilisateur, i.e. le clic sur "Confirmer"), on ouvre un onglet vide
+// immédiatement, AVANT le fetch, puis on le redirige vers le vrai lien
+// WhatsApp une fois la réponse serveur reçue.
 async function submitOrder(e) {
   e.preventDefault();
 
@@ -747,6 +799,9 @@ async function submitOrder(e) {
   const labelInitial = '<i class="fa-solid fa-check"></i> Confirmer';
   btn.disabled = true;
   btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Envoi en cours...';
+
+  // FIX popup — ouverture synchrone de l'onglet WhatsApp, dans le clic.
+  const whatsappWindow = window.open('about:blank', '_blank');
 
   const idempotencyKey = crypto.randomUUID();
 
@@ -785,21 +840,36 @@ async function submitOrder(e) {
         try {
           localStorage.setItem('monmenu_dernier_suivi_' + tenantSlug, JSON.stringify({
             url_suivi: data.url_suivi,
-            date: new Date().toISOString()
+            date: new Date().toISOString(),
+            statut: 'en_attente'
           }));
         } catch {}
       }
 
-      // La notification WhatsApp part côté serveur (envoyerNotificationWhatsApp) ;
-      // on ne redirige plus le navigateur du client vers WhatsApp — il est
-      // simplement redirigé vers sa page de suivi de commande.
+      // FIX WhatsApp — redirige l'onglet ouvert plus haut vers le lien
+      // WhatsApp réel (restaurant), pré-rempli avec le récap de commande.
+      if (data.lien_whatsapp) {
+        if (whatsappWindow) {
+          whatsappWindow.location.href = data.lien_whatsapp;
+        } else {
+          // Popup malgré tout bloqué : on ouvre normalement (peut être
+          // bloqué par le navigateur, mais on tente).
+          window.open(data.lien_whatsapp, '_blank');
+        }
+      } else if (whatsappWindow) {
+        whatsappWindow.close();
+      }
+
+      // La page principale du client va vers le suivi de commande.
       window.location.href = data.url_suivi || '/';
     } else {
+      if (whatsappWindow) whatsappWindow.close();
       alert(data.error || 'Erreur lors de la commande. Réessayez.');
       btn.disabled = false;
       btn.innerHTML = labelInitial;
     }
   } catch (err) {
+    if (whatsappWindow) whatsappWindow.close();
     alert('Erreur réseau. Vérifiez votre connexion et réessayez.');
     btn.disabled = false;
     btn.innerHTML = labelInitial;
