@@ -62,7 +62,7 @@ function calculerStatutHoraire(horaireRaw: string | null | undefined): { ouvert:
   if (nowMin >= debutMin && nowMin < finMin) {
     return { ouvert: true, label: `Ouvert — jusqu'à ${fin}` }
   } else if (nowMin < debutMin) {
-    return { ouvert: false, label: `Ouvre à ${debut}` }
+    return { ouvert: false, label: `Prochaine ouverture aujourd'hui à ${debut}` }
   } else {
     return { ouvert: false, label: `Fermé — ouvre demain à ${debut}` }
   }
@@ -160,49 +160,76 @@ export function renderBoutiquePage(tenant: TenantBoutique, nomProjet: string): s
     .text-primary { color: var(--color-primary); }
     .border-primary { border-color: var(--color-primary); }
     .bg-primary { background-color: var(--color-primary); }
+    .scrollbar-hide::-webkit-scrollbar { display: none; }
+    .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+    /* Bannière restaurant : image de fond pleine largeur, coins arrondis en bas,
+       logo en médaillon qui chevauche la bannière — façon "app de commande". */
+    .boutique-banniere {
+      background-size: cover;
+      background-position: center;
+      height: 168px;
+    }
   </style>
 
-  <!-- En-tête boutique -->
+  <!-- En-tête boutique : bannière + logo médaillon + nom -->
   <header class="bg-white shadow-sm sticky top-0 z-30 transition-colors">
-    ${tenant.banniere_url ? `<div class="h-32 bg-cover bg-center" style="background-image:url('${tenant.banniere_url}')"></div>` : ''}
-    <div class="max-w-3xl mx-auto px-4 py-4 flex items-center gap-4">
-      ${tenant.logo_url
-        ? `<img src="${tenant.logo_url}" alt="${tenant.nom}" class="w-14 h-14 rounded-xl object-cover border border-gray-100 shadow-sm flex-shrink-0">`
-        : `<div class="w-14 h-14 rounded-xl flex items-center justify-center text-white font-bold text-xl flex-shrink-0" style="background-color:${primaryColor}">${tenant.nom.charAt(0)}</div>`
+    <div class="relative">
+      ${tenant.banniere_url
+        ? `<div class="boutique-banniere" style="background-image:url('${tenant.banniere_url}')"></div>`
+        : `<div class="boutique-banniere" style="background-color:${primaryColor}"></div>`
       }
-      <div class="flex-1 min-w-0">
-        <h1 class="font-bold text-xl text-gray-900 truncate">${tenant.nom}</h1>
-        <!-- FIX : badge horaires toujours en rouge (ouvert ou fermé), au lieu de
-             vert/orange selon le statut — demande explicite du restaurateur. -->
-        <div class="flex items-center gap-1.5 text-xs text-red-600">
-          <i class="fa-solid fa-circle text-xs"></i>
-          <span>${statutHoraire.label}</span>
-        </div>
-        ${tenant.pdv_adresse ? `<div class="text-xs text-gray-400 truncate mt-0.5"><i class="fa-solid fa-location-dot mr-1"></i>${tenant.pdv_adresse}</div>` : ''}
+      <!-- Voile dégradé pour la lisibilité si texte superposé plus tard -->
+      <div class="absolute inset-0 bg-gradient-to-t from-black/25 via-transparent to-transparent pointer-events-none"></div>
+
+      <!-- Logo médaillon, chevauche la bannière -->
+      <div class="absolute -bottom-8 left-4">
+        ${tenant.logo_url
+          ? `<img src="${tenant.logo_url}" alt="${tenant.nom}" class="w-20 h-20 rounded-2xl object-cover border-4 border-white shadow-lg bg-white">`
+          : `<div class="w-20 h-20 rounded-2xl flex items-center justify-center text-white font-bold text-3xl border-4 border-white shadow-lg" style="background-color:${primaryColor}">${tenant.nom.charAt(0)}</div>`
+        }
       </div>
-      <!-- FIX : bouton "Suivre ma commande" — affiché en JS (boutique.js) si une
-           commande récente (< 48h) est trouvée en localStorage pour cette boutique. -->
-      <a id="track-order-btn" href="#" class="hidden flex-shrink-0 items-center gap-1.5 text-xs font-semibold text-gray-600 border border-gray-200 hover:border-red-200 hover:text-red-600 px-3 py-2 rounded-xl transition-colors">
-        <i class="fa-solid fa-receipt"></i>
-        <span class="hidden sm:inline">Suivre ma commande</span>
-      </a>
-      <a href="https://wa.me/${tenant.whatsapp_number.replace(/[^0-9]/g, '')}"
-         target="_blank" rel="noopener"
-         class="flex-shrink-0 w-10 h-10 rounded-xl bg-green-500 hover:bg-green-600 flex items-center justify-center text-white transition-colors"
-         title="Contacter sur WhatsApp">
-        <i class="fa-brands fa-whatsapp text-lg"></i>
-      </a>
+
+      <!-- Actions rapides (WhatsApp + suivi) en haut à droite de la bannière -->
+      <div class="absolute top-3 right-3 flex items-center gap-2">
+        <a id="track-order-btn" href="#" class="hidden flex-shrink-0 items-center gap-1.5 text-xs font-semibold text-gray-700 bg-white/95 backdrop-blur px-3 py-2 rounded-xl shadow-sm hover:bg-white transition-colors">
+          <i class="fa-solid fa-receipt"></i>
+          <span class="hidden sm:inline">Suivre ma commande</span>
+        </a>
+        <a href="https://wa.me/${tenant.whatsapp_number.replace(/[^0-9]/g, '')}"
+           target="_blank" rel="noopener"
+           class="flex-shrink-0 w-10 h-10 rounded-xl bg-green-500 hover:bg-green-600 flex items-center justify-center text-white shadow-sm transition-colors"
+           title="Contacter sur WhatsApp">
+          <i class="fa-brands fa-whatsapp text-lg"></i>
+        </a>
+      </div>
     </div>
-    <!-- Catégories sticky -->
+
+    <!-- Nom + adresse, sous le logo -->
+    <div class="max-w-3xl mx-auto px-4 pt-10 pb-3">
+      <h1 class="font-bold text-xl text-gray-900 truncate">${tenant.nom}</h1>
+      ${tenant.pdv_adresse ? `<div class="text-xs text-gray-400 truncate mt-0.5"><i class="fa-solid fa-location-dot mr-1"></i>${tenant.pdv_adresse}</div>` : ''}
+    </div>
+
+    <!-- Pastille de statut horaire — pleine largeur, couleur du restaurant,
+         façon capture de référence ("Prochaine ouverture aujourd'hui à 10:00") -->
+    <div class="max-w-3xl mx-auto px-4 pb-3">
+      <div class="w-full text-center font-semibold text-sm rounded-2xl py-3 px-4"
+           style="background-color:${primaryColor}1A; color:${primaryColor}">
+        <i class="fa-solid ${statutHoraire.ouvert ? 'fa-circle-check' : 'fa-clock'} mr-1.5"></i>
+        ${statutHoraire.label}
+      </div>
+    </div>
+
+    <!-- Catégories sticky, pastilles arrondies (rendu dynamique en JS) -->
     <div class="border-t border-gray-100 overflow-x-auto scrollbar-hide">
-      <nav class="max-w-3xl mx-auto px-4 flex gap-1 py-2" id="categories-nav"></nav>
+      <nav class="max-w-3xl mx-auto px-4 flex gap-2 py-3" id="categories-nav"></nav>
     </div>
   </header>
 
   <!-- Menu -->
   <main class="max-w-3xl mx-auto px-4 py-6 pb-32" id="menu-content">
-    <div class="space-y-2" id="menu-skeleton">
-      ${Array(4).fill('<div class="animate-pulse bg-gray-200 rounded-xl h-20"></div>').join('')}
+    <div class="grid grid-cols-2 gap-3" id="menu-skeleton">
+      ${Array(4).fill('<div class="animate-pulse bg-gray-200 rounded-2xl aspect-[3/4]"></div>').join('')}
     </div>
   </main>
 
@@ -291,19 +318,23 @@ export function renderBoutiquePage(tenant: TenantBoutique, nomProjet: string): s
           <label class="block text-sm font-semibold text-gray-700 mb-1.5">
             Votre adresse de livraison <span class="text-red-500">*</span>
           </label>
+          <!-- §Géoloc — Le champ adresse est rempli automatiquement via
+               géolocalisation navigateur + géocodage inverse (Nominatim),
+               déclenchée automatiquement à l'ouverture du formulaire.
+               L'utilisateur peut aussi la corriger manuellement ici. -->
           <div class="relative mb-2">
             <i class="fa-solid fa-location-dot absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"></i>
             <input id="client-adresse" type="text"
               class="w-full border border-gray-200 bg-white text-gray-900 rounded-xl pl-9 pr-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200 focus:border-red-400 placeholder-gray-400"
               placeholder="Quartier, rue, repère...">
           </div>
-          <!-- Carte livraison placeholder -->
+          <!-- Carte livraison — initialisée en JS (Leaflet), marqueur déplaçable -->
           <div id="carte-livraison"
             class="w-full h-48 bg-gray-100 rounded-xl border border-gray-200 overflow-hidden">
             <div class="flex items-center justify-center h-full text-gray-500 text-sm" id="carte-placeholder">
               <div class="text-center">
                 <i class="fa-solid fa-map text-3xl text-gray-300 mb-2 block"></i>
-                <span>Carte de livraison</span><br>
+                <span>Localisation en cours...</span><br>
                 <button type="button" onclick="geolocaliser()"
                   class="mt-2 text-xs text-blue-600 hover:underline flex items-center gap-1 mx-auto">
                   <i class="fa-solid fa-location-crosshairs"></i> Utiliser ma position
