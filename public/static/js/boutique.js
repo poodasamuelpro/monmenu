@@ -1,4 +1,4 @@
-// MonMenu — Boutique restaurant (JS côté client) 
+// MonMenu — Boutique restaurant (JS côté client)
 'use strict';
 
 let tenantId = '';
@@ -27,6 +27,16 @@ let _suiviIntervalId = null;
 // Registre des produits (utilisé par renderProduitCard() pour retrouver
 // les infos produit lors d'un clic +/- sans passer par du JSON inline).
 let _produitRegistry = {};
+
+// Libellés de statut affichés sur le bouton flottant de suivi (bas gauche).
+const STATUT_LABELS = {
+  en_attente: 'En attente',
+  confirmee: 'Confirmée',
+  en_preparation: 'En préparation',
+  en_livraison: 'En livraison',
+  livree: 'Livrée',
+  annulee: 'Annulée'
+};
 
 // Écouteur unique (délégation d'événements) sur le conteneur du menu pour
 // les boutons +/- des cartes produits (data-action="add"/"remove").
@@ -74,6 +84,7 @@ async function initBoutique(tid, slug) {
   updateCartUI();
   afficherBoutonSuiviSiCommandeRecente();
   observerFooterPourPanierFlottant();
+  initBackToTop();
 
   // Revérifie le statut d'ouverture toutes les 60s (ex : l'utilisateur reste
   // sur la page au moment précis de l'ouverture/fermeture du restaurant).
@@ -271,11 +282,13 @@ function renderProduitCard(p) {
       </button>`;
   }
 
+  // §Images — carte produit légèrement réduite : ratio 4/3 (au lieu du
+  // carré plein) pour un rendu un peu plus compact sur mobile.
   const assombri = (!p.disponible || !boutiqueOuverte) ? 'opacity-60' : '';
 
   return `
   <div class="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden flex flex-col h-full ${assombri}">
-    <div class="relative w-full aspect-square bg-gray-50 overflow-hidden">
+    <div class="relative w-full aspect-[4/3] bg-gray-50 overflow-hidden">
       ${p.photo_url
         ? `<img src="${escHtml(p.photo_url)}" alt="${escHtml(p.nom)}" class="w-full h-full object-cover" loading="lazy">`
         : `<div class="w-full h-full flex items-center justify-center"><i class="fa-solid fa-utensils text-3xl text-gray-300"></i></div>`
@@ -349,12 +362,11 @@ function updateCartUI() {
   if (cartFermeTag) cartFermeTag.classList.toggle('hidden', boutiqueOuverte);
 }
 
-// ---- Suivi de commande (bouton dans l'en-tête) ----
+// ---- Suivi de commande (bouton flottant bas de page, à gauche) ----
 // FIX suivi — Le bouton reste affiché en permanence dès qu'une commande a
-// été passée sur cet appareil, sans limite de temps (auparavant limité à
-// 48h, ce qui le faisait disparaître trop vite). En plus, on lance un
-// rafraîchissement périodique du statut affiché (badge #track-order-status)
-// pour que le client voie l'avancement sans avoir à rouvrir la page suivi.
+// été passée sur cet appareil, sans limite de temps. Il affiche soit
+// "Suivre ma commande" (statut inconnu), soit le libellé exact du statut
+// (ex : "En préparation"), rafraîchi périodiquement.
 function afficherBoutonSuiviSiCommandeRecente() {
   try {
     const raw = localStorage.getItem('monmenu_dernier_suivi_' + tenantSlug);
@@ -362,11 +374,12 @@ function afficherBoutonSuiviSiCommandeRecente() {
     const info = JSON.parse(raw);
     if (!info.url_suivi) return;
 
+    const wrap = document.getElementById('track-order-btn-wrap');
     const btn = document.getElementById('track-order-btn');
-    if (btn) {
-      btn.href = info.url_suivi;
-      btn.classList.remove('hidden');
-    }
+    const label = document.getElementById('track-order-label');
+    if (btn) btn.href = info.url_suivi;
+    if (label) label.textContent = STATUT_LABELS[info.statut] || 'Suivre ma commande';
+    if (wrap) wrap.classList.remove('hidden');
 
     // Rafraîchit tout de suite, puis toutes les 30s tant que la page reste ouverte.
     actualiserBadgeSuivi(info.url_suivi);
@@ -375,10 +388,10 @@ function afficherBoutonSuiviSiCommandeRecente() {
   } catch {}
 }
 
-// FIX suivi — Interroge l'API de suivi public pour afficher un badge de
-// statut à jour sur le bouton "Suivre ma commande" (ex: "En préparation").
-// Échec silencieux (réseau, commande introuvable...) : on n'affiche rien de
-// cassé, le bouton garde simplement son dernier statut connu.
+// FIX suivi — Interroge l'API de suivi public pour afficher un statut à jour
+// sur le bouton "Suivre ma commande" (ex : "En préparation"). Échec
+// silencieux (réseau, commande introuvable...) : le bouton garde simplement
+// son dernier libellé connu.
 async function actualiserBadgeSuivi(urlSuivi) {
   const token = (urlSuivi || '').split('/').filter(Boolean).pop();
   if (!token) return;
@@ -386,14 +399,10 @@ async function actualiserBadgeSuivi(urlSuivi) {
     const res = await fetch('/api/v1/commandes/suivi/' + token);
     if (!res.ok) return;
     const data = await res.json();
-    const statutLabels = {
-      en_attente: 'En attente', confirmee: 'Confirmée', en_preparation: 'En préparation',
-      en_livraison: 'En livraison', livree: 'Livrée', annulee: 'Annulée'
-    };
     const statut = data && data.commande ? data.commande.statut : null;
-    const label = statutLabels[statut] || '';
-    const badge = document.getElementById('track-order-status');
-    if (badge) badge.textContent = label;
+    const label = STATUT_LABELS[statut] || 'Suivre ma commande';
+    const labelEl = document.getElementById('track-order-label');
+    if (labelEl) labelEl.textContent = label;
 
     // Persiste le dernier statut connu (utile au prochain chargement de page).
     try {
@@ -407,20 +416,44 @@ async function actualiserBadgeSuivi(urlSuivi) {
   } catch {}
 }
 
-// §UX — Masque le bouton panier flottant lorsque le footer entre dans le
-// viewport (évite qu'il se superpose visuellement aux horaires/contact du
-// footer, ce qui rendait la lecture confuse en bas de page).
+// §UX — Masque les boutons flottants (panier + suivi) lorsque le footer
+// entre dans le viewport (évite qu'ils se superposent visuellement aux
+// horaires/contact du footer, ce qui rendait la lecture confuse en bas de
+// page).
 function observerFooterPourPanierFlottant() {
   const footer = document.querySelector('footer');
   const cartBtn = document.getElementById('cart-btn');
-  if (!footer || !cartBtn || !('IntersectionObserver' in window)) return;
+  const trackWrap = document.getElementById('track-order-btn-wrap');
+  if (!footer || !('IntersectionObserver' in window)) return;
 
   const observer = new IntersectionObserver((entries) => {
     entries.forEach(entry => {
-      cartBtn.classList.toggle('cart-btn-masque', entry.isIntersecting);
+      if (cartBtn) cartBtn.classList.toggle('cart-btn-masque', entry.isIntersecting);
+      if (trackWrap) trackWrap.classList.toggle('cart-btn-masque', entry.isIntersecting);
     });
   }, { threshold: 0.05 });
   observer.observe(footer);
+}
+
+// ---- Retour en haut de page ----
+// Affiche la flèche uniquement quand on approche du bas de la page (dernier
+// ~25% de la hauteur totale scrollable), pour ne pas encombrer l'écran
+// pendant la navigation normale dans le menu.
+function initBackToTop() {
+  const btn = document.getElementById('back-to-top-btn');
+  if (!btn) return;
+  const onScroll = () => {
+    const scrollTop = window.scrollY || document.documentElement.scrollTop;
+    const scrollable = document.documentElement.scrollHeight - window.innerHeight;
+    const pctScrolled = scrollable > 0 ? scrollTop / scrollable : 0;
+    btn.classList.toggle('visible', pctScrolled > 0.75);
+  };
+  window.addEventListener('scroll', onScroll, { passive: true });
+  onScroll();
+}
+
+function scrollToTop() {
+  window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
 // ---- Modals ----
@@ -767,6 +800,12 @@ async function calculerFraisLivraison() {
 // FIX WhatsApp — À la confirmation, la commande doit rediriger vers WhatsApp
 // du RESTAURANT avec le récap pré-rempli (lien_whatsapp renvoyé par
 // POST /api/v1/commandes), en plus de la redirection vers la page de suivi.
+// ⚠️ Le lien "lien_whatsapp" est construit CÔTÉ SERVEUR (fichier de l'API
+// qui gère POST /api/v1/commandes), qui n'a pas été fourni pour relecture.
+// Si le lien reste erroné malgré ce fix, le problème est très probablement
+// dans la normalisation du numéro à cet endroit précis côté backend — même
+// logique que formatWhatsAppNumber() ci-dessous à répliquer côté serveur.
+//
 // Pour éviter le blocage popup des navigateurs (qui n'autorisent l'ouverture
 // de fenêtre que si elle a lieu de façon SYNCHRONE dans le même geste
 // utilisateur, i.e. le clic sur "Confirmer"), on ouvre un onglet vide
@@ -848,13 +887,17 @@ async function submitOrder(e) {
 
       // FIX WhatsApp — redirige l'onglet ouvert plus haut vers le lien
       // WhatsApp réel (restaurant), pré-rempli avec le récap de commande.
+      // On revalide/normalise le lien reçu du serveur avant de rediriger,
+      // au cas où le numéro qu'il contient serait mal formaté (ex: "00" au
+      // lieu de "+", espaces...).
       if (data.lien_whatsapp) {
+        const lienCorrige = corrigerLienWhatsApp(data.lien_whatsapp);
         if (whatsappWindow) {
-          whatsappWindow.location.href = data.lien_whatsapp;
+          whatsappWindow.location.href = lienCorrige;
         } else {
           // Popup malgré tout bloqué : on ouvre normalement (peut être
           // bloqué par le navigateur, mais on tente).
-          window.open(data.lien_whatsapp, '_blank');
+          window.open(lienCorrige, '_blank');
         }
       } else if (whatsappWindow) {
         whatsappWindow.close();
@@ -874,6 +917,42 @@ async function submitOrder(e) {
     btn.disabled = false;
     btn.innerHTML = labelInitial;
   }
+}
+
+// §WhatsApp — Filet de sécurité côté client : si le lien renvoyé par le
+// serveur contient un numéro mal formaté (ex: wa.me/00226..., espaces,
+// tirets...), on le corrige avant redirection. Ne peut pas ajouter un
+// indicatif pays manquant — seule la correction de format est possible ici.
+function corrigerLienWhatsApp(lien) {
+  try {
+    const url = new URL(lien);
+    if (!/wa\.me$/i.test(url.hostname) && !/whatsapp\.com$/i.test(url.hostname)) return lien;
+    if (/wa\.me$/i.test(url.hostname)) {
+      const numeroBrut = url.pathname.replace(/^\//, '');
+      const numeroPropre = formatWhatsAppNumber(numeroBrut);
+      if (numeroPropre && numeroPropre !== numeroBrut) {
+        url.pathname = '/' + numeroPropre;
+      }
+    } else {
+      const phone = url.searchParams.get('phone');
+      if (phone) {
+        const numeroPropre = formatWhatsAppNumber(phone);
+        if (numeroPropre) url.searchParams.set('phone', numeroPropre);
+      }
+    }
+    return url.toString();
+  } catch {
+    return lien; // URL invalide : on laisse tel quel plutôt que de casser la redirection
+  }
+}
+
+// §WhatsApp — Même logique de normalisation que côté serveur (boutique.ts) :
+// retire tout ce qui n'est pas chiffre/+, convertit un préfixe "00" en "+"
+// puis retire le "+" (wa.me n'accepte que des chiffres).
+function formatWhatsAppNumber(numeroRaw) {
+  let n = (numeroRaw || '').replace(/[^0-9+]/g, '');
+  if (n.startsWith('00')) n = '+' + n.slice(2);
+  return n.replace(/\D/g, '');
 }
 
 // ---- Utilitaires ----
@@ -903,3 +982,4 @@ window.submitOrder = submitOrder;
 window.geolocaliser = geolocaliser;
 window.appliquerCodePromo = appliquerCodePromo;
 window.retirerCodePromo = retirerCodePromo;
+window.scrollToTop = scrollToTop;
