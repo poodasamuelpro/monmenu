@@ -52,12 +52,14 @@ function calculerStatutHoraire(horaireRaw: string | null | undefined): { ouvert:
 
   if (!debut || !fin) return { ouvert: true, label: 'Ouvert' }
 
-  // Vérifier si on est dans la plage horaire
+  // Vérifier si on est dans la plage horaire (gère le passage après minuit,
+  // ex : 10:00 - 00:00, où "fin" == "00:00" doit être traité comme 24:00)
   const [hD, mD] = debut.split(':').map(Number)
   const [hF, mF] = fin.split(':').map(Number)
   const nowMin = now.getHours() * 60 + now.getMinutes()
   const debutMin = hD * 60 + mD
-  const finMin = hF * 60 + mF
+  let finMin = hF * 60 + mF
+  if (finMin <= debutMin) finMin += 24 * 60
 
   if (nowMin >= debutMin && nowMin < finMin) {
     return { ouvert: true, label: `Ouvert — jusqu'à ${fin}` }
@@ -70,7 +72,9 @@ function calculerStatutHoraire(horaireRaw: string | null | undefined): { ouvert:
 
 // Génère un tableau HTML des horaires hebdomadaires depuis le JSONB
 function renderHorairesTable(horaireRaw: string | null | undefined): string {
-  if (!horaireRaw) return ''
+  if (!horaireRaw) {
+    return `<p class="text-xs text-gray-500">Horaires non renseignés.</p>`
+  }
 
   let horaires: Record<string, { ouvert?: boolean; debut?: string; fin?: string; open?: boolean; start?: string; end?: string }> | null = null
   try {
@@ -79,7 +83,7 @@ function renderHorairesTable(horaireRaw: string | null | undefined): string {
     return `<div class="text-sm text-gray-400 whitespace-pre-line leading-relaxed">${horaireRaw}</div>`
   }
 
-  if (!horaires) return ''
+  if (!horaires) return `<p class="text-xs text-gray-500">Horaires non renseignés.</p>`
 
   const joursFr = ['lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche']
   const joursEn = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
@@ -99,9 +103,9 @@ function renderHorairesTable(horaireRaw: string | null | undefined): string {
     const fin = entry?.fin || entry?.end || null
     const plage = (estOuvert && debut && fin) ? `${debut} – ${fin}` : (estOuvert ? 'Ouvert' : 'Fermé')
 
-    return `<tr class="${estAujourdhui ? 'font-semibold bg-gray-50' : ''}">
-      <td class="py-1 pr-3 text-gray-${estAujourdhui ? '900' : '500'} text-xs">${joursLabels[jour]}${estAujourdhui ? ' ●' : ''}</td>
-      <td class="py-1 text-xs ${estOuvert ? 'text-gray-700' : 'text-gray-400'}">${plage}</td>
+    return `<tr class="${estAujourdhui ? 'font-semibold bg-gray-800' : ''}">
+      <td class="py-1.5 pr-3 text-${estAujourdhui ? 'white' : 'gray-400'} text-xs">${joursLabels[jour]}${estAujourdhui ? ' ●' : ''}</td>
+      <td class="py-1.5 text-xs ${estOuvert ? 'text-gray-200' : 'text-gray-500'}">${plage}</td>
     </tr>`
   })
 
@@ -116,7 +120,8 @@ export function renderBoutiquePage(tenant: TenantBoutique, nomProjet: string): s
   const boutiqueUrl = `/${tenant.slug}`
   const description = `Commandez vos plats chez ${tenant.nom} sur ${nomProjet}. Livraison ou retrait sur place.`
 
-  // Calcul statut horaire depuis JSONB
+  // Calcul statut horaire depuis JSONB — recalculé côté client par
+  // boutique.js (estOuvertMaintenant) pour rester exact toute la session.
   const statutHoraire = calculerStatutHoraire(tenant.pdv_horaires)
 
   return `${renderHead(
@@ -162,13 +167,37 @@ export function renderBoutiquePage(tenant: TenantBoutique, nomProjet: string): s
     .bg-primary { background-color: var(--color-primary); }
     .scrollbar-hide::-webkit-scrollbar { display: none; }
     .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
-    /* Bannière restaurant : image de fond pleine largeur, coins arrondis en bas,
-       logo en médaillon qui chevauche la bannière — façon "app de commande". */
+
+    /* §Images — tailles FIXES quelle que soit la photo fournie par le
+       restaurant : object-fit: cover recadre toujours au centre, jamais
+       d'étirement ni de débordement. C'est ce qui garantit un rendu
+       homogène (bannière, logo, photos produits) indépendamment du format
+       source de l'image uploadée. */
     .boutique-banniere {
       background-size: cover;
       background-position: center;
-      height: 168px;
+      height: 140px; /* hauteur fixe et raisonnable, jamais "trop grande" */
     }
+    .logo-medaillon {
+      width: 72px;
+      height: 72px;
+      object-fit: cover;
+    }
+    .logo-footer {
+      width: 40px;
+      height: 40px;
+      object-fit: cover;
+    }
+
+    /* Pastille de statut horaire — couleur dynamique (ouvert = couleur du
+       restaurant, fermé = rouge) pilotée en JS via la classe .statut-ferme */
+    #statut-horaire-badge { background-color: ${primaryColor}1A; color: ${primaryColor}; }
+    #statut-horaire-badge.statut-ferme { background-color: #FEE2E2; color: #DC2626; }
+
+    /* §UX — le panier flottant se masque en douceur quand le footer est visible,
+       pour ne jamais se superposer aux horaires/contact affichés en bas de page. */
+    #cart-btn { transition: opacity .2s ease, transform .2s ease; }
+    #cart-btn.cart-btn-masque { opacity: 0; transform: translate(-50%, 16px) scale(.95); pointer-events: none; }
   </style>
 
   <!-- En-tête boutique : bannière + logo médaillon + nom -->
@@ -178,14 +207,13 @@ export function renderBoutiquePage(tenant: TenantBoutique, nomProjet: string): s
         ? `<div class="boutique-banniere" style="background-image:url('${tenant.banniere_url}')"></div>`
         : `<div class="boutique-banniere" style="background-color:${primaryColor}"></div>`
       }
-      <!-- Voile dégradé pour la lisibilité si texte superposé plus tard -->
       <div class="absolute inset-0 bg-gradient-to-t from-black/25 via-transparent to-transparent pointer-events-none"></div>
 
-      <!-- Logo médaillon, chevauche la bannière -->
-      <div class="absolute -bottom-8 left-4">
+      <!-- Logo médaillon, taille fixe, chevauche la bannière -->
+      <div class="absolute -bottom-7 left-4">
         ${tenant.logo_url
-          ? `<img src="${tenant.logo_url}" alt="${tenant.nom}" class="w-20 h-20 rounded-2xl object-cover border-4 border-white shadow-lg bg-white">`
-          : `<div class="w-20 h-20 rounded-2xl flex items-center justify-center text-white font-bold text-3xl border-4 border-white shadow-lg" style="background-color:${primaryColor}">${tenant.nom.charAt(0)}</div>`
+          ? `<img src="${tenant.logo_url}" alt="${tenant.nom}" class="logo-medaillon rounded-2xl border-4 border-white shadow-lg bg-white">`
+          : `<div class="w-[72px] h-[72px] rounded-2xl flex items-center justify-center text-white font-bold text-2xl border-4 border-white shadow-lg" style="background-color:${primaryColor}">${tenant.nom.charAt(0)}</div>`
         }
       </div>
 
@@ -205,18 +233,16 @@ export function renderBoutiquePage(tenant: TenantBoutique, nomProjet: string): s
     </div>
 
     <!-- Nom + adresse, sous le logo -->
-    <div class="max-w-3xl mx-auto px-4 pt-10 pb-3">
+    <div class="max-w-3xl mx-auto px-4 pt-9 pb-3">
       <h1 class="font-bold text-xl text-gray-900 truncate">${tenant.nom}</h1>
       ${tenant.pdv_adresse ? `<div class="text-xs text-gray-400 truncate mt-0.5"><i class="fa-solid fa-location-dot mr-1"></i>${tenant.pdv_adresse}</div>` : ''}
     </div>
 
-    <!-- Pastille de statut horaire — pleine largeur, couleur du restaurant,
-         façon capture de référence ("Prochaine ouverture aujourd'hui à 10:00") -->
+    <!-- Pastille de statut horaire -->
     <div class="max-w-3xl mx-auto px-4 pb-3">
-      <div class="w-full text-center font-semibold text-sm rounded-2xl py-3 px-4"
-           style="background-color:${primaryColor}1A; color:${primaryColor}">
+      <div id="statut-horaire-badge" class="w-full text-center font-semibold text-sm rounded-2xl py-3 px-4 ${!statutHoraire.ouvert ? 'statut-ferme' : ''}">
         <i class="fa-solid ${statutHoraire.ouvert ? 'fa-circle-check' : 'fa-clock'} mr-1.5"></i>
-        ${statutHoraire.label}
+        <span id="statut-horaire-label">${statutHoraire.label}</span>
       </div>
     </div>
 
@@ -228,6 +254,12 @@ export function renderBoutiquePage(tenant: TenantBoutique, nomProjet: string): s
 
   <!-- Menu -->
   <main class="max-w-3xl mx-auto px-4 py-6 pb-32" id="menu-content">
+    <!-- §Horaires — Bandeau visible uniquement si la boutique est fermée
+         (affiché/masqué dynamiquement par actualiserStatutOuverture()) -->
+    <div id="boutique-fermee-avertissement" class="hidden mb-4 rounded-xl border border-red-100 bg-red-50 text-red-700 text-sm px-4 py-3 flex items-center gap-2">
+      <i class="fa-solid fa-circle-exclamation"></i>
+      <span>Ce restaurant est actuellement fermé. La commande sera possible pendant ses horaires d'ouverture.</span>
+    </div>
     <div class="grid grid-cols-2 gap-3" id="menu-skeleton">
       ${Array(4).fill('<div class="animate-pulse bg-gray-200 rounded-2xl aspect-[3/4]"></div>').join('')}
     </div>
@@ -236,7 +268,8 @@ export function renderBoutiquePage(tenant: TenantBoutique, nomProjet: string): s
   <!-- Bouton panier flottant -->
   <div id="cart-btn" class="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 hidden">
     <button onclick="openCart()"
-      class="btn-primary font-bold px-6 py-3.5 rounded-2xl shadow-xl flex items-center gap-3 min-w-[260px] justify-between">
+      class="btn-primary font-bold px-6 py-3.5 rounded-2xl shadow-xl flex items-center gap-3 min-w-[260px] justify-between relative">
+      <span id="cart-ferme-tag" class="hidden absolute -top-2 -right-2 bg-red-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">Fermé</span>
       <div class="flex items-center gap-2">
         <div id="cart-count"
           class="bg-white text-xs font-bold w-6 h-6 rounded-full flex items-center justify-center"
@@ -252,6 +285,9 @@ export function renderBoutiquePage(tenant: TenantBoutique, nomProjet: string): s
     <div class="absolute inset-0 bg-black/50" onclick="closeCart()"></div>
     <div class="absolute bottom-0 left-0 right-0 bg-white rounded-t-2xl max-h-[85vh] overflow-y-auto">
       <div class="sticky top-0 bg-white border-b border-gray-100 px-4 py-4 flex items-center justify-between">
+        <button onclick="closeCart()" class="flex items-center gap-1.5 p-2 -ml-2 hover:bg-gray-100 rounded-lg transition-colors text-sm font-medium text-gray-600" aria-label="Retour">
+          <i class="fa-solid fa-arrow-left"></i> Retour
+        </button>
         <h2 class="font-bold text-lg text-gray-900">Votre commande</h2>
         <button onclick="closeCart()" class="p-2 hover:bg-gray-100 rounded-lg transition-colors" aria-label="Fermer">
           <i class="fa-solid fa-xmark text-gray-600"></i>
@@ -262,13 +298,15 @@ export function renderBoutiquePage(tenant: TenantBoutique, nomProjet: string): s
     </div>
   </div>
 
-  <!-- Modal Checkout -->
+  <!-- Modal Checkout (confirmation / paiement) -->
   <div id="checkout-modal" class="fixed inset-0 z-50 hidden">
     <div class="absolute inset-0 bg-black/50" onclick="closeCheckout()"></div>
     <div class="absolute bottom-0 left-0 right-0 bg-white rounded-t-2xl max-h-[95vh] overflow-y-auto">
+      <!-- §Retour — Bouton retour explicite (icône + texte) toujours visible
+           en haut de la confirmation de commande / paiement. -->
       <div class="sticky top-0 bg-white border-b border-gray-100 px-4 py-4 flex items-center gap-3">
-        <button onclick="closeCheckout()" class="p-2 hover:bg-gray-100 rounded-lg transition-colors" aria-label="Retour">
-          <i class="fa-solid fa-arrow-left text-gray-600"></i>
+        <button onclick="closeCheckout()" class="flex items-center gap-1.5 p-2 -ml-2 hover:bg-gray-100 rounded-lg transition-colors text-sm font-medium text-gray-600" aria-label="Retour au panier">
+          <i class="fa-solid fa-arrow-left"></i> Retour
         </button>
         <h2 class="font-bold text-lg text-gray-900">Finaliser la commande</h2>
       </div>
@@ -318,17 +356,15 @@ export function renderBoutiquePage(tenant: TenantBoutique, nomProjet: string): s
           <label class="block text-sm font-semibold text-gray-700 mb-1.5">
             Votre adresse de livraison <span class="text-red-500">*</span>
           </label>
-          <!-- §Géoloc — Le champ adresse est rempli automatiquement via
-               géolocalisation navigateur + géocodage inverse (Nominatim),
-               déclenchée automatiquement à l'ouverture du formulaire.
-               L'utilisateur peut aussi la corriger manuellement ici. -->
+          <!-- §Géoloc — Rempli automatiquement via géolocalisation navigateur
+               + géocodage inverse, déclenché à l'ouverture du formulaire.
+               Modifiable manuellement si besoin. -->
           <div class="relative mb-2">
             <i class="fa-solid fa-location-dot absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"></i>
             <input id="client-adresse" type="text"
               class="w-full border border-gray-200 bg-white text-gray-900 rounded-xl pl-9 pr-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200 focus:border-red-400 placeholder-gray-400"
               placeholder="Quartier, rue, repère...">
           </div>
-          <!-- Carte livraison — initialisée en JS (Leaflet), marqueur déplaçable -->
           <div id="carte-livraison"
             class="w-full h-48 bg-gray-100 rounded-xl border border-gray-200 overflow-hidden">
             <div class="flex items-center justify-center h-full text-gray-500 text-sm" id="carte-placeholder">
@@ -390,19 +426,24 @@ export function renderBoutiquePage(tenant: TenantBoutique, nomProjet: string): s
           </div>
         </div>
 
+        <!-- §Confirmer — Un seul verbe d'action, plus de mention "WhatsApp"
+             dans le libellé (la notification WhatsApp part côté serveur,
+             ce n'est pas une action que le client effectue lui-même). -->
         <button type="submit" id="submit-btn"
           class="btn-primary w-full font-bold py-4 rounded-xl flex items-center justify-center gap-2 text-base transition-all">
-          <i class="fa-brands fa-whatsapp"></i>
-          <span>Confirmer et envoyer sur WhatsApp</span>
+          <i class="fa-solid fa-check"></i>
+          <span>Confirmer</span>
         </button>
         <p class="text-xs text-gray-400 text-center">
-          En confirmant, vous serez redirigé vers WhatsApp pour finaliser avec le restaurant.
+          En confirmant, votre commande est transmise directement au restaurant.
         </p>
       </form>
     </div>
   </div>
 
-  <!-- Footer boutique restaurant -->
+  <!-- Footer boutique restaurant — logo, nom, contact (WhatsApp + adresse) et
+       horaires : toujours affichés avec un texte de repli si une donnée est
+       manquante, pour ne jamais laisser de section vide ou cassée. -->
   <footer class="bg-gray-900 text-white pt-10 pb-8 mt-12">
     <div class="max-w-3xl mx-auto px-4">
       <div class="flex flex-col sm:flex-row sm:items-start gap-8">
@@ -410,22 +451,23 @@ export function renderBoutiquePage(tenant: TenantBoutique, nomProjet: string): s
         <div class="flex-1">
           <div class="flex items-center gap-3 mb-3">
             ${tenant.logo_url
-              ? `<img src="${tenant.logo_url}" alt="${tenant.nom}" class="w-10 h-10 rounded-lg object-cover border border-gray-700">`
+              ? `<img src="${tenant.logo_url}" alt="${tenant.nom}" class="logo-footer rounded-lg object-cover border border-gray-700">`
               : `<div class="w-10 h-10 rounded-lg flex items-center justify-center text-white font-bold text-base flex-shrink-0" style="background-color:${primaryColor}">${tenant.nom.charAt(0)}</div>`
             }
             <span class="font-bold text-lg">${tenant.nom}</span>
           </div>
+
+          <div class="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Contact</div>
           <a href="https://wa.me/${tenant.whatsapp_number.replace(/[^0-9]/g, '')}"
              target="_blank" rel="noopener"
              class="inline-flex items-center gap-2 text-sm text-green-400 hover:text-green-300 transition-colors font-medium">
             <i class="fa-brands fa-whatsapp text-base"></i>
-            ${tenant.whatsapp_number}
+            ${tenant.whatsapp_number || 'Numéro non communiqué'}
           </a>
-          ${tenant.pdv_adresse ? `
           <div class="mt-2 text-sm text-gray-400 flex items-start gap-2">
             <i class="fa-solid fa-location-dot mt-0.5 flex-shrink-0 text-gray-500"></i>
-            <span>${tenant.pdv_adresse}</span>
-          </div>` : ''}
+            <span>${tenant.pdv_adresse || 'Adresse non renseignée'}</span>
+          </div>
           ${tenant.pdv_latitude && tenant.pdv_longitude ? `
           <a href="https://www.google.com/maps?q=${tenant.pdv_latitude},${tenant.pdv_longitude}"
              target="_blank" rel="noopener"
@@ -435,14 +477,13 @@ export function renderBoutiquePage(tenant: TenantBoutique, nomProjet: string): s
           </a>` : ''}
         </div>
 
-        <!-- Horaires calculés depuis JSONB -->
-        ${tenant.pdv_horaires ? `
+        <!-- Horaires calculés depuis JSONB — toujours affiché (avec repli) -->
         <div class="sm:w-56">
           <div class="font-semibold text-sm mb-3 text-gray-300 flex items-center gap-2">
             <i class="fa-regular fa-clock"></i> Horaires
           </div>
           ${renderHorairesTable(tenant.pdv_horaires)}
-        </div>` : ''}
+        </div>
       </div>
 
       <div class="border-t border-gray-800 mt-8 pt-5 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-gray-500">
