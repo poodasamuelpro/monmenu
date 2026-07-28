@@ -1,5 +1,22 @@
 // Module WhatsApp Business Cloud API
 // Envoi de notifications aux restaurants et livreurs
+//
+// FIX 1 — Le lien de suivi inséré dans le message WhatsApp était codé en dur
+// sur "https://monmenu.app/suivi/...". Sur un environnement de preview
+// (*.workers.dev) ou un domaine personnalisé, ce lien pointe vers un domaine
+// qui n'a rien à voir avec le site réel : le restaurant clique dessus et
+// tombe sur une erreur. genererMessageCommande() prend désormais un paramètre
+// "origin" obligatoire (à construire côté appelant avec
+// new URL(c.req.url).origin, comme déjà fait ailleurs dans le code pour les
+// médias R2 et le QR code) au lieu de la constante en dur.
+//
+// FIX 2 — envoyerNotificationWhatsApp() déclarait WHATSAPP_API_TOKEN et
+// WHATSAPP_PHONE_ID comme des champs REQUIS dans son type d'entrée, alors que
+// l'interface Env (types/database.ts) les déclare optionnels (WHATSAPP_API_TOKEN?:
+// string). Résultat : passer l'objet "env" complet (comme fait dans
+// api-commandes.ts) provoque une erreur de compilation TypeScript
+// ("string | undefined n'est pas assignable à string"). Les deux champs sont
+// désormais optionnels ici aussi, cohérent avec Env.
 
 import type { Commande, ItemCommandeJson, Tenant } from '../types/database'
 
@@ -15,9 +32,13 @@ function formatMontant(montant: number, devise: string = 'FCFA'): string {
 }
 
 // §1.9 — Générer le résumé de commande pour WhatsApp (livraison OU à emporter)
+// FIX : "origin" doit être fourni par l'appelant (ex: new URL(c.req.url).origin
+// dans le handler Hono) pour que le lien de suivi pointe vers le bon domaine
+// quel que soit l'environnement (production, preview, domaine personnalisé).
 export function genererMessageCommande(
   commande: Commande,
   tenant: Tenant,
+  origin: string,
   modeLivraison: 'livraison' | 'emporter' = 'livraison'
 ): string {
   const items = commande.items_json as ItemCommandeJson[]
@@ -69,7 +90,8 @@ export function genererMessageCommande(
 
   message += `*TOTAL :* ${formatMontant(commande.montant_total)}\n`
   message += `*Paiement :* ${isEmporter ? 'Espèces / Mobile money sur place' : 'Espèces à la livraison'}\n`
-  message += `\n*Suivi :* https://monmenu.app/suivi/${commande.token_suivi}`
+  // FIX : domaine dynamique au lieu de "https://monmenu.app" en dur.
+  message += `\n*Suivi :* ${origin}/suivi/${commande.token_suivi}`
 
   return message
 }
@@ -81,10 +103,11 @@ export function genererLienWhatsApp(numero: string, message: string): string {
 }
 
 // Envoyer via API WhatsApp Business Cloud
+// FIX : champs optionnels pour matcher l'interface Env réelle (voir en-tête de fichier).
 export async function envoyerNotificationWhatsApp(
   numero: string,
   message: string,
-  env: { WHATSAPP_API_TOKEN: string; WHATSAPP_PHONE_ID: string }
+  env: { WHATSAPP_API_TOKEN?: string; WHATSAPP_PHONE_ID?: string }
 ): Promise<WhatsAppMessageResult> {
   if (!env.WHATSAPP_API_TOKEN || !env.WHATSAPP_PHONE_ID) {
     return { success: false, error: 'WhatsApp API non configurée' }
