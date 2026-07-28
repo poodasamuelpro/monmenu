@@ -22,9 +22,16 @@
 //     1. POST /upload-image
 //     2. POST /setup-restaurant (upload logo)
 //     3. POST /setup-restaurant (upload bannière)
-//   ⚠️ Les photo_url déjà enregistrées en base avec l'ancienne URL cassée ne
-//   sont PAS corrigées automatiquement par ce patch (voir discussion : soit
-//   re-upload, soit route de compatibilité à ajouter séparément).
+//
+// FIX (correctif QR code) — GET /qrcode renvoyait des champs (qr_color,
+//   qr_download_png...) générés avec la couleur du restaurant (pas neutre) et
+//   l'image ne s'affichait pas dans le dashboard car api.qrserver.com n'était
+//   pas autorisé par la CSP (corrigé dans security.ts). Le QR est maintenant
+//   TOUJOURS noir sur blanc (rendu neutre, professionnel), avec une marge
+//   suffisante pour rester scannable à l'impression.
+//
+// FIX (codes promo) — Ajout de GET /codes-promo/export-csv pour permettre
+//   l'export/téléchargement de tous les codes promo du restaurant.
 
 import { Hono } from 'hono'
 import { getCookie } from 'hono/cookie'
@@ -1111,6 +1118,54 @@ dashboardRouter.get('/codes-promo', async (c) => {
   return c.json({ codes: codes ?? [] })
 })
 
+// ---- GET /api/v1/dashboard/codes-promo/export-csv ----
+// FIX (codes promo) — permet de télécharger/exporter la totalité des codes
+// promo du restaurant. Doit être déclarée AVANT DELETE /codes-promo/:id pour
+// éviter que Hono ne confonde "export-csv" avec un paramètre :id (non
+// applicable ici car méthodes différentes, mais conservé par convention).
+dashboardRouter.get('/codes-promo/export-csv', async (c) => {
+  setSecurityHeaders(c)
+  const auth = await verifyAuth(c)
+  if (!auth) return c.json({ error: 'Non authentifié.' }, 401)
+
+  const supabase = createSupabaseClientWithToken(c.env, auth.token)
+
+  const { data: codes, error } = await supabase
+    .from('codes_promo')
+    .select('code, type, valeur, date_debut, date_fin, usage_max, usage_actuel, actif, created_at')
+    .eq('tenant_id', auth.tenant_id)
+    .order('created_at', { ascending: false })
+
+  if (error) return c.json({ error: 'Erreur export codes promo.', detail: error.message }, 500)
+
+  const headers = ['Code', 'Type', 'Valeur', 'Date début', 'Date fin', 'Usage max', 'Usage actuel', 'Actif', 'Créé le']
+  const rows = (codes ?? []).map(p => {
+    const valeurFormatee = p.type === 'pourcentage' ? `${p.valeur}%` : `${p.valeur} FCFA`
+    return [
+      p.code,
+      p.type === 'pourcentage' ? 'Pourcentage' : 'Montant fixe',
+      valeurFormatee,
+      p.date_debut ?? '',
+      p.date_fin ?? 'Sans expiration',
+      p.usage_max ?? 'Illimité',
+      p.usage_actuel ?? 0,
+      p.actif ? 'Oui' : 'Non',
+      p.created_at ?? ''
+    ].map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')
+  })
+
+  const csv = [headers.join(','), ...rows].join('\n')
+  const filename = `codes-promo_${auth.tenant_slug}.csv`
+
+  return new Response(csv, {
+    headers: {
+      'Content-Type': 'text/csv; charset=utf-8',
+      'Content-Disposition': `attachment; filename="${filename}"`,
+      'X-Content-Type-Options': 'nosniff'
+    }
+  })
+})
+
 // ---- POST /api/v1/dashboard/codes-promo ----
 dashboardRouter.post('/codes-promo', async (c) => {
   setSecurityHeaders(c)
@@ -1350,6 +1405,13 @@ dashboardRouter.get('/media/:key{.+}', async (c) => {
 })
 
 // ---- GET /api/v1/dashboard/qrcode ----
+// FIX QR code — Le QR est désormais TOUJOURS rendu en noir sur blanc
+// (color=000000&bgcolor=ffffff), quelle que soit couleur_primaire du
+// restaurant : rendu neutre, sobre, lisible et imprimable comme demandé.
+// Une marge (margin=10) est ajoutée pour garantir un "quiet zone" correct
+// autour du QR et une meilleure fiabilité au scan. Les URLs pointent
+// directement vers api.qrserver.com (autorisé par la CSP dans security.ts),
+// avec Content-Disposition simulé côté client via l'attribut "download".
 dashboardRouter.get('/qrcode', async (c) => {
   setSecurityHeaders(c)
   const auth = await verifyAuth(c)
@@ -1360,7 +1422,7 @@ dashboardRouter.get('/qrcode', async (c) => {
   // SUPABASE — tenant info (APPLICATION DATA)
   const { data: tenant, error } = await supabase
     .from('tenants')
-    .select('nom, slug, couleur_primaire')
+    .select('nom, slug')
     .eq('id', auth.tenant_id)
     .single()
 
@@ -1369,17 +1431,17 @@ dashboardRouter.get('/qrcode', async (c) => {
   // §4 — URL boutique dynamique basée sur l'origine du Worker (pas de domaine .app statique)
   const origin = new URL(c.req.url).origin
   const boutiqueUrl = `${origin}/${tenant.slug}`
-  const color = (tenant.couleur_primaire ?? '#DC2626').replace('#', '')
+  const encodedUrl = encodeURIComponent(boutiqueUrl)
 
   return c.json({
     boutique_url: boutiqueUrl,
     slug: tenant.slug,
     nom: tenant.nom,
-    couleur: tenant.couleur_primaire,
-    qr_standard: `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(boutiqueUrl)}&bgcolor=ffffff`,
-    qr_color: `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(boutiqueUrl)}&color=${color}&bgcolor=ffffff`,
-    qr_download_png: `https://api.qrserver.com/v1/create-qr-code/?size=600x600&data=${encodeURIComponent(boutiqueUrl)}&color=${color}&bgcolor=ffffff&format=png`,
-    qr_download_svg: `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(boutiqueUrl)}&color=${color}&bgcolor=ffffff&format=svg`
+    // Aperçu affiché dans le dashboard (taille moyenne, chargé directement depuis qrserver)
+    qr_display: `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodedUrl}&color=000000&bgcolor=ffffff&margin=10&qzone=1&format=png`,
+    // Téléchargements haute résolution, toujours neutres noir/blanc
+    qr_download_png: `https://api.qrserver.com/v1/create-qr-code/?size=1000x1000&data=${encodedUrl}&color=000000&bgcolor=ffffff&margin=10&qzone=1&format=png`,
+    qr_download_svg: `https://api.qrserver.com/v1/create-qr-code/?size=1000x1000&data=${encodedUrl}&color=000000&bgcolor=ffffff&margin=10&qzone=1&format=svg`
   })
 })
 
