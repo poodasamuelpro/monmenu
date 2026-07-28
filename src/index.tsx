@@ -27,7 +27,7 @@ import { renderConnexionPage, renderCreerComptePage } from './pages/auth'
 import { renderForgotPasswordPage } from './pages/forgot-password'
 import { renderDashboardPage } from './pages/dashboard'
 import { renderSuiviPage } from './pages/suivi'
-import { renderBoutiquePage } from './pages/boutique'
+import { renderBoutiquePage, type TenantBoutique } from './pages/boutique'
 import { render404Page } from './pages/not-found'
 import { renderBienvenuePage } from './pages/bienvenue'
 import { renderFonctionnalitesPage } from './pages/fonctionnalites'
@@ -51,6 +51,50 @@ function resolveLocale(c: any): string {
   // 3. Header Accept-Language du navigateur
   const acceptLang = c.req.header('Accept-Language') ?? null
   return detectLocale(acceptLang)
+}
+
+// FIX (2026-07-28) — Récupération d'un tenant + son PDV actif via un vrai join
+// sur points_de_vente (les colonnes pdv_nom/pdv_adresse/... N'EXISTENT PAS sur
+// la table tenants — elles vivent dans points_de_vente). Factorisé ici pour que
+// la route /:slug ET le middleware domaine personnalisé utilisent EXACTEMENT
+// la même logique (avant : le middleware domaine perso interrogeait des colonnes
+// inexistantes sur tenants et renvoyait toujours pdv_* undefined → adresse et
+// horaires jamais affichés sur les domaines personnalisés).
+async function fetchTenantAvecPdv(env: Env, filtre: { colonne: 'slug' | 'domaine_perso'; valeur: string }): Promise<TenantBoutique | null> {
+  const adminClient = createSupabaseAdminClient(env)
+  const { data: tenantRaw } = await adminClient
+    .from('tenants')
+    .select(`
+      id, nom, slug, logo_url, banniere_url,
+      couleur_primaire, couleur_secondaire, whatsapp_number,
+      points_de_vente(nom, adresse, horaires, latitude, longitude, actif)
+    `)
+    .eq(filtre.colonne, filtre.valeur)
+    .in('statut', ['actif', 'essai'])
+    .is('deleted_at', null)
+    .limit(1)
+    .maybeSingle()
+
+  if (!tenantRaw) return null
+
+  const pdvArr = Array.isArray(tenantRaw.points_de_vente) ? tenantRaw.points_de_vente : []
+  const pdv = pdvArr.find((p: any) => p.actif) ?? pdvArr[0] ?? null
+
+  return {
+    id: tenantRaw.id,
+    nom: tenantRaw.nom,
+    slug: tenantRaw.slug,
+    logo_url: tenantRaw.logo_url,
+    banniere_url: tenantRaw.banniere_url,
+    couleur_primaire: tenantRaw.couleur_primaire,
+    couleur_secondaire: tenantRaw.couleur_secondaire,
+    whatsapp_number: tenantRaw.whatsapp_number,
+    pdv_nom: pdv?.nom ?? null,
+    pdv_adresse: pdv?.adresse ?? null,
+    pdv_horaires: pdv?.horaires ?? null,
+    pdv_latitude: pdv?.latitude ?? null,
+    pdv_longitude: pdv?.longitude ?? null
+  }
 }
 
 // ---- Middleware globaux ----
@@ -105,6 +149,8 @@ app.use('/favicon.ico', serveStatic({ path: './favicon.ico' }))
 // ---- §1.11 — Middleware custom domain : résolution de domaine_perso vers boutique ----
 // Si la requête arrive sur un domaine personnalisé (ex: commande.monrestaurant.bf),
 // on cherche le tenant correspondant et on rend sa boutique directement.
+// FIX : utilise désormais fetchTenantAvecPdv() (join points_de_vente) au lieu de
+// sélectionner des colonnes pdv_* inexistantes directement sur tenants.
 app.use('*', async (c, next) => {
   const host = c.req.header('host') ?? ''
   // Ignorer les domaines de la plateforme
@@ -113,18 +159,10 @@ app.use('*', async (c, next) => {
 
   if (!estPlateforme && host.includes('.') && !c.req.path.startsWith('/api/')) {
     try {
-      const adminClient = createSupabaseAdminClient(c.env)
-      const { data: tenant } = await adminClient
-        .from('tenants')
-        .select('id, nom, slug, logo_url, banniere_url, couleur_primaire, couleur_secondaire, whatsapp_number, pdv_nom, pdv_adresse, pdv_horaires, pdv_latitude, pdv_longitude')
-        .eq('domaine_perso', host)
-        .in('statut', ['actif', 'essai'])
-        .is('deleted_at', null)
-        .maybeSingle()
-
+      const tenant = await fetchTenantAvecPdv(c.env, { colonne: 'domaine_perso', valeur: host })
       if (tenant) {
         const nomProjet = await getNomProjet(c.env)
-        return c.html(renderBoutiquePage(tenant as any, nomProjet))
+        return c.html(renderBoutiquePage(tenant, nomProjet))
       }
     } catch { /* Ignorer les erreurs — continuer le routing normal */ }
   }
@@ -218,9 +256,6 @@ ${restaurantUrls}
 })
 
 // ---- §3 — Routes i18n /fr et /en ----
-// /fr → pose le cookie monmenu-lang=fr, redirige vers /
-// /en → pose le cookie monmenu-lang=en, redirige vers /?lang=en
-// /fr/contact, /en/contact → redirigent avec le bon paramètre ?lang=
 app.get('/fr', (c) => {
   c.header('Set-Cookie', 'monmenu-lang=fr; Path=/; Max-Age=31536000; SameSite=Lax')
   return c.redirect('/', 302)
@@ -242,7 +277,6 @@ app.get('/en/*', (c) => {
 
 // ---- robots.txt ----
 app.get('/robots.txt', (c) => {
-  // §4 — URL Sitemap dynamique basée sur l'origine du Worker
   const origin = new URL(c.req.url).origin
   return c.text(`User-agent: *
 Allow: /
@@ -268,9 +302,7 @@ app.get('/suivi/:token', async (c) => {
 // ---- Page d'accueil ----
 app.get('/', async (c) => {
   setSecurityHeaders(c)
-  // §3 — Résolution de la locale : ?lang= > cookie > Accept-Language
   const locale = resolveLocale(c)
-  // Poser le cookie de langue si ?lang= explicite (pour persistance)
   if (c.req.query('lang') === 'en' || c.req.query('lang') === 'fr') {
     c.header('Set-Cookie', `monmenu-lang=${locale}; Path=/; Max-Age=31536000; SameSite=Lax`)
   }
@@ -282,7 +314,6 @@ app.get('/', async (c) => {
 // IMPORTANT : Ces routes DOIVENT être définies AVANT /:slug
 // sinon Hono capture tout avec le paramètre générique
 
-// ---- Page Fonctionnalités (i18n) ----
 app.get('/fonctionnalites', async (c) => {
   setSecurityHeaders(c)
   const nomProjet = await getNomProjet(c.env)
@@ -293,7 +324,6 @@ app.get('/fonctionnalites', async (c) => {
   return c.html(renderFonctionnalitesPage(nomProjet, locale))
 })
 
-// ---- Page Tarifs (i18n) ----
 app.get('/tarifs', async (c) => {
   setSecurityHeaders(c)
   const nomProjet = await getNomProjet(c.env)
@@ -329,9 +359,6 @@ app.get('/blog', async (c) => {
   setSecurityHeaders(c)
   const nomProjet = await getNomProjet(c.env)
 
-  // SUPABASE — articles publiés (APPLICATION DATA)
-  // En cas d'erreur (table absente, Supabase indisponible, etc.),
-  // on affiche la page avec une liste vide plutôt que de planter.
   let articles: Awaited<ReturnType<typeof getArticlesPublies>> = []
   try {
     articles = await getArticlesPublies(c.env)
@@ -362,7 +389,6 @@ async function getArticlesPublies(env: Env) {
 }
 
 // ---- Page Blog (article individuel) ----
-// IMPORTANT : doit être définie avant /:slug générique
 app.get('/blog/:slug', async (c) => {
   setSecurityHeaders(c)
   const slug = c.req.param('slug')
@@ -422,7 +448,6 @@ app.get('/legal/cookies', async (c) => {
 })
 
 // ---- Connexion & Création de compte ----
-// §1.7 — Page récupération mot de passe
 app.get('/mot-de-passe-oublie', async (c) => {
   setSecurityHeaders(c)
   const nomProjet = await getNomProjet(c.env)
@@ -448,15 +473,6 @@ app.get('/dashboard', async (c) => {
   return c.html(renderConnexionPage(nomProjet))
 })
 
-// §2 — CORRIGÉ : vraie vérification JWT (pas juste "cookie présent").
-// L'ancien bug (redirection en boucle) venait d'un check qui cherchait un
-// cookie qui n'était jamais posé, car le token vivait uniquement dans
-// localStorage. Maintenant que /login et /register posent un vrai cookie
-// httpOnly "sb-access-token", on peut faire une vérification serveur
-// complète ici : lire le cookie, valider le JWT auprès de Supabase Auth,
-// et rediriger vers /dashboard (page de connexion) si absent/invalide/expiré.
-// Le HTML rendu ne contient toujours aucune donnée sensible — les données
-// réelles passent par /api/v1/dashboard/*, qui revalide indépendamment.
 app.get('/dashboard/*', async (c) => {
   setSecurityHeaders(c)
 
@@ -476,7 +492,6 @@ app.get('/dashboard/*', async (c) => {
   }
 
   const nomProjet = await getNomProjet(c.env)
-  // §2 — Injecter SUPABASE_URL + SUPABASE_ANON_KEY (jamais service_role) pour Realtime
   return c.html(renderDashboardPage(nomProjet, c.env.SUPABASE_URL, c.env.SUPABASE_ANON_KEY))
 })
 
@@ -504,54 +519,14 @@ app.get('/bienvenue', async (c) => {
 })
 
 // ---- Page boutique restaurant (DOIT être EN DERNIER — route générique) ----
-// Cette route /:slug capture tout ce qui n'a pas été intercepté avant.
-// Elle cherche le slug dans Supabase — si non trouvé → 404
+// FIX : utilise désormais fetchTenantAvecPdv() (factorisé, identique au
+// middleware domaine personnalisé plus haut) au lieu de dupliquer la logique
+// de join + reconstruction manuelle du tenant.
 app.get('/:slug', async (c) => {
   setSecurityHeaders(c)
   const slug = c.req.param('slug')
 
-  // SUPABASE — Vérifier que le restaurant existe + PDV pour le footer (APPLICATION DATA)
-  const adminClient = createSupabaseAdminClient(c.env)
-  const { data: tenantRaw } = await adminClient
-    .from('tenants')
-    .select(`
-      id, nom, slug, logo_url, banniere_url,
-      couleur_primaire, couleur_secondaire, whatsapp_number,
-      points_de_vente(nom, adresse, horaires, latitude, longitude, actif)
-    `)
-    .eq('slug', slug)
-    .in('statut', ['actif', 'essai'])
-    .is('deleted_at', null)
-    .limit(1)
-    .maybeSingle()
-
-  let tenant: {
-    id: string; nom: string; slug: string; logo_url: string | null
-    banniere_url: string | null; couleur_primaire: string; couleur_secondaire: string
-    whatsapp_number: string
-    pdv_nom: string | null; pdv_adresse: string | null; pdv_horaires: string | null
-    pdv_latitude: number | null; pdv_longitude: number | null
-  } | null = null
-
-  if (tenantRaw) {
-    const pdvArr = Array.isArray(tenantRaw.points_de_vente) ? tenantRaw.points_de_vente : []
-    const pdv = pdvArr.find((p: any) => p.actif) ?? pdvArr[0] ?? null
-    tenant = {
-      id: tenantRaw.id,
-      nom: tenantRaw.nom,
-      slug: tenantRaw.slug,
-      logo_url: tenantRaw.logo_url,
-      banniere_url: tenantRaw.banniere_url,
-      couleur_primaire: tenantRaw.couleur_primaire,
-      couleur_secondaire: tenantRaw.couleur_secondaire,
-      whatsapp_number: tenantRaw.whatsapp_number,
-      pdv_nom: pdv?.nom ?? null,
-      pdv_adresse: pdv?.adresse ?? null,
-      pdv_horaires: pdv?.horaires ?? null,
-      pdv_latitude: pdv?.latitude ?? null,
-      pdv_longitude: pdv?.longitude ?? null
-    }
-  }
+  const tenant = await fetchTenantAvecPdv(c.env, { colonne: 'slug', valeur: slug })
 
   if (!tenant) {
     const nomP = await getNomProjet(c.env)
