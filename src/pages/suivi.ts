@@ -1,14 +1,31 @@
 // src/pages/suivi.ts
 //
-// FIX — l'historique de commande affichait toujours une note vide : le code
-// lisait h.commentaire, mais l'API (GET /api/v1/commandes/suivi/:token dans
-// api-commandes.ts) renvoie ce champ sous le nom "note" (voir aussi
-// l'interface CommandeHistorique dans types/database.ts). Corrigé ci-dessous.
+// FIX (précédent) — l'historique de commande affichait toujours une note
+// vide : le code lisait h.commentaire, mais l'API (GET
+// /api/v1/commandes/suivi/:token dans api-commandes.ts) renvoie ce champ
+// sous le nom "note" (voir aussi l'interface CommandeHistorique dans
+// types/database.ts). Corrigé.
+//
+// FIX (ce fichier) — Ajout d'un bouton "Retour à la boutique" en haut de la
+// page de suivi. Il n'existait aucun moyen de revenir à la boutique du
+// restaurant depuis cette page (seul le logo du header renvoyait vers "/",
+// la home du projet, pas vers /${slug-du-resto}).
+//
+//   - Si `tenantSlug` est connu au moment du rendu serveur (le plus propre :
+//     la route qui appelle renderSuiviPage() résout déjà le tenant via le
+//     token pour la locale/nomProjet, donc le slug est normalement
+//     disponible à ce moment-là), le bouton pointe directement dessus.
+//   - Sinon (tenantSlug non fourni), le bouton pointe vers "/" par défaut
+//     puis est corrigé dynamiquement en JS une fois la commande chargée,
+//     via c.tenant_slug ou data.tenant.slug — ⚠️ À VÉRIFIER : le nom exact
+//     du champ renvoyé par l'API pour le slug du tenant dans
+//     api-commandes.ts (même type de vérification que pour le fix "note").
 import { renderHead } from '../components/head'
 import { getTranslations } from '../i18n'
 
-export function renderSuiviPage(token: string, nomProjet: string, locale: string = 'fr'): string {
+export function renderSuiviPage(token: string, nomProjet: string, locale: string = 'fr', tenantSlug?: string): string {
   const t = getTranslations(locale)
+  const labelRetour = locale === 'en' ? 'Back to shop' : 'Retour à la boutique'
 
   return `${renderHead(
     `${t.suivi.title} — ${nomProjet}`,
@@ -27,6 +44,17 @@ export function renderSuiviPage(token: string, nomProjet: string, locale: string
   </header>
 
   <main class="max-w-lg mx-auto px-4 py-8">
+    <!-- §Retour boutique — bouton toujours visible en haut du contenu.
+         Pointe directement sur /${'{tenantSlug}'} si connu au rendu serveur,
+         sinon fallback vers "/" corrigé dynamiquement en JS (voir
+         chargerSuivi() plus bas) une fois la commande chargée. -->
+    <a id="retour-boutique-btn"
+       href="${tenantSlug ? '/' + tenantSlug : '/'}"
+       class="inline-flex items-center gap-1.5 text-sm font-semibold text-gray-600 dark:text-gray-300 hover:text-red-600 dark:hover:text-red-400 transition-colors mb-4">
+      <i class="fa-solid fa-arrow-left"></i>
+      <span>${labelRetour}</span>
+    </a>
+
     <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 p-6 mb-4">
       <div class="flex items-center gap-3 mb-2">
         <div class="w-10 h-10 rounded-xl bg-red-50 dark:bg-red-900/30 flex items-center justify-center">
@@ -59,6 +87,7 @@ export function renderSuiviPage(token: string, nomProjet: string, locale: string
 
   <script>
     const TRACKING_TOKEN = '${token}';
+    const TENANT_SLUG_INITIAL = ${tenantSlug ? `'${tenantSlug}'` : 'null'};
     const STATUTS = {
       'en_attente':     { label: '${t.suivi.status_en_attente}',     icon: 'fa-clock',          color: 'text-yellow-600', bg: 'bg-yellow-50' },
       'confirmee':      { label: '${t.suivi.status_confirmee}',      icon: 'fa-circle-check',   color: 'text-blue-600',   bg: 'bg-blue-50' },
@@ -84,6 +113,19 @@ export function renderSuiviPage(token: string, nomProjet: string, locale: string
         const data = await res.json();
         const c = data.commande;
         const statut = STATUTS[c.statut] || { label: c.statut, icon: 'fa-circle', color: 'text-gray-600', bg: 'bg-gray-50' };
+
+        // §Retour boutique — corrige le lien si le slug n'était pas encore
+        // connu au rendu serveur (TENANT_SLUG_INITIAL = null). Le champ
+        // renvoyé par GET /api/v1/commandes/suivi/:token est
+        // "restaurant_slug" (voir api-commandes.ts — construit à partir de
+        // tenants!inner(..., slug) puis remappé en restaurant_slug).
+        if (!TENANT_SLUG_INITIAL) {
+          const slugTrouve = c.restaurant_slug || null;
+          if (slugTrouve) {
+            const btnRetour = document.getElementById('retour-boutique-btn');
+            if (btnRetour) btnRetour.setAttribute('href', '/' + slugTrouve);
+          }
+        }
 
         // Étapes de progression
         const etapes = ['en_attente', 'confirmee', 'en_preparation', 'en_livraison', 'livree'];
@@ -144,10 +186,11 @@ export function renderSuiviPage(token: string, nomProjet: string, locale: string
           \`;
           html += data.historique.map(h => {
             const s = STATUTS[h.nouveau_statut] || { label: h.nouveau_statut, color: 'text-gray-600', bg: 'bg-gray-100', icon: 'fa-circle' };
-            // FIX : le champ renvoyé par l'API s'appelle "note", pas "commentaire".
-            // Avec l'ancien nom, cette ligne ne s'affichait jamais même quand le
-            // restaurant avait bien laissé une note lors du changement de statut
-            // (ex: "Livreur en route, léger retard").
+            // FIX (précédent) : le champ renvoyé par l'API s'appelle "note",
+            // pas "commentaire". Avec l'ancien nom, cette ligne ne
+            // s'affichait jamais même quand le restaurant avait bien laissé
+            // une note lors du changement de statut (ex: "Livreur en route,
+            // léger retard").
             return \`
               <div class="flex items-start gap-3">
                 <div class="w-7 h-7 rounded-full \${s.bg} flex items-center justify-center flex-shrink-0 mt-0.5">
