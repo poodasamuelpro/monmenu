@@ -411,29 +411,71 @@ export function renderHomePage(nomProjet: string, locale: string = 'fr'): string
       const isEn = ${isEn};
       try {
         const res = await fetch('/api/v1/plans');
-        const plans = await res.json();
-        if (plans && plans.length > 0) {
-          container.innerHTML = plans.map(p => \`
-            <div class="bg-white dark:bg-gray-900 rounded-2xl p-8 border \${p.is_popular ? 'border-red-500 ring-4 ring-red-500/10' : 'border-gray-100 dark:border-gray-800'} flex flex-col relative">
-              \${p.is_popular ? \`<span class="absolute -top-4 left-1/2 -translate-x-1/2 bg-red-600 text-white text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-widest">\${isEn ? 'Most Popular' : 'Le plus populaire'}</span>\` : ''}
-              <h3 class="text-lg font-bold text-gray-900 dark:text-white mb-2">\${isEn ? p.name_en || p.name : p.name}</h3>
+        const data = await res.json();
+        const plans = Array.isArray(data) ? data : (data.plans || []);
+        const devise = (data && data.devise) || 'FCFA';
+        if (plans.length > 0) {
+          const featureLabels = {
+            boutique_en_ligne: isEn ? 'Online shop' : 'Boutique en ligne',
+            qr_code: 'QR Code',
+            notifications_whatsapp: isEn ? 'WhatsApp notifications' : 'Notifications WhatsApp',
+            statistiques_avancees: isEn ? 'Advanced statistics' : 'Statistiques avancées',
+            codes_promo: isEn ? 'Promo codes' : 'Codes promo',
+            domaine_perso: isEn ? 'Custom domain' : 'Domaine personnalisé',
+            export_csv: isEn ? 'CSV export' : 'Export CSV',
+            support_whatsapp_prioritaire: isEn ? 'Priority WhatsApp support' : 'Support WhatsApp prioritaire',
+            multi_boutique: isEn ? 'Multi-shop' : 'Multi-boutique',
+            onboarding_dedie: isEn ? 'Dedicated onboarding' : 'Onboarding dédié',
+            acces_api: isEn ? 'API access' : 'Accès API',
+          };
+
+          function buildFeatures(f) {
+            const list = [];
+            if (typeof f.produits_max === 'number') {
+              list.push(f.produits_max === -1
+                ? (isEn ? 'Unlimited products' : 'Produits illimités')
+                : (isEn ? f.produits_max + ' products max' : f.produits_max + ' produits max'));
+            }
+            if (typeof f.categories_max === 'number') {
+              list.push(f.categories_max === -1
+                ? (isEn ? 'Unlimited categories' : 'Catégories illimitées')
+                : (isEn ? f.categories_max + ' categories max' : f.categories_max + ' catégories max'));
+            }
+            Object.keys(featureLabels).forEach(function (key) {
+              if (f[key]) list.push(featureLabels[key]);
+            });
+            return list;
+          }
+
+          container.innerHTML = plans.map(function (p) {
+            const f = p.fonctionnalites || {};
+            const isPopular = !!f.recommande;
+            const features = buildFeatures(f);
+            return \`
+            <div class="bg-white dark:bg-gray-900 rounded-2xl p-8 border \${isPopular ? 'border-red-500 ring-4 ring-red-500/10' : 'border-gray-100 dark:border-gray-800'} flex flex-col relative">
+              \${isPopular ? \`<span class="absolute -top-4 left-1/2 -translate-x-1/2 bg-red-600 text-white text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-widest">\${isEn ? 'Most Popular' : 'Le plus populaire'}</span>\` : ''}
+              <h3 class="text-lg font-bold text-gray-900 dark:text-white mb-2">\${p.nom}</h3>
+              \${f.sous_titre ? \`<p class="text-xs text-gray-500 dark:text-gray-400 mb-4">\${f.sous_titre}</p>\` : ''}
               <div class="mb-6">
-                <span class="text-3xl font-extrabold text-gray-900 dark:text-white">\${new Intl.NumberFormat().format(p.price)}</span>
-                <span class="text-gray-500 dark:text-gray-400 text-sm">FCFA/\${isEn ? 'month' : 'mois'}</span>
+                <span class="text-3xl font-extrabold text-gray-900 dark:text-white">\${new Intl.NumberFormat().format(p.prix_mensuel)}</span>
+                <span class="text-gray-500 dark:text-gray-400 text-sm">\${devise}/\${isEn ? 'month' : 'mois'}</span>
               </div>
               <ul class="space-y-4 mb-8 flex-grow">
-                \${(isEn ? p.features_en || p.features : p.features).map(f => \`
+                \${features.map(function (feat) {
+                  return \`
                   <li class="flex items-start gap-3 text-sm text-gray-600 dark:text-gray-400">
                     <i class="fa-solid fa-check text-green-500 mt-0.5" aria-hidden="true"></i>
-                    <span>\${f}</span>
+                    <span>\${feat}</span>
                   </li>
-                \`).join('')}
+                \`;
+                }).join('')}
               </ul>
-              <a href="/inscription?plan=\${p.id}" class="w-full py-3 rounded-xl font-bold text-center transition-all \${p.is_popular ? 'bg-red-600 text-white hover:bg-red-700 shadow-lg shadow-red-200 dark:shadow-none' : 'bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-white hover:bg-gray-200 dark:hover:bg-gray-700'}">
+              <a href="/inscription?plan=\${p.id}" class="w-full py-3 rounded-xl font-bold text-center transition-all \${isPopular ? 'bg-red-600 text-white hover:bg-red-700 shadow-lg shadow-red-200 dark:shadow-none' : 'bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-white hover:bg-gray-200 dark:hover:bg-gray-700'}">
                 \${isEn ? 'Choose this plan' : 'Choisir ce plan'}
               </a>
             </div>
-          \`).join('');
+          \`;
+          }).join('');
         }
       } catch (err) {
         console.error('Erreur chargement plans:', err);
