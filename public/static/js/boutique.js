@@ -11,18 +11,12 @@ let fraisLivraison = 0;
 let clientLat = null;
 let clientLon = null;
 
-// FIX — cette variable était utilisée dans renderProduitCard() mais jamais
-// déclarée : ça provoquait un ReferenceError qui plantait tout le rendu du
-// menu dès le premier produit (le squelette gris restait affiché pour
-// toujours, même quand l'API renvoyait bien les données).
+// Registre des produits (utilisé par renderProduitCard() pour retrouver
+// les infos produit lors d'un clic +/- sans passer par du JSON inline).
 let _produitRegistry = {};
 
-// FIX — le clic sur les boutons +/- des cartes produits (data-action="add"/
-// "remove") n'était jamais écouté nulle part : les boutons existaient dans
-// le HTML mais rien ne réagissait au clic, donc impossible d'ajouter au
-// panier → le panier restait toujours vide → le bouton flottant "Voir le
-// panier" ne s'affichait jamais. On attache l'écouteur UNE SEULE FOIS sur
-// le conteneur parent (délégation d'événements), pas à chaque re-rendu.
+// Écouteur unique (délégation d'événements) sur le conteneur du menu pour
+// les boutons +/- des cartes produits (data-action="add"/"remove").
 let _menuListenerAttache = false;
 function attacherEcouteurMenu() {
   if (_menuListenerAttache) return;
@@ -130,25 +124,25 @@ function renderMenu() {
     return;
   }
 
-  // Navigation catégories — TOUTES les catégories créées, même sans produit
+  // Navigation catégories — pastilles arrondies, catégorie active en noir
+  // (façon capture de référence) ; toutes les catégories créées, même vides.
   if (categoriesNav) {
     categoriesNav.innerHTML = menuData.categories.map((cat, i) =>
-      `<a href="#cat-${cat.id}" class="whitespace-nowrap px-3 py-1.5 rounded-lg text-sm font-medium ${i === 0 ? 'bg-red-600 text-white' : 'text-gray-600 hover:bg-gray-100'} transition-colors">${escHtml(cat.nom)}</a>`
+      `<a href="#cat-${cat.id}" data-cat-pill="${cat.id}"
+          class="cat-pill whitespace-nowrap px-4 py-2 rounded-full text-sm font-semibold transition-colors ${i === 0 ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}">${escHtml(cat.nom)}</a>`
     ).join('');
+    attacherEcouteurCategories();
   }
 
-  // Menu complet
-  // FIX — avant : `if (!categorie.produits || categorie.produits.length === 0) continue`
-  // sautait purement et simplement toute catégorie sans produit. Toutes les
-  // catégories créées doivent maintenant s'afficher, avec un message si vide.
+  // Menu complet — grille de cartes produit (photo en haut, texte, prix en bas)
   let html = '';
   for (const categorie of menuData.categories) {
-    html += `<section id="cat-${categorie.id}" class="mb-8">`;
+    html += `<section id="cat-${categorie.id}" class="mb-8 scroll-mt-32">`;
     html += `<h2 class="font-bold text-lg text-gray-900 mb-4 px-0">${escHtml(categorie.nom)}</h2>`;
     if (!categorie.produits || categorie.produits.length === 0) {
       html += `<p class="text-sm text-gray-400 italic px-1">Aucun produit disponible pour le moment.</p>`;
     } else {
-      html += `<div class="space-y-3">`;
+      html += `<div class="grid grid-cols-2 gap-3">`;
       for (const produit of categorie.produits) {
         html += renderProduitCard(produit);
       }
@@ -160,33 +154,66 @@ function renderMenu() {
   if (menuContent) menuContent.innerHTML = html;
 }
 
-// §6.3 — Fix XSS : remplace onclick="addToCart(JSON.stringify(...))" par data-* + addEventListener
-// (délégation branchée dans attacherEcouteurMenu(), appelée une seule fois depuis initBoutique)
+// Met en surbrillance la pastille de catégorie visible au scroll et gère le clic
+let _catListenerAttache = false;
+function attacherEcouteurCategories() {
+  if (_catListenerAttache) return;
+  const nav = document.getElementById('categories-nav');
+  if (!nav) return;
+  nav.addEventListener('click', (e) => {
+    const pill = e.target.closest('[data-cat-pill]');
+    if (!pill) return;
+    nav.querySelectorAll('.cat-pill').forEach(p => {
+      p.classList.remove('bg-gray-900', 'text-white');
+      p.classList.add('bg-gray-100', 'text-gray-600');
+    });
+    pill.classList.remove('bg-gray-100', 'text-gray-600');
+    pill.classList.add('bg-gray-900', 'text-white');
+  });
+  _catListenerAttache = true;
+}
+
+// Carte produit — format visuel : photo carrée en haut, nom + description,
+// puis ligne "Prix — montant" en bas. Bouton d'ajout flottant sur la photo.
 function renderProduitCard(p) {
   const quantiteInCart = getQuantiteInCart(p.id);
-  // Stocker les données produit dans un registre global (clé: id) pour éviter l'inline JSON
   _produitRegistry[p.id] = { id: p.id, nom: p.nom, prix: p.prix, photo_url: p.photo_url };
 
+  let controles;
+  if (!p.disponible) {
+    controles = `<span class="absolute top-2 left-2 text-[11px] font-semibold text-gray-500 bg-white/90 px-2 py-1 rounded-lg shadow-sm">Indisponible</span>`;
+  } else if (quantiteInCart > 0) {
+    controles = `
+      <div class="absolute bottom-2 right-2 flex items-center gap-1.5 bg-white/95 backdrop-blur rounded-xl shadow-md p-1">
+        <button data-action="remove" data-produit-id="${escHtml(p.id)}" class="w-7 h-7 rounded-lg flex items-center justify-center text-gray-600 hover:bg-gray-100 transition-colors font-bold" aria-label="Retirer">−</button>
+        <span class="text-sm font-bold w-4 text-center">${quantiteInCart}</span>
+        <button data-action="add" data-produit-id="${escHtml(p.id)}" class="w-7 h-7 rounded-lg flex items-center justify-center text-white transition-colors font-bold" style="background-color:${PRIMARY_COLOR}" aria-label="Ajouter">+</button>
+      </div>`;
+  } else {
+    controles = `
+      <button data-action="add" data-produit-id="${escHtml(p.id)}"
+        class="absolute bottom-2 right-2 w-9 h-9 rounded-full flex items-center justify-center text-white shadow-md active:scale-95 transition-transform"
+        style="background-color:${PRIMARY_COLOR}" aria-label="Ajouter au panier">
+        <i class="fa-solid fa-plus text-sm"></i>
+      </button>`;
+  }
+
   return `
-  <div class="bg-white rounded-xl border border-gray-100 p-4 flex gap-3 items-start shadow-sm ${!p.disponible ? 'opacity-50' : ''}">
-    <div class="flex-1 min-w-0">
-      <div class="font-semibold text-gray-900 text-sm leading-tight">${escHtml(p.nom)}</div>
-      ${p.description ? `<div class="text-xs text-gray-500 mt-0.5 line-clamp-2">${escHtml(p.description)}</div>` : ''}
-      <div class="font-bold text-sm mt-2" style="color:${PRIMARY_COLOR}">${formatMontant(p.prix)}</div>
+  <div class="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden flex flex-col h-full ${!p.disponible ? 'opacity-60' : ''}">
+    <div class="relative w-full aspect-square bg-gray-50">
+      ${p.photo_url
+        ? `<img src="${escHtml(p.photo_url)}" alt="${escHtml(p.nom)}" class="w-full h-full object-cover" loading="lazy">`
+        : `<div class="w-full h-full flex items-center justify-center"><i class="fa-solid fa-utensils text-3xl text-gray-300"></i></div>`
+      }
+      ${controles}
     </div>
-    <div class="flex flex-col items-end gap-2 flex-shrink-0">
-      ${p.photo_url ? `<img src="${escHtml(p.photo_url)}" alt="${escHtml(p.nom)}" class="w-16 h-16 rounded-lg object-cover border border-gray-100" loading="lazy">` : `<div class="w-16 h-16 rounded-lg bg-gray-100 flex items-center justify-center border border-gray-100"><i class="fa-solid fa-utensils text-gray-300"></i></div>`}
-      ${p.disponible ? (
-        quantiteInCart > 0 ?
-        `<div class="flex items-center gap-2 bg-gray-50 rounded-xl p-1">
-          <button data-action="remove" data-produit-id="${escHtml(p.id)}" class="w-7 h-7 rounded-lg flex items-center justify-center text-gray-600 hover:bg-gray-200 transition-colors font-bold">−</button>
-          <span class="text-sm font-bold w-4 text-center">${quantiteInCart}</span>
-          <button data-action="add" data-produit-id="${escHtml(p.id)}" class="w-7 h-7 rounded-lg flex items-center justify-center text-white transition-colors font-bold" style="background-color:${PRIMARY_COLOR}">+</button>
-        </div>` :
-        `<button data-action="add" data-produit-id="${escHtml(p.id)}" class="w-8 h-8 rounded-xl flex items-center justify-center text-white transition-all font-bold shadow-sm" style="background-color:${PRIMARY_COLOR}">
-          <i class="fa-solid fa-plus text-xs"></i>
-        </button>`
-      ) : '<span class="text-xs text-gray-400 bg-gray-100 px-2 py-1 rounded-lg">Indisponible</span>'}
+    <div class="p-3 flex flex-col flex-1">
+      <div class="font-semibold text-gray-900 text-sm leading-tight">${escHtml(p.nom)}</div>
+      ${p.description ? `<div class="text-xs text-gray-500 mt-1 line-clamp-2">${escHtml(p.description)}</div>` : ''}
+      <div class="flex items-center justify-between border-t border-gray-100 mt-2 pt-2">
+        <span class="text-[11px] font-medium text-gray-400 uppercase tracking-wide">Prix</span>
+        <span class="font-bold text-sm" style="color:${PRIMARY_COLOR}">${formatMontant(p.prix)}</span>
+      </div>
     </div>
   </div>`;
 }
@@ -242,10 +269,6 @@ function updateCartUI() {
 }
 
 // ---- Suivi de commande (bouton dans l'en-tête) ----
-// FIX — fonctionnalité absente du code d'origine (visible sur le site
-// concurrent en référence). Après une commande réussie, on garde le lien de
-// suivi en local ; s'il existe et date de moins de 48h, on affiche un bouton
-// "Suivre ma commande" au chargement de la boutique.
 function afficherBoutonSuiviSiCommandeRecente() {
   try {
     const raw = localStorage.getItem('monmenu_dernier_suivi_' + tenantSlug);
@@ -302,8 +325,6 @@ function renderCartModal() {
   `).join('');
 
   // Délégation d'événements pour les boutons +/- de la modale panier
-  // (même logique que le menu — évite de rappeler addToCart avec des
-  // valeurs ré-échappées manuellement dans un attribut onclick).
   itemsEl.querySelectorAll('[data-cart-action]').forEach(btn => {
     btn.addEventListener('click', () => {
       const produitId = btn.getAttribute('data-produit-id');
@@ -342,10 +363,17 @@ function openCheckout() {
   document.querySelectorAll('input[name="livraison-type"]').forEach(radio => {
     radio.addEventListener('change', onLivraisonTypeChange);
   });
-  // Initialiser la carte si mode livraison sélectionné par défaut
+  // Initialiser la carte + lancer la géolocalisation automatique si mode livraison
   const isLivraison = document.querySelector('input[name="livraison-type"]:checked')?.value === 'livraison';
   if (isLivraison) {
     setTimeout(() => initCartelivraison(), 200);
+    if (clientLat === null || clientLon === null) {
+      // Demande automatique de la position au client — remplit adresse +
+      // frais de livraison sans action manuelle nécessaire.
+      setTimeout(() => geolocaliser(), 300);
+    } else {
+      calculerFraisLivraison();
+    }
   }
 }
 
@@ -360,10 +388,11 @@ function onLivraisonTypeChange() {
   if (mapSection) mapSection.style.display = isLivraison ? 'block' : 'none';
 
   if (isLivraison) {
-    // Initialiser la carte si pas encore fait
     setTimeout(() => initCartelivraison(), 100);
-  }
-  if (!isLivraison) {
+    if (clientLat === null || clientLon === null) {
+      setTimeout(() => geolocaliser(), 200);
+    }
+  } else {
     // Mode à emporter : pas de frais
     fraisLivraison = 0;
   }
@@ -551,22 +580,43 @@ function updateCheckoutRecap() {
   if (el_tot) el_tot.textContent = (isLivraison && fraisLivraison === 0) ? 'À calculer' : formatMontant(total);
 }
 
-// Géolocalisation
+// ---- Géolocalisation client (auto + bouton manuel) ----
+// §Géoloc — Utilise l'API navigator.geolocation pour récupérer la position
+// réelle du client, place le marqueur sur la carte, remplit automatiquement
+// le champ adresse (géocodage inverse Nominatim) et calcule les frais de
+// livraison via /api/v1/livraison/calcul. Si le client refuse ou que la
+// position est indisponible, un message clair invite à déplacer le repère
+// ou saisir l'adresse manuellement (aucun blocage du formulaire).
 function geolocaliser() {
-  if (!navigator.geolocation) { alert('Géolocalisation non supportée par votre navigateur.'); return; }
+  const detailEl = document.getElementById('frais-livraison-detail');
+  if (!navigator.geolocation) {
+    if (detailEl) detailEl.textContent = 'Géolocalisation non supportée par votre navigateur. Déplacez le repère sur la carte.';
+    return;
+  }
+  if (detailEl) detailEl.textContent = 'Localisation en cours...';
+
   navigator.geolocation.getCurrentPosition(
     async (pos) => {
       clientLat = pos.coords.latitude;
       clientLon = pos.coords.longitude;
-      // Mettre à jour le marqueur sur la carte si elle est initialisée
+      // Mettre à jour le marqueur sur la carte si elle est initialisée,
+      // sinon l'initialiser directement sur la position obtenue.
       if (livraisonMap && livraisonMarker) {
         livraisonMarker.setLatLng([clientLat, clientLon]);
-        livraisonMap.setView([clientLat, clientLon], 15);
-        await geocoderInverse(clientLat, clientLon);
+        livraisonMap.setView([clientLat, clientLon], 16);
+      } else {
+        initCartelivraison();
       }
+      // Remplit automatiquement le champ #client-adresse
+      await geocoderInverse(clientLat, clientLon);
+      // Calcule et affiche automatiquement les frais de livraison
       await calculerFraisLivraison();
     },
-    (err) => { console.warn('Géolocalisation refusée', err); }
+    (err) => {
+      console.warn('Géolocalisation refusée ou indisponible', err);
+      if (detailEl) detailEl.textContent = 'Position non disponible — déplacez le repère sur la carte ou saisissez votre adresse manuellement.';
+    },
+    { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 }
   );
 }
 
@@ -584,8 +634,15 @@ async function calculerFraisLivraison() {
       const detailEl = document.getElementById('frais-livraison-detail');
       if (detailEl) detailEl.textContent = data.detail + ' — ' + data.temps_estime_min + ' min estimés';
       updateCheckoutRecap();
+    } else {
+      const detailEl = document.getElementById('frais-livraison-detail');
+      if (detailEl) detailEl.textContent = 'Impossible de calculer les frais pour cette position.';
     }
-  } catch (e) { console.error('calcul livraison', e); }
+  } catch (e) {
+    console.error('calcul livraison', e);
+    const detailEl = document.getElementById('frais-livraison-detail');
+    if (detailEl) detailEl.textContent = 'Erreur réseau lors du calcul des frais de livraison.';
+  }
 }
 
 // ---- Soumettre la commande ----
@@ -601,13 +658,19 @@ async function submitOrder(e) {
   if (!nom || !tel) { alert('Veuillez renseigner votre nom et téléphone.'); return; }
   if (cart.items.length === 0) { alert('Votre panier est vide.'); return; }
 
+  const isEmporter = modeType === 'emporter';
+  // §Géoloc — En mode livraison, on s'assure d'avoir une position avant
+  // l'envoi : si le client a refusé la géolocalisation, l'adresse saisie
+  // manuellement (ou déplacée sur la carte) reste acceptée.
+  if (!isEmporter && (!adresse) && (clientLat === null || clientLon === null)) {
+    alert('Merci de renseigner votre adresse ou d\'autoriser la géolocalisation, ou de déplacer le repère sur la carte.');
+    return;
+  }
+
   btn.disabled = true;
   btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Envoi en cours...';
 
   const idempotencyKey = crypto.randomUUID();
-
-  // §1.9 — Détecter le mode de livraison choisi par l'utilisateur
-  const isEmporter = modeType === 'emporter';
 
   const payload = {
     tenant_id: tenantId,
@@ -643,7 +706,7 @@ async function submitOrder(e) {
       updateCartUI();
       promoAppliquee = null;
 
-      // FIX — garder le lien de suivi en local pour ré-afficher le bouton
+      // Garder le lien de suivi en local pour ré-afficher le bouton
       // "Suivre ma commande" lors des prochaines visites de la boutique.
       if (data.url_suivi) {
         try {
