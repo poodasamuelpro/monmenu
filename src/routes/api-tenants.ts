@@ -2,6 +2,17 @@
 // ARCHITECTURE :
 //   • D1 (Cloudflare) → SITE WEB uniquement : config_globale, pays, plans
 //   • Supabase (PostgreSQL) → APPLICATION : tenants, menu, points_de_vente, etc.
+//
+// FIX URGENT (statut Ouvert/Fermé incohérent entre le bandeau et les
+// produits) — GET /:slug ne sélectionnait pas et ne renvoyait pas le champ
+// "horaires" du point de vente. boutique.js recharge les infos tenant côté
+// CLIENT via cet endpoint pour recalculer le statut sur chaque carte produit
+// (estOuvertMaintenant, rappelé toutes les 60s) — comme pdv_horaires n'était
+// jamais transmis ici, ce calcul recevait toujours "undefined" et affichait
+// "Fermé" sur tous les produits, même quand le bandeau du haut (calculé côté
+// serveur au premier rendu, avec les bonnes données) affichait "Ouvert".
+// Deux lignes changées : le select() du join points_de_vente, et l'objet
+// "result" renvoyé en JSON — voir les commentaires "FIX" ci-dessous.
 
 import { Hono } from 'hono'
 import type { Env } from '../types/database'
@@ -86,13 +97,15 @@ tenantsRouter.get('/:slug', async (c) => {
   // SUPABASE — tenant info (APPLICATION DATA)
   const adminClient = createSupabaseAdminClient(c.env)
 
+  // FIX : "horaires" ajouté au select du join points_de_vente — c'est ce
+  // champ précis qui manquait et cassait le calcul d'ouverture côté client.
   const { data: tenant, error } = await adminClient
     .from('tenants')
     .select(`
       id, nom, slug, logo_url, banniere_url,
       couleur_primaire, couleur_secondaire,
       whatsapp_number, metadata, statut, pays_id,
-      points_de_vente!inner(id, nom, adresse, latitude, longitude)
+      points_de_vente!inner(id, nom, adresse, latitude, longitude, horaires)
     `)
     .eq('slug', slug)
     .in('statut', ['actif', 'essai'])
@@ -137,7 +150,12 @@ tenantsRouter.get('/:slug', async (c) => {
     pdv_nom: pdv?.nom ?? null,
     pdv_adresse: pdv?.adresse ?? null,
     pdv_latitude: pdv?.latitude ?? null,
-    pdv_longitude: pdv?.longitude ?? null
+    pdv_longitude: pdv?.longitude ?? null,
+    // FIX : champ manquant — boutique.js s'en sert pour recalculer
+    // dynamiquement le statut Ouvert/Fermé côté client (estOuvertMaintenant),
+    // rappelé toutes les 60 secondes. Sans lui, undefined => toujours "Fermé"
+    // sur les cartes produits, quel que soit le vrai statut du restaurant.
+    pdv_horaires: pdv?.horaires ?? null
   }
 
   // Mettre en cache 5 minutes
