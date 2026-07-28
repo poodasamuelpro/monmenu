@@ -1,20 +1,18 @@
-// MonMenu — Dashboard restaurant (v1.5.0 — notification WhatsApp au client 
-// lors de la confirmation de commande)
+// MonMenu — Dashboard restaurant (v1.5.1 — fix normalisation numéro WhatsApp)
 //
 // CHANGELOG de ce fichier par rapport à la version précédente :
-//   ... (voir historique v1.4.0 dans les sections ci-dessous, inchangées)
-//   6. FIX WhatsApp confirmation client — quand le restaurant clique sur
-//      "Confirmer" une commande (en_attente → confirmee), un onglet WhatsApp
-//      s'ouvre automatiquement vers le CLIENT (numéro pris sur la commande)
-//      avec un message pré-rempli : récap de commande + lien de suivi.
-//      Ouverture "popup-safe" : la fenêtre est ouverte de façon SYNCHRONE
-//      dans le clic (avant le fetch), puis redirigée vers le vrai lien une
-//      fois le PATCH de statut confirmé côté serveur — sinon la plupart des
-//      navigateurs bloquent l'ouverture (elle doit avoir lieu dans le même
-//      geste utilisateur).
-//      Pour les autres statuts (Préparer, En livraison, Livrée), PAS de
-//      redirection WhatsApp automatique : le livreur contacte directement le
-//      client, et ce dernier suit l'avancement sur sa page de suivi.
+//   ... (voir historique v1.4.0 / v1.5.0, inchangées)
+//   7. FIX WhatsApp — genererLienWhatsAppClient() normalise désormais le
+//      numéro du client avant de construire le lien wa.me (retire les
+//      espaces/tirets/parenthèses, convertit un préfixe "00" en "+" avant
+//      de le retirer). Corrige les liens qui ouvraient un navigateur sur
+//      une page WhatsApp "morte" au lieu de rediriger vers une conversation
+//      réelle, quand le numéro du client était saisi avec ce genre de
+//      formatage. Ne peut pas deviner un indicatif pays manquant.
+//   8. FIX Paramètres — le champ "Numéro WhatsApp" du restaurant impose
+//      désormais un format avec indicatif international (pattern + aide
+//      contextuelle), pour éviter les numéros locaux sans indicatif qui
+//      cassent tous les liens WhatsApp de la boutique.
 'use strict';
 
 let currentSection = 'commandes';
@@ -374,6 +372,16 @@ function renderCommandes(commandes, container, total) {
   }).join('');
 }
 
+// §WhatsApp — Normalise un numéro pour un lien wa.me fiable : retire tout ce
+// qui n'est pas chiffre/+, convertit un préfixe "00" en "+" (convention
+// internationale alternative) avant de le retirer, puis retire le "+" (wa.me
+// n'accepte que des chiffres). Ne peut pas deviner un indicatif pays absent.
+function formatWhatsAppNumber(numeroRaw) {
+  let n = (numeroRaw || '').replace(/[^0-9+]/g, '');
+  if (n.startsWith('00')) n = '+' + n.slice(2);
+  return n.replace(/\D/g, '');
+}
+
 // §WhatsApp — Construit le message de confirmation envoyé au CLIENT quand le
 // restaurant clique sur "Confirmer" (statut en_attente → confirmee). Inclut
 // le récap de commande et le lien de suivi (domaine dynamique via
@@ -396,8 +404,13 @@ function construireMessageConfirmationClient(cmd) {
 
 // §WhatsApp — Construit un lien wa.me vers le numéro du CLIENT (pas celui du
 // restaurant) avec le message pré-rempli.
+// FIX — le numéro est désormais normalisé via formatWhatsAppNumber() (au
+// lieu d'un simple retrait des caractères non numériques), pour corriger le
+// cas fréquent d'un numéro client saisi/enregistré avec un préfixe "00"
+// (ex: "0022670000000") qui générait un lien wa.me invalide, ouvrant une
+// page WhatsApp "morte" dans le navigateur au lieu d'une conversation.
 function genererLienWhatsAppClient(numero, message) {
-  const numeroNettoye = (numero || '').replace(/\D/g, '');
+  const numeroNettoye = formatWhatsAppNumber(numero);
   return `https://wa.me/${numeroNettoye}?text=${encodeURIComponent(message)}`;
 }
 
@@ -1205,7 +1218,14 @@ async function loadParametres() {
           </div>
           <div>
             <label class="block text-sm font-semibold text-gray-700 mb-1.5">Numéro WhatsApp</label>
-            <input id="param-whatsapp" type="tel" required value="${escHtml(tenant.whatsapp_number||'')}" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200" placeholder="+226 70 00 00 00">
+            <!-- FIX WhatsApp — format international exigé (pattern + placeholder
+                 explicite), pour éviter un numéro local sans indicatif qui
+                 casserait tous les liens wa.me générés depuis la boutique. -->
+            <input id="param-whatsapp" type="tel" required
+              pattern="^\\+[0-9]{8,15}$"
+              title="Format international requis, avec indicatif pays. Exemple : +22670000000"
+              value="${escHtml(tenant.whatsapp_number||'')}" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200" placeholder="+226 70 00 00 00">
+            <p class="text-xs text-gray-400 mt-1">Indispensable : indicatif pays inclus (ex : +226 pour le Burkina Faso), sinon les liens WhatsApp de votre boutique ne fonctionneront pas.</p>
           </div>
           <div>
             <label class="block text-sm font-semibold text-gray-700 mb-1.5">URL de votre boutique</label>
@@ -1259,7 +1279,7 @@ async function saveParametres(e) {
   const fb = document.getElementById('param-feedback'); fb.classList.remove('hidden');
   const data = {
     nom: document.getElementById('param-nom').value.trim(),
-    whatsapp_number: document.getElementById('param-whatsapp').value.trim().replace(/\s/g,''),
+    whatsapp_number: formatWhatsAppNumberAvecPlus(document.getElementById('param-whatsapp').value.trim()),
     domaine_perso: document.getElementById('param-domaine')?.value?.trim() || null
   };
   try {
@@ -1275,6 +1295,18 @@ async function saveParametres(e) {
     } else { const d = await res.json(); fb.textContent = d.error||'Erreur.'; fb.className = 'text-xs bg-red-50 text-red-600 rounded-lg px-3 py-2'; }
   } catch { fb.textContent = 'Erreur réseau.'; fb.className = 'text-xs bg-red-50 text-red-600 rounded-lg px-3 py-2'; }
 }
+
+// §WhatsApp — Normalise mais CONSERVE le "+" pour le stockage en base (le
+// numéro doit être lisible/rappelable tel quel dans le dashboard), à la
+// différence de formatWhatsAppNumber() utilisée pour les liens wa.me qui
+// exigent des chiffres seuls.
+function formatWhatsAppNumberAvecPlus(numeroRaw) {
+  let n = (numeroRaw || '').replace(/[^0-9+]/g, '');
+  if (n.startsWith('00')) n = '+' + n.slice(2);
+  if (n && !n.startsWith('+')) n = '+' + n;
+  return n;
+}
+
 function demanderResetPassword() { alert('Contactez le support : support@monmenu.app'); }
 function confirmerSuppression() {
   if (confirm('ATTENTION : Irréversible. Confirmer ?')) alert('Demande enregistrée. Notre équipe vous contactera dans 48h.');
