@@ -6,7 +6,7 @@
 
 ---
 
-## 1. PÉRIMÈTRE DE L'AUDIT
+## 1. PÉRIMÈTRE DE L'AUDIT 
 
 Fichiers analysés :
 - `src/pages/inscription.ts` — Page d'inscription (formulaire multi-étapes)
