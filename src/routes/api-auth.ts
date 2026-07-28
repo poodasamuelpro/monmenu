@@ -22,6 +22,31 @@ const authRouter = new Hono<{ Bindings: Env }>()
 const ACCESS_TOKEN_COOKIE = 'sb-access-token'
 const REFRESH_TOKEN_COOKIE = 'sb-refresh-token'
 
+// §2.CSRF — Middleware CSRF sur les routes sensibles de ce router (logout, refresh).
+// login et register sont exemptés : un CSRF sur login ne compromet pas le compte
+// (le navigateur n'envoie pas les credentials du site cible). logout et refresh
+// changent l'état de session, donc nécessitent la protection.
+// Les clients API/mobile avec Bearer token sont toujours exemptés.
+authRouter.use('/logout', async (c, next) => {
+  const hasBearerToken = c.req.header('Authorization')?.startsWith('Bearer ')
+  if (hasBearerToken) return next()
+  const xRequestedWith = c.req.header('X-Requested-With')
+  if (xRequestedWith !== 'XMLHttpRequest') {
+    return c.json({ error: 'Header X-Requested-With: XMLHttpRequest requis.', code: 'CSRF_PROTECTION' }, 403)
+  }
+  return next()
+})
+
+authRouter.use('/refresh', async (c, next) => {
+  const hasBearerToken = c.req.header('Authorization')?.startsWith('Bearer ')
+  if (hasBearerToken) return next()
+  const xRequestedWith = c.req.header('X-Requested-With')
+  if (xRequestedWith !== 'XMLHttpRequest') {
+    return c.json({ error: 'Header X-Requested-With: XMLHttpRequest requis.', code: 'CSRF_PROTECTION' }, 403)
+  }
+  return next()
+})
+
 // Durées de vie des cookies (en secondes). L'access token Supabase expire
 // généralement après 1h côté serveur — le cookie peut avoir une durée un
 // peu plus longue sans risque : Supabase invalidera de toute façon le JWT
@@ -300,7 +325,7 @@ authRouter.post('/register', async (c) => {
       : 'Compte créé. Vérifiez votre email pour confirmer votre inscription.',
     slug: newTenant.slug,
     tenant_id: newTenant.id,
-    boutique_url: `https://monmenu.app/${newTenant.slug}`,
+    boutique_url: `/${newTenant.slug}`,
     ...(authData.session ? {
       tenant: {
         id: newTenant.id,

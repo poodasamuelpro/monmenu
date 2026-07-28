@@ -72,6 +72,7 @@ export function renderLegalPage(type: 'cgu' | 'confidentialite' | 'mentions' | '
     </nav>
   </main>
   ${renderFooter(nomProjet)}
+  <script src="/static/js/main.js"></script>
 </body>
 </html>`
 }

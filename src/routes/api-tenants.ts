@@ -233,7 +233,8 @@ tenantsRouter.get('/:slug/qrcode', async (c) => {
     return c.json({ error: 'Restaurant introuvable.' }, 404)
   }
 
-  const url = `https://monmenu.app/${slug}`
+  // §4 — URL dynamique via l'origine du Worker
+  const url = `${new URL(c.req.url).origin}/${slug}`
   const color = (tenant.couleur_primaire ?? '#DC2626').replace('#', '')
 
   return c.json({

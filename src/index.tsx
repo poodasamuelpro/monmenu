@@ -14,7 +14,7 @@ import { blogRouter } from './routes/api-blog'
 import { newsletterRouter } from './routes/api-newsletter'
 import { setSecurityHeaders } from './lib/security'
 import { getNomProjet, getWhatsAppSupport, createSupabaseAdminClient, createSupabaseClient } from './lib/supabase'
-import { detectLocale } from './i18n'
+import { detectLocale, getTranslations } from './i18n'
 
 // ---- Imports composants & pages ----
 import { renderHomePage } from './pages/home'
@@ -34,6 +34,21 @@ const app = new Hono<{ Bindings: Env }>()
 
 // Nom du cookie httpOnly — doit rester identique à celui posé dans api-auth.ts
 const ACCESS_TOKEN_COOKIE = 'sb-access-token'
+
+// §3 — Résolution de locale : ?lang=en/fr > cookie monmenu-lang > Accept-Language header > 'fr' par défaut
+function resolveLocale(c: any): string {
+  // 1. Paramètre URL explicite (?lang=en ou ?lang=fr)
+  const langParam = c.req.query('lang')
+  if (langParam === 'en' || langParam === 'fr') return langParam
+
+  // 2. Cookie de préférence posé lors d'une visite précédente
+  const langCookie = getCookie(c, 'monmenu-lang')
+  if (langCookie === 'en' || langCookie === 'fr') return langCookie
+
+  // 3. Header Accept-Language du navigateur
+  const acceptLang = c.req.header('Accept-Language') ?? null
+  return detectLocale(acceptLang)
+}
 
 // ---- Middleware globaux ----
 app.use('*', logger())
@@ -72,7 +87,10 @@ function originAutorisee(origin: string): string | null {
 app.use('/api/*', cors({
   origin: (origin) => originAutorisee(origin) ?? '',
   allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowHeaders: ['Content-Type', 'Authorization', 'X-Idempotency-Key'],
+  // X-Requested-With ajouté pour la protection CSRF (§2.CSRF) :
+  // les navigateurs envoient ce header sur les requêtes fetch() côté client
+  // mais pas sur les soumissions de formulaires cross-origin (CSRF).
+  allowHeaders: ['Content-Type', 'Authorization', 'X-Idempotency-Key', 'X-Requested-With'],
   exposeHeaders: ['X-Cache', 'X-RateLimit-Remaining'],
   credentials: true
 }))
@@ -131,7 +149,8 @@ app.get('/sitemap.xml', async (c) => {
     .is('deleted_at', null)
     .limit(500)
 
-  const baseUrl = 'https://monmenu.app'
+  // §4 — URL de base dynamique (Workers subdomain ou domaine définitif)
+  const baseUrl = new URL(c.req.url).origin
   const restaurantUrls = (tenantsData ?? []).map((t: { slug: string; updated_at: string }) =>
     `  <url>
     <loc>${baseUrl}/${t.slug}</loc>
@@ -196,30 +215,39 @@ ${restaurantUrls}
 })
 
 // ---- §3 — Routes i18n /fr et /en ----
-// Les pages institutionnelles sont servies en FR (défaut) ou EN.
-// /fr et /en redirigent vers la page d'accueil avec le préfixe de langue.
-// /fr/blog, /fr/contact, etc. servent la page dans la langue correspondante.
-// La boutique et le dashboard restent en FR uniquement.
-app.get('/fr', (c) => c.redirect('/', 302))
-app.get('/en', (c) => c.redirect('/?lang=en', 302))
+// /fr → pose le cookie monmenu-lang=fr, redirige vers /
+// /en → pose le cookie monmenu-lang=en, redirige vers /?lang=en
+// /fr/contact, /en/contact → redirigent avec le bon paramètre ?lang=
+app.get('/fr', (c) => {
+  c.header('Set-Cookie', 'monmenu-lang=fr; Path=/; Max-Age=31536000; SameSite=Lax')
+  return c.redirect('/', 302)
+})
+app.get('/en', (c) => {
+  c.header('Set-Cookie', 'monmenu-lang=en; Path=/; Max-Age=31536000; SameSite=Lax')
+  return c.redirect('/?lang=en', 302)
+})
 app.get('/fr/*', (c) => {
   const path = c.req.path.replace(/^\/fr/, '') || '/'
+  c.header('Set-Cookie', 'monmenu-lang=fr; Path=/; Max-Age=31536000; SameSite=Lax')
   return c.redirect(path, 302)
 })
 app.get('/en/*', (c) => {
   const path = c.req.path.replace(/^\/en/, '') || '/'
+  c.header('Set-Cookie', 'monmenu-lang=en; Path=/; Max-Age=31536000; SameSite=Lax')
   return c.redirect(path + (path.includes('?') ? '&' : '?') + 'lang=en', 302)
 })
 
 // ---- robots.txt ----
 app.get('/robots.txt', (c) => {
+  // §4 — URL Sitemap dynamique basée sur l'origine du Worker
+  const origin = new URL(c.req.url).origin
   return c.text(`User-agent: *
 Allow: /
 Disallow: /dashboard/
 Disallow: /api/
 Disallow: /_internal/
 
-Sitemap: https://monmenu.app/sitemap.xml
+Sitemap: ${origin}/sitemap.xml
 
 # Admin subdomain indexé séparément avec interdiction totale
 `)
@@ -236,8 +264,14 @@ app.get('/suivi/:token', async (c) => {
 // ---- Page d'accueil ----
 app.get('/', async (c) => {
   setSecurityHeaders(c)
+  // §3 — Résolution de la locale : ?lang= > cookie > Accept-Language
+  const locale = resolveLocale(c)
+  // Poser le cookie de langue si ?lang= explicite (pour persistance)
+  if (c.req.query('lang') === 'en' || c.req.query('lang') === 'fr') {
+    c.header('Set-Cookie', `monmenu-lang=${locale}; Path=/; Max-Age=31536000; SameSite=Lax`)
+  }
   const nomProjet = await getNomProjet(c.env)
-  return c.html(renderHomePage(nomProjet))
+  return c.html(renderHomePage(nomProjet, locale))
 })
 
 // ---- Pages institutionnelles ----
@@ -252,11 +286,15 @@ app.get('/tarifs', (c) => c.redirect('/#tarifs', 301))
 
 app.get('/contact', async (c) => {
   setSecurityHeaders(c)
+  const locale = resolveLocale(c)
+  if (c.req.query('lang') === 'en' || c.req.query('lang') === 'fr') {
+    c.header('Set-Cookie', `monmenu-lang=${locale}; Path=/; Max-Age=31536000; SameSite=Lax`)
+  }
   const [nomProjet, whatsappSupport] = await Promise.all([
     getNomProjet(c.env),
     getWhatsAppSupport(c.env)
   ])
-  return c.html(renderContactPage(nomProjet, whatsappSupport))
+  return c.html(renderContactPage(nomProjet, whatsappSupport, locale))
 })
 
 // ---- Page inscription restaurant ----

@@ -141,19 +141,21 @@ export function renderDashboardPage(
       overlay.classList.toggle('hidden');
     }
 
+    // §2 — logout() : appel serveur OBLIGATOIRE pour supprimer le cookie httpOnly.
+    // Un simple localStorage.removeItem() ne suffirait pas : le cookie httpOnly
+    // n'est pas accessible en JS, seul le serveur peut le supprimer via Set-Cookie.
+    // credentials:'include' envoie le cookie → le serveur appelle clearAuthCookies().
     async function logout() {
       if (!confirm('Se déconnecter ?')) return;
-      const token = localStorage.getItem('monmenu_auth_token');
-      if (token) {
-        try {
-          await fetch('/api/v1/auth/logout', {
-            method: 'POST',
-            headers: { 'Authorization': 'Bearer ' + token }
-          });
-        } catch {}
-      }
-      localStorage.removeItem('monmenu_auth_token');
-      localStorage.removeItem('monmenu_refresh_token');
+      try {
+        await fetch('/api/v1/auth/logout', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'X-Requested-With': 'XMLHttpRequest' }
+        });
+      } catch {}
+      // Supprimer uniquement les données d'affichage non sensibles du localStorage.
+      // Le token JWT n'a jamais été stocké ici depuis la migration §2.
       localStorage.removeItem('monmenu_tenant');
       window.location.href = '/dashboard';
     }

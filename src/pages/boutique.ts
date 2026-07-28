@@ -22,7 +22,8 @@ export function renderBoutiquePage(tenant: TenantBoutique, nomProjet: string): s
   const secondaryColor = tenant.couleur_secondaire || '#1D4ED8'
   const currentYear = new Date().getFullYear()
 
-  const boutiqueUrl = `https://monmenu.app/${tenant.slug}`
+  // §4 — URL relative (pas de domaine .app statique)
+  const boutiqueUrl = `/${tenant.slug}`
   const description = `Commandez vos plats chez ${tenant.nom} sur ${nomProjet}. Livraison ou retrait sur place.`
 
   return `${renderHead(
@@ -329,6 +330,7 @@ export function renderBoutiquePage(tenant: TenantBoutique, nomProjet: string): s
 
   <!-- Leaflet JS — carte interactive (§1.1) -->
   <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.js"></script>
+  <script src="/static/js/main.js"></script>
   <script src="/static/js/boutique.js"></script>
   <script>
     // §2.4 : TENANT_ID retiré de la variable globale exposée.

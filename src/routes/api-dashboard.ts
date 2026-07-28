@@ -5,6 +5,13 @@
 // §2 — Toutes les routes acceptent désormais le token via cookie httpOnly
 //      "sb-access-token" (flux navigateur) OU header Authorization: Bearer
 //      (clients API/mobile), avec le cookie prioritaire.
+// §2.CSRF — Protection CSRF sur les routes d'écriture (POST/PATCH/DELETE).
+//   Stratégie : vérification du header "X-Requested-With: XMLHttpRequest".
+//   Ce header est ajouté par le dashboard JS (fetch() côté client) mais ne peut
+//   PAS être ajouté automatiquement par un formulaire HTML cross-origin (CSRF).
+//   Les clients API/mobile qui utilisent Authorization: Bearer sont exemptés
+//   (les Bearer tokens ne sont jamais envoyés automatiquement par le navigateur,
+//   donc ils ne sont pas exposés aux attaques CSRF).
 
 import { Hono } from 'hono'
 import { getCookie } from 'hono/cookie'
@@ -18,6 +25,32 @@ const dashboardRouter = new Hono<{ Bindings: Env }>()
 // et utilisé dans src/middleware/auth.ts.
 const ACCESS_TOKEN_COOKIE = 'sb-access-token'
 
+// §2.CSRF — Middleware CSRF appliqué sur toutes les requêtes d'écriture
+// (POST, PATCH, DELETE, PUT) de ce router.
+// Logique : si le client s'authentifie via cookie httpOnly (comportement navigateur
+// automatique), il DOIT aussi envoyer "X-Requested-With: XMLHttpRequest" pour prouver
+// qu'il s'agit d'un appel JS légitime et non d'une soumission de formulaire cross-origin.
+// Les clients API/mobile avec Authorization: Bearer sont exemptés (pas de risque CSRF).
+dashboardRouter.use('*', async (c, next) => {
+  const method = c.req.method.toUpperCase()
+  if (!['POST', 'PATCH', 'PUT', 'DELETE'].includes(method)) {
+    return next()
+  }
+  // Clients API/mobile avec Bearer token : exemptés (Bearer n'est jamais envoyé auto par le navigateur)
+  const hasBearerToken = c.req.header('Authorization')?.startsWith('Bearer ')
+  if (hasBearerToken) return next()
+
+  // Clients navigateur (cookie) : vérifier X-Requested-With
+  const xRequestedWith = c.req.header('X-Requested-With')
+  if (xRequestedWith !== 'XMLHttpRequest') {
+    return c.json({
+      error: 'Requête refusée. Header X-Requested-With: XMLHttpRequest requis sur les opérations d\'écriture.',
+      code: 'CSRF_PROTECTION'
+    }, 403)
+  }
+  return next()
+})
+
 function extractToken(c: any): string | null {
   const cookieToken = getCookie(c, ACCESS_TOKEN_COOKIE)
   if (cookieToken && cookieToken.length >= 20) return cookieToken.trim()
@@ -29,6 +62,22 @@ function extractToken(c: any): string | null {
   }
 
   return null
+}
+
+/**
+ * §2.CSRF — Vérifie la protection CSRF sur les routes d'écriture.
+ * Retourne true (protection OK) si :
+ *   a) Le client utilise Authorization: Bearer (clients API/mobile — pas de risque CSRF)
+ *   b) Le header "X-Requested-With: XMLHttpRequest" est présent (client navigateur légitime)
+ * Retourne false (requête CSRF potentielle) si :
+ *   - Authentification par cookie ET header X-Requested-With absent.
+ */
+function checkCsrfProtection(c: any): boolean {
+  const hasBearerToken = c.req.header('Authorization')?.startsWith('Bearer ')
+  if (hasBearerToken) return true // Bearer token = client API, pas de risque CSRF
+
+  const xRequestedWith = c.req.header('X-Requested-With')
+  return xRequestedWith === 'XMLHttpRequest'
 }
 
 // ---- Middleware d'authentification ----
@@ -985,7 +1034,7 @@ dashboardRouter.get('/profil', async (c) => {
     pdv_adresse: pdv?.adresse ?? null,
     pdv_latitude: pdv?.latitude ?? null,
     pdv_longitude: pdv?.longitude ?? null,
-    boutique_url: `https://monmenu.app/${tenant.slug}`,
+    boutique_url: `/${tenant.slug}`,
     total_commandes: totalCommandes ?? 0
   })
 })
@@ -1222,9 +1271,67 @@ dashboardRouter.post('/upload-image', async (c) => {
     customMetadata: { tenant_id: auth.tenant_id, uploaded_at: new Date().toISOString() }
   })
 
-  const publicUrl = `https://media.monmenu.app/${key}`
+  // §4 — URL dynamique via le Worker (pas de domaine statique codé en dur)
+  // Utilise l'origine de la requête pour construire une URL portable :
+  // sur *.workers.dev → https://monmenu.<account>.workers.dev/api/v1/media/<key>
+  // sur un domaine personnalisé → https://monmenu.com/api/v1/media/<key> (le jour J)
+  const origin = new URL(c.req.url).origin
+  const publicUrl = `${origin}/api/v1/media/${encodeURIComponent(key)}`
 
   return c.json({ success: true, url: publicUrl, key }, 201)
+})
+
+// ---- GET /api/v1/dashboard/media/:key — Serve une image depuis R2 ----
+// §4 — Route publique qui lit le fichier dans le bucket R2_MEDIA et le retourne
+// avec le bon Content-Type. Remplace l'ancien domaine statique media.monmenu.app
+// (inexistant). Le key est URL-encodé côté client (encodeURIComponent).
+// Sécurité : pas d'auth requise (les images de menu sont publiques par design),
+// mais on valide le format du key pour éviter les traversals.
+dashboardRouter.get('/media/:key{.+}', async (c) => {
+  const rawKey = c.req.param('key')
+  if (!rawKey) return c.json({ error: 'Clé manquante.' }, 400)
+
+  // Décoder le key URL-encodé
+  let key: string
+  try {
+    key = decodeURIComponent(rawKey)
+  } catch {
+    return c.json({ error: 'Clé invalide.' }, 400)
+  }
+
+  // Bloquer les tentatives de traversal de chemin
+  if (key.includes('..') || key.startsWith('/')) {
+    return c.json({ error: 'Clé non autorisée.' }, 403)
+  }
+
+  if (!c.env.R2_MEDIA) {
+    return c.json({ error: 'Stockage médias non configuré.' }, 503)
+  }
+
+  const object = await c.env.R2_MEDIA.get(key)
+
+  if (!object) {
+    return c.json({ error: 'Image introuvable.' }, 404)
+  }
+
+  const contentType = object.httpMetadata?.contentType ?? 'application/octet-stream'
+  const etag = object.etag ?? ''
+
+  // Vérification ETag (cache conditionnel)
+  const ifNoneMatch = c.req.header('If-None-Match')
+  if (etag && ifNoneMatch === `"${etag}"`) {
+    return new Response(null, { status: 304 })
+  }
+
+  return new Response(object.body, {
+    status: 200,
+    headers: {
+      'Content-Type': contentType,
+      'Cache-Control': 'public, max-age=31536000, immutable',
+      'ETag': etag ? `"${etag}"` : '',
+      'X-Content-Type-Options': 'nosniff',
+    }
+  })
 })
 
 // ---- GET /api/v1/dashboard/qrcode ----
@@ -1244,7 +1351,9 @@ dashboardRouter.get('/qrcode', async (c) => {
 
   if (error || !tenant) return c.json({ error: 'Restaurant introuvable.' }, 404)
 
-  const boutiqueUrl = `https://monmenu.app/${tenant.slug}`
+  // §4 — URL boutique dynamique basée sur l'origine du Worker (pas de domaine .app statique)
+  const origin = new URL(c.req.url).origin
+  const boutiqueUrl = `${origin}/${tenant.slug}`
   const color = (tenant.couleur_primaire ?? '#DC2626').replace('#', '')
 
   return c.json({

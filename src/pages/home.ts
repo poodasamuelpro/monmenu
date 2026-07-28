@@ -17,29 +17,50 @@
 import { renderHead, jsonLdOrganization, jsonLdWebSite } from '../components/head'
 import { renderNav } from '../components/nav'
 import { renderFooter } from '../components/footer'
+import { getTranslations } from '../i18n'
 
-export function renderHomePage(nomProjet: string): string {
-  const description = `${nomProjet} est la plateforme de commande en ligne pour les restaurants d'Afrique de l'Ouest et Centrale. Créez votre boutique en quelques minutes. Sans commission.`
+export function renderHomePage(nomProjet: string, locale: string = 'fr'): string {
+  const t = getTranslations(locale)
+  const isEn = locale === 'en'
+
+  const description = isEn
+    ? `${nomProjet} is the online ordering platform for restaurants in West and Central Africa. Create your shop in minutes. No commission.`
+    : `${nomProjet} est la plateforme de commande en ligne pour les restaurants d'Afrique de l'Ouest et Centrale. Créez votre boutique en quelques minutes. Sans commission.`
+
+  const heroTitle = isEn
+    ? `Your restaurant,<br>\n            <span class="text-red-600 dark:text-red-400">online</span> in<br>\n            minutes`
+    : `Votre restaurant,<br>\n            <span class="text-red-600 dark:text-red-400">en ligne</span> en<br>\n            quelques minutes`
+
+  const heroSubtitle = isEn
+    ? `Create your online ordering shop, manage your orders in real time and receive instant WhatsApp notifications. <strong class="text-gray-900 dark:text-white">No commission. Fixed subscription.</strong>`
+    : `Créez votre boutique de commande en ligne, gérez vos commandes en temps réel et recevez des notifications WhatsApp instantanées. <strong class="text-gray-900 dark:text-white">Sans commission. Abonnement fixe.</strong>`
+
+  const heroCta = t.home.hero_cta
+  const heroCta2 = isEn ? 'See how it works' : 'Voir comment ça marche'
+  const zeroCommission = isEn ? '0% commission on your sales' : '0% de commission sur vos ventes'
+  const trustItems = isEn
+    ? ['No commitment', 'Ready in minutes', 'French & English support']
+    : ['Sans engagement', 'Prêt en quelques minutes', 'Support en français']
+
   return `${renderHead(
-    `${nomProjet} — Commandez en ligne dans vos restaurants préférés`,
+    isEn ? `${nomProjet} — Order online at your favourite restaurants` : `${nomProjet} — Commandez en ligne dans vos restaurants préférés`,
     description,
     nomProjet,
     '',
-    'https://monmenu.app/',
+    '',
     {
       ogType: 'website',
-      ogLocale: 'fr_FR',
-      canonicalUrl: 'https://monmenu.app/',
+      ogLocale: isEn ? 'en_US' : 'fr_FR',
       jsonLd: { '@context': 'https://schema.org', '@graph': [jsonLdOrganization(nomProjet), jsonLdWebSite(nomProjet)] },
       hreflangAlternates: [
-        { lang: 'fr', url: 'https://monmenu.app/' },
-        { lang: 'en', url: 'https://monmenu.app/?lang=en' },
-        { lang: 'x-default', url: 'https://monmenu.app/' }
+        { lang: 'fr', url: '/?lang=fr' },
+        { lang: 'en', url: '/?lang=en' },
+        { lang: 'x-default', url: '/' }
       ]
     }
   )}
 <body class="font-sans bg-white dark:bg-[#0B0A09] text-gray-900 dark:text-gray-50 transition-colors">
-  ${renderNav(nomProjet, 'accueil')}
+  ${renderNav(nomProjet, 'accueil', locale)}
 
   <!-- ===================================================== -->
   <!-- HERO                                                   -->
@@ -51,42 +72,39 @@ export function renderHomePage(nomProjet: string): string {
         <div>
           <div class="inline-flex items-center gap-2 bg-red-100 dark:bg-red-950/50 text-red-700 dark:text-red-300 text-xs font-semibold px-3 py-1.5 rounded-full mb-6">
             <span class="w-1.5 h-1.5 rounded-full bg-red-600 dark:bg-red-400"></span>
-            0% de commission sur vos ventes
+            ${zeroCommission}
           </div>
 
           <h1 class="text-4xl sm:text-5xl lg:text-6xl font-extrabold text-gray-900 dark:text-white leading-tight mb-6">
-            Votre restaurant,<br>
-            <span class="text-red-600 dark:text-red-400">en ligne</span> en<br>
-            quelques minutes
+            ${heroTitle}
           </h1>
           <p class="text-lg text-gray-600 dark:text-gray-300 leading-relaxed mb-8 max-w-lg">
-            Créez votre boutique de commande en ligne, gérez vos commandes en temps réel
-            et recevez des notifications WhatsApp instantanées. <strong class="text-gray-900 dark:text-white">Sans commission. Abonnement fixe.</strong>
+            ${heroSubtitle}
           </p>
           <div class="flex flex-col sm:flex-row gap-3">
             <a href="/inscription"
               class="inline-flex items-center justify-center gap-2 bg-red-600 hover:bg-red-700 dark:bg-red-600 dark:hover:bg-red-500 text-white font-semibold px-6 py-3.5 rounded-xl transition-colors text-base shadow-lg shadow-red-200 dark:shadow-none">
               <i class="fa-solid fa-store" aria-hidden="true"></i>
-              <span>Créer ma boutique gratuitement</span>
+              <span>${heroCta}</span>
             </a>
             <a href="#comment-ca-marche"
               class="inline-flex items-center justify-center gap-2 bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 font-semibold px-6 py-3.5 rounded-xl border border-gray-200 dark:border-gray-700 transition-colors text-base">
               <i class="fa-regular fa-circle-play" aria-hidden="true"></i>
-              <span>Voir comment ça marche</span>
+              <span>${heroCta2}</span>
             </a>
           </div>
           <div class="flex flex-wrap items-center gap-x-6 gap-y-2 mt-8 text-sm text-gray-500 dark:text-gray-400">
             <div class="flex items-center gap-1.5">
               <i class="fa-solid fa-circle-check text-red-600 dark:text-red-400" aria-hidden="true"></i>
-              <span>Sans engagement</span>
+              <span>${trustItems[0]}</span>
             </div>
             <div class="flex items-center gap-1.5">
               <i class="fa-solid fa-circle-check text-blue-600 dark:text-blue-400" aria-hidden="true"></i>
-              <span>Prêt en quelques minutes</span>
+              <span>${trustItems[1]}</span>
             </div>
             <div class="flex items-center gap-1.5">
               <i class="fa-solid fa-circle-check text-red-600 dark:text-red-400" aria-hidden="true"></i>
-              <span>Support en français</span>
+              <span>${trustItems[2]}</span>
             </div>
           </div>
         </div>
@@ -116,7 +134,7 @@ export function renderHomePage(nomProjet: string): string {
               <div class="p-3 -mt-6 space-y-2">
                 <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-2.5 flex items-center gap-2.5">
                   <div class="w-10 h-10 rounded-lg vignette-plat flex-shrink-0 overflow-hidden">
-                    <img src="/static/img/demo/plat-riz-gras.jpg" alt="Riz gras poulet" loading="lazy"
+                    <img src="/api/v1/media/demo/plat-riz-gras.jpg" alt="Riz gras poulet" loading="lazy"
                       class="w-full h-full object-cover" onerror="this.replaceWith(Object.assign(document.createElement('i'),{className:'fa-solid fa-bowl-rice text-red-500 dark:text-red-400 text-sm flex items-center justify-center w-full h-full'}))">
                   </div>
                   <div>
@@ -126,7 +144,7 @@ export function renderHomePage(nomProjet: string): string {
                 </div>
                 <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-2.5 flex items-center gap-2.5">
                   <div class="w-10 h-10 rounded-lg vignette-plat flex-shrink-0 overflow-hidden">
-                    <img src="/static/img/demo/plat-poulet-braise.jpg" alt="Poulet braisé" loading="lazy"
+                    <img src="/api/v1/media/demo/plat-poulet-braise.jpg" alt="Poulet braisé" loading="lazy"
                       class="w-full h-full object-cover" onerror="this.replaceWith(Object.assign(document.createElement('i'),{className:'fa-solid fa-drumstick-bite text-blue-500 dark:text-blue-400 text-sm flex items-center justify-center w-full h-full'}))">
                   </div>
                   <div>
@@ -168,34 +186,41 @@ export function renderHomePage(nomProjet: string): string {
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
       <div class="text-center mb-14">
         <h2 class="text-3xl sm:text-4xl font-extrabold text-gray-900 dark:text-white mb-4">
-          Tout ce dont votre restaurant a besoin
+          ${isEn ? 'Everything your restaurant needs' : 'Tout ce dont votre restaurant a besoin'}
         </h2>
         <p class="text-lg text-gray-600 dark:text-gray-300 max-w-2xl mx-auto">
-          Une plateforme complète, simple à utiliser au quotidien pour booster votre activité.
+          ${isEn ? 'A complete platform, easy to use daily to boost your business.' : 'Une plateforme complète, simple à utiliser au quotidien pour booster votre activité.'}
         </p>
       </div>
 
       <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
-        ${[
+        ${isEn ? [
+          { icon: 'fa-mobile-screen-button', title: 'Online Shop', desc: 'Your menu accessible via a unique link or QR code. No app to download.', accent: 'rouge' },
+          { icon: 'fa-brands fa-whatsapp', title: 'WhatsApp Notifications', desc: 'Every order arrives instantly on your WhatsApp, ready to confirm.', accent: 'bleu' },
+          { icon: 'fa-chart-line', title: 'Dashboard', desc: 'Clear statistics, full history and real-time menu management.', accent: 'noir' },
+          { icon: 'fa-location-dot', title: 'Geolocated Delivery', desc: 'Delivery fees calculated automatically based on distance, time and weather.', accent: 'bleu' },
+          { icon: 'fa-qrcode', title: 'Printable QR Code', desc: 'Automatically generated for each shop, to display in your establishment.', accent: 'rouge' },
+          { icon: 'fa-palette', title: 'Customization', desc: 'Your shop in your image: logo and colors, independent of MonMenu branding.', accent: 'noir' },
+        ] : [
           { icon: 'fa-mobile-screen-button', title: 'Boutique en ligne', desc: 'Votre menu accessible via un lien unique ou QR code. Aucune application à télécharger.', accent: 'rouge' },
           { icon: 'fa-brands fa-whatsapp', title: 'Notifications WhatsApp', desc: 'Chaque commande arrive instantanément sur votre WhatsApp, prête à confirmer.', accent: 'bleu' },
           { icon: 'fa-chart-line', title: 'Tableau de bord', desc: 'Statistiques claires, historique complet et gestion du menu en temps réel.', accent: 'noir' },
           { icon: 'fa-location-dot', title: 'Livraison géolocalisée', desc: "Frais de livraison calculés automatiquement selon la distance, l'heure et la météo.", accent: 'bleu' },
           { icon: 'fa-qrcode', title: 'QR Code imprimable', desc: "Généré automatiquement pour chaque boutique, à afficher dans votre établissement.", accent: 'rouge' },
           { icon: 'fa-palette', title: 'Personnalisation', desc: 'Votre boutique à votre image : logo et couleurs, indépendants de la charte MonMenu.', accent: 'noir' },
-        ].map(f => {
+        ]}.map(f => {
           const styles = {
             rouge: 'text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/40',
             bleu: 'text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/40',
             noir: 'text-gray-800 dark:text-gray-200 bg-gray-100 dark:bg-gray-800',
-          }[f.accent]
+          }[f.accent as 'rouge' | 'bleu' | 'noir']
           return `
           <article class="bg-gray-50 dark:bg-gray-900/60 rounded-xl p-6 border border-gray-100 dark:border-gray-800 hover:shadow-md dark:hover:shadow-none dark:hover:border-gray-700 transition-all card-hover">
-            <div class="w-11 h-11 ${styles} rounded-xl flex items-center justify-center mb-4" aria-hidden="true">
-              <i class="fa-solid ${f.icon} text-lg"></i>
+            <div class="w-11 h-11 \${styles} rounded-lg flex items-center justify-center mb-5 text-xl">
+              <i class="fa-solid \${f.icon}" aria-hidden="true"></i>
             </div>
-            <h3 class="font-bold text-gray-900 dark:text-white mb-2">${f.title}</h3>
-            <p class="text-sm text-gray-600 dark:text-gray-400 leading-relaxed">${f.desc}</p>
+            <h3 class="text-lg font-bold text-gray-900 dark:text-white mb-2">\${f.title}</h3>
+            <p class="text-sm text-gray-600 dark:text-gray-400 leading-relaxed">\${f.desc}</p>
           </article>`
         }).join('')}
       </div>
@@ -203,154 +228,144 @@ export function renderHomePage(nomProjet: string): string {
   </section>
 
   <!-- ===================================================== -->
-  <!-- COMMENT ÇA MARCHE (parcours réel, sans compte client)  -->
+  <!-- COMMENT ÇA MARCHE                                      -->
   <!-- ===================================================== -->
-  <section class="py-20 bg-gray-900 dark:bg-black" id="comment-ca-marche">
+  <section class="py-20 bg-gray-50 dark:bg-[#0B0A09]/50" id="comment-ca-marche">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="grid lg:grid-cols-2 gap-16 items-center">
+        <div>
+          <h2 class="text-3xl sm:text-4xl font-extrabold text-gray-900 dark:text-white mb-6">
+            \${isEn ? 'Ready in 3 steps' : 'Prêt en 3 étapes'}
+          </h2>
+          <div class="space-y-8">
+            <div class="flex gap-5">
+              <div class="flex-shrink-0 w-10 h-10 rounded-full bg-red-600 text-white flex items-center justify-center font-bold shadow-lg shadow-red-200 dark:shadow-none">1</div>
+              <div>
+                <h3 class="text-xl font-bold text-gray-900 dark:text-white mb-1">\${isEn ? 'Register your restaurant' : 'Inscrivez votre restaurant'}</h3>
+                <p class="text-gray-600 dark:text-gray-400">\${isEn ? 'Create your account and fill in your basic information in 2 minutes.' : 'Créez votre compte et renseignez vos informations de base en 2 minutes.'}</p>
+              </div>
+            </div>
+            <div class="flex gap-5">
+              <div class="flex-shrink-0 w-10 h-10 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold shadow-lg shadow-blue-200 dark:shadow-none">2</div>
+              <div>
+                <h3 class="text-xl font-bold text-gray-900 dark:text-white mb-1">\${isEn ? 'Add your products' : 'Ajoutez vos produits'}</h3>
+                <p class="text-gray-600 dark:text-gray-400">\${isEn ? 'Import your menu, add photos and set your prices.' : 'Importez votre menu, ajoutez des photos et fixez vos prix.'}</p>
+              </div>
+            </div>
+            <div class="flex gap-5">
+              <div class="flex-shrink-0 w-10 h-10 rounded-full bg-gray-900 dark:bg-white dark:text-gray-900 text-white flex items-center justify-center font-bold">3</div>
+              <div>
+                <h3 class="text-xl font-bold text-gray-900 dark:text-white mb-1">\${isEn ? 'Start selling' : 'Commencez à vendre'}</h3>
+                <p class="text-gray-600 dark:text-gray-400">\${isEn ? 'Share your link and receive your first orders on WhatsApp.' : 'Partagez votre lien et recevez vos premières commandes sur WhatsApp.'}</p>
+              </div>
+            </div>
+          </div>
+          <div class="mt-10">
+            <a href="/inscription" class="text-red-600 dark:text-red-400 font-bold flex items-center gap-2 hover:underline">
+              \${isEn ? 'Create my shop now' : 'Créer ma boutique maintenant'}
+              <i class="fa-solid fa-arrow-right" aria-hidden="true"></i>
+            </a>
+          </div>
+        </div>
+
+        <div class="relative">
+          <div class="aspect-video rounded-2xl bg-gray-200 dark:bg-gray-800 overflow-hidden shadow-2xl border-8 border-white dark:border-gray-900">
+             <div class="w-full h-full flex items-center justify-center bg-gradient-to-br from-gray-100 to-gray-200 dark:from-gray-800 dark:to-gray-900">
+                <i class="fa-solid fa-play text-5xl text-gray-400 dark:text-gray-600" aria-hidden="true"></i>
+             </div>
+          </div>
+          <!-- Badge flottant -->
+          <div class="absolute -bottom-6 -left-6 bg-white dark:bg-gray-800 p-4 rounded-xl shadow-xl flex items-center gap-3">
+             <div class="w-10 h-10 rounded-full bg-green-100 dark:bg-green-900/40 flex items-center justify-center">
+                <i class="fa-brands fa-whatsapp text-green-600 text-xl" aria-hidden="true"></i>
+             </div>
+             <div>
+                <div class="text-[10px] text-gray-500 uppercase font-bold tracking-wider">\${isEn ? 'New order' : 'Nouvelle commande'}</div>
+                <div class="text-sm font-bold text-gray-900 dark:text-white">\${isEn ? 'Received in 0.5s' : 'Reçue en 0.5s'}</div>
+             </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================================================== -->
+  <!-- TARIFS                                                 -->
+  <!-- ===================================================== -->
+  <section class="py-20 bg-white dark:bg-[#0B0A09]" id="tarifs">
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
       <div class="text-center mb-14">
-        <div class="inline-flex items-center gap-2 text-red-400 text-xs font-bold uppercase tracking-wide mb-3">
-          <span class="w-1.5 h-1.5 rounded-full bg-red-500"></span> Le parcours client
-        </div>
-        <h2 class="text-3xl sm:text-4xl font-extrabold text-white mb-4">Quatre étapes, aucune inscription</h2>
-        <p class="text-lg text-gray-400 max-w-2xl mx-auto">Le client n'ouvre jamais de compte. Il commande, confirme sur WhatsApp, et suit sa livraison.</p>
-      </div>
-
-      <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-8">
-        ${[
-          { n: 1, qui: 'Côté client', accent: 'red', titre: 'Il découvre le menu', desc: "Via un lien, un QR code en salle, ou une redirection WhatsApp." },
-          { n: 2, qui: 'Côté client', accent: 'red', titre: 'Il commande', desc: 'Sans compte : nom, téléphone, et adresse positionnée sur la carte.' },
-          { n: 3, qui: 'Côté restaurant', accent: 'blue', titre: 'Le restaurant confirme', desc: 'Notification instantanée par WhatsApp et dans le tableau de bord.' },
-          { n: 4, qui: 'Côté restaurant', accent: 'blue', titre: 'Il est livré', desc: "Le livreur reçoit l'itinéraire complet, en un seul message." },
-        ].map(e => `
-          <div>
-            <div class="text-[11px] uppercase tracking-wide font-bold mb-3 ${e.accent === 'red' ? 'text-red-400' : 'text-blue-400'}">${e.qui}</div>
-            <div class="w-12 h-12 rounded-full flex items-center justify-center font-extrabold text-lg text-white mb-5 ${e.accent === 'red' ? 'bg-red-600' : 'bg-blue-600'}">${e.n}</div>
-            <h4 class="text-white font-bold mb-2">${e.titre}</h4>
-            <p class="text-sm text-gray-400 leading-relaxed">${e.desc}</p>
-          </div>
-        `).join('')}
-      </div>
-    </div>
-  </section>
-
-  <!-- ===================================================== -->
-  <!-- RESTAURANTS PARTENAIRES — logos réels uniquement.       -->
-  <!-- Chargé dynamiquement depuis /api/v1/tenants (voir       -->
-  <!-- chargerPartenairesAccueil ci-dessous) : aucun logo ni   -->
-  <!-- nom de restaurant n'est codé en dur ici, conformément à -->
-  <!-- l'interdiction du cahier des charges (section 1.1/13)   -->
-  <!-- d'afficher une preuve sociale non vérifiée. Tant qu'il  -->
-  <!-- n'y a pas encore de restaurant réel actif, la section   -->
-  <!-- affiche un état vide honnête plutôt que des logos       -->
-  <!-- inventés.                                                -->
-  <!-- ===================================================== -->
-  <section class="py-16 bg-white dark:bg-[#0B0A09] border-t border-gray-100 dark:border-gray-800" id="partenaires">
-    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-      <div class="text-center mb-10">
-        <h2 class="text-2xl sm:text-3xl font-extrabold text-gray-900 dark:text-white mb-3">Ils utilisent ${nomProjet}</h2>
-        <p class="text-gray-600 dark:text-gray-300">Les restaurants qui ont déjà créé leur boutique.</p>
-      </div>
-
-      <div id="partenaires-grid" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-6 items-center justify-items-center">
-        ${[1, 2, 3, 4, 5, 6].map(() => '<div class="animate-pulse bg-gray-100 dark:bg-gray-800 rounded-xl w-full h-16"></div>').join('')}
-      </div>
-
-      <!-- État vide (aucun partenaire réel pour l'instant) -->
-      <div id="partenaires-vide" class="hidden text-center py-10 px-6 bg-gray-50 dark:bg-gray-900/60 rounded-2xl border border-dashed border-gray-200 dark:border-gray-800">
-        <p class="text-gray-600 dark:text-gray-300 mb-4">
-          Les premiers restaurants rejoignent ${nomProjet} — le vôtre pourrait être parmi les premiers affichés ici.
+        <h2 class="text-3xl sm:text-4xl font-extrabold text-gray-900 dark:text-white mb-4">
+          \${isEn ? 'Simple and transparent pricing' : 'Des tarifs simples et transparents'}
+        </h2>
+        <p class="text-lg text-gray-600 dark:text-gray-300 max-w-2xl mx-auto">
+          \${isEn ? 'No hidden fees. No commission on your sales. Cancel anytime.' : 'Aucun frais caché. Aucune commission sur vos ventes. Annulez à tout moment.'}
         </p>
-        <a href="/contact?sujet=partenariat"
-          class="inline-flex items-center gap-2 bg-red-600 hover:bg-red-700 text-white font-semibold px-5 py-2.5 rounded-xl transition-colors text-sm">
-          <i class="fa-solid fa-handshake" aria-hidden="true"></i>
-          Devenir partenaire
-        </a>
       </div>
 
-      <div class="text-center mt-8">
-        <a href="/contact?sujet=partenariat" class="text-sm font-semibold text-red-600 dark:text-red-400 hover:underline inline-flex items-center gap-1.5">
-          Vous êtes restaurateur ? Devenir partenaire <i class="fa-solid fa-arrow-right text-xs" aria-hidden="true"></i>
-        </a>
+      <div id="plans-container" class="grid sm:grid-cols-2 lg:grid-cols-4 gap-6">
+        <!-- Chargé dynamiquement via /api/v1/plans -->
+        \${[1, 2, 3, 4].map(() => \`
+          <div class="animate-pulse bg-gray-50 dark:bg-gray-900/50 rounded-2xl p-8 h-96 border border-gray-100 dark:border-gray-800">
+            <div class="h-4 bg-gray-200 dark:bg-gray-800 rounded w-1/2 mb-6"></div>
+            <div class="h-10 bg-gray-200 dark:bg-gray-800 rounded w-3/4 mb-4"></div>
+            <div class="space-y-3">
+              <div class="h-3 bg-gray-200 dark:bg-gray-800 rounded w-full"></div>
+              <div class="h-3 bg-gray-200 dark:bg-gray-800 rounded w-5/6"></div>
+              <div class="h-3 bg-gray-200 dark:bg-gray-800 rounded w-4/6"></div>
+            </div>
+          </div>
+        \`).join('')}
+      </div>
+
+      <div class="mt-12 text-center">
+        <p class="text-gray-500 dark:text-gray-400 text-sm">
+          <i class="fa-solid fa-circle-info mr-1" aria-hidden="true"></i>
+          \${isEn ? 'All plans include 24/7 technical support and automatic updates.' : 'Tous les plans incluent le support technique 24/7 et les mises à jour automatiques.'}
+        </p>
       </div>
     </div>
   </section>
 
   <!-- ===================================================== -->
-  <!-- TARIFS — 100% dynamique depuis D1 (/api/v1/plans)      -->
+  <!-- FAQ                                                    -->
   <!-- ===================================================== -->
-  <section class="py-20 bg-gray-50 dark:bg-[#0B0A09]" id="tarifs">
-    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-      <div class="text-center mb-10">
-        <h2 class="text-3xl sm:text-4xl font-extrabold text-gray-900 dark:text-white mb-4">Tarifs transparents</h2>
-        <p class="text-gray-600 dark:text-gray-300 text-lg">Sans commission sur vos ventes. Forfait fixe, sans surprise.</p>
-      </div>
-
-      <div id="plans-grid" class="grid sm:grid-cols-2 lg:grid-cols-4 gap-5 max-w-6xl mx-auto">
-        ${[1, 2, 3, 4].map(() => '<div class="animate-pulse bg-gray-100 dark:bg-gray-800 rounded-2xl h-96"></div>').join('')}
-      </div>
-      <p class="text-center text-xs text-gray-400 dark:text-gray-500 mt-6">
-        Tarifs en franc CFA (FCFA). Le plan Faso inclut 30 jours d'essai gratuit.
-      </p>
-    </div>
-  </section>
-
-  <!-- ===================================================== -->
-  <!-- FAQ étendue                                            -->
-  <!-- ===================================================== -->
-  <section class="py-20 bg-white dark:bg-[#0B0A09]" id="faq">
+  <section class="py-20 bg-gray-50 dark:bg-[#0B0A09]/50" id="faq">
     <div class="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8">
       <div class="text-center mb-12">
-        <h2 class="text-3xl font-extrabold text-gray-900 dark:text-white mb-3">Questions fréquentes</h2>
-        <p class="text-gray-600 dark:text-gray-300">Tout ce que vous devez savoir avant de vous lancer.</p>
+        <h2 class="text-3xl font-extrabold text-gray-900 dark:text-white">\${isEn ? 'Frequently Asked Questions' : 'Questions fréquentes'}</h2>
       </div>
-      <div class="space-y-3">
-        ${[
-          {
-            q: 'Comment recevoir les commandes ?',
-            a: 'Les commandes arrivent instantanément dans votre tableau de bord et sont également envoyées sur votre numéro WhatsApp, avec le détail complet du client et des produits commandés.',
-          },
-          {
-            q: 'Mes clients doivent-ils créer un compte pour commander ?',
-            a: 'Non, jamais. Le client renseigne simplement son nom, son numéro et son adresse de livraison au moment de commander — aucune inscription n\'est requise, à aucune étape.',
-          },
-          {
-            q: 'Y a-t-il des frais cachés ou une commission sur mes ventes ?',
-            a: 'Non, aucun. MonMenu ne prélève aucune commission sur vos ventes. Vous payez uniquement l\'abonnement fixe de votre plan, affiché en toute transparence.',
-          },
-          {
-            q: 'Comment est calculé le prix de la livraison ?',
-            a: 'Il combine la distance entre votre point de vente et l\'adresse du client, l\'heure de la commande (heures de pointe configurables) et, si activé, les conditions météo du moment. Le détail est toujours visible par le client avant validation.',
-          },
-          {
-            q: 'Puis-je changer de plan à tout moment ?',
-            a: 'Oui. La mise à niveau est immédiate. Le passage à un plan inférieur prend effet au prochain cycle de facturation. Tout se gère depuis votre tableau de bord, sans contacter le support.',
-          },
-          {
-            q: 'Que se passe-t-il si je dépasse le quota de commandes de mon plan ?',
-            a: 'Votre boutique reste active et continue de recevoir des commandes normalement. Les commandes au-delà du quota inclus sont facturées à un tarif unitaire fixe, indiqué dans votre tableau de bord.',
-          },
-          {
-            q: 'Quels moyens de paiement mes clients peuvent-ils utiliser ?',
-            a: 'Au lancement, le paiement se fait en espèces à la livraison ou au retrait. L\'ajout de moyens de paiement supplémentaires (mobile money notamment) est prévu dans l\'architecture et sera activé progressivement, pays par pays.',
-          },
-          {
-            q: 'Puis-je personnaliser les couleurs et le logo de ma boutique ?',
-            a: 'Oui. Chaque restaurant choisit ses propres couleurs, son logo et ses photos depuis son tableau de bord — cette personnalisation est totalement indépendante de la charte graphique de MonMenu.',
-          },
-          {
-            q: 'Le plan gratuit "Faso" est-il vraiment sans engagement ?',
-            a: 'Oui. Le plan Faso vous donne 30 jours d\'essai complet, sans carte bancaire requise pour démarrer. Vous pouvez arrêter ou passer à un plan payant à tout moment.',
-          },
-        ].map((faq, i) => `
-          <div class="border border-gray-100 dark:border-gray-800 rounded-xl overflow-hidden bg-white dark:bg-gray-900/40">
-            <button onclick="toggleFaqAccueil(${i})"
-              class="w-full text-left px-5 py-4 flex items-center justify-between gap-3 hover:bg-gray-50 dark:hover:bg-gray-800/60 transition-colors"
-              aria-expanded="false" aria-controls="faq-accueil-${i}">
-              <span class="font-semibold text-gray-900 dark:text-white text-sm">${faq.q}</span>
-              <i id="faq-accueil-icon-${i}" class="fa-solid fa-chevron-down text-gray-400 dark:text-gray-500 text-xs flex-shrink-0 transition-transform" aria-hidden="true"></i>
+
+      <div class="space-y-4">
+        \${(isEn ? [
+          { q: 'Is it really 0% commission?', a: 'Yes. Unlike other platforms that take 15% to 30% on each order, MonMenu charges only a fixed monthly or annual subscription. All your sales revenue goes directly to you.' },
+          { q: 'Do I need a computer to manage my shop?', a: 'No. The entire dashboard is "mobile-first". You can manage your products, prices and orders directly from your smartphone.' },
+          { q: 'How do customers pay?', a: 'MonMenu facilitates order taking. Payment is made directly between you and the customer (cash on delivery, mobile money, etc.) according to your usual methods.' },
+          { q: 'Can I use my own domain name?', a: 'Yes, with the Professional and Enterprise plans, you can link your own domain (e.g. www.votre-restaurant.com) to your shop.' },
+          { q: 'Is WhatsApp mandatory?', a: 'WhatsApp is our primary notification channel because it is used by everyone in Africa, but you also receive all orders in your real-time dashboard.' },
+          { q: 'How long does it take to be online?', a: 'If you have your menu ready, you can be online in less than 10 minutes. Registration is instant.' },
+          { q: 'Is there a commitment?', a: 'No. You can cancel your subscription at any time from your dashboard. No exit fees.' },
+          { q: 'Do you provide delivery drivers?', a: 'No, MonMenu is a technical tool. You use your own delivery drivers or your usual partner. We provide the geolocation tool to simplify their work.' },
+          { q: 'Is it available in my country?', a: 'MonMenu is optimized for West and Central Africa (Senegal, Ivory Coast, Cameroon, Mali, Burkina Faso, etc.) but works globally.' },
+        ] : [
+          { q: 'Est-ce vraiment 0% de commission ?', a: "Oui. Contrairement aux autres plateformes qui prennent 15% à 30% sur chaque commande, MonMenu ne facture qu'un abonnement fixe mensuel ou annuel. Tout le revenu de vos ventes vous revient directement." },
+          { q: 'Ai-je besoin d'un ordinateur pour gérer ma boutique ?', a: 'Non. Tout le tableau de bord est "mobile-first". Vous pouvez gérer vos produits, vos prix et vos commandes directement depuis votre smartphone.' },
+          { q: 'Comment les clients payent-ils ?', a: 'MonMenu facilite la prise de commande. Le paiement se fait directement entre vous et le client (espèces à la livraison, mobile money, etc.) selon vos méthodes habituelles.' },
+          { q: 'Puis-je utiliser mon propre nom de domaine ?', a: 'Oui, avec les plans Professionnel et Entreprise, vous pouvez lier votre propre domaine (ex: www.votre-restaurant.com) à votre boutique.' },
+          { q: 'WhatsApp est-il obligatoire ?', a: 'WhatsApp est notre canal de notification privilégié car utilisé par tous en Afrique, mais vous recevez aussi toutes les commandes dans votre tableau de bord en temps réel.' },
+          { q: 'Combien de temps pour être en ligne ?', a: 'Si vous avez votre menu prêt, vous pouvez être en ligne en moins de 10 minutes. L\'inscription est instantanée.' },
+          { q: 'Y a-t-il un engagement ?', a: 'Non. Vous pouvez résilier votre abonnement à tout moment depuis votre tableau de bord. Aucun frais de sortie.' },
+          { q: 'Fournissez-vous des livreurs ?', a: 'Non, MonMenu est un outil technique. Vous utilisez vos propres livreurs ou votre partenaire habituel. Nous fournissons l\'outil de géolocalisation pour simplifier leur travail.' },
+          { q: 'Est-ce disponible dans mon pays ?', a: 'MonMenu est optimisé pour l\'Afrique de l'Ouest et Centrale (Sénégal, Côte d\'Ivoire, Cameroun, Mali, Burkina Faso, etc.) mais fonctionne partout dans le monde.' },
+        ]).map((item, idx) => `
+          <div class="bg-white dark:bg-gray-900 rounded-xl border border-gray-100 dark:border-gray-800 overflow-hidden">
+            <button class="w-full px-6 py-5 text-left flex items-center justify-between font-bold text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors"
+                    onclick="this.nextElementSibling.classList.toggle('hidden'); this.querySelector('i').classList.toggle('rotate-180')">
+              <span>${item.q}</span>
+              <i class="fa-solid fa-chevron-down text-xs transition-transform" aria-hidden="true"></i>
             </button>
-            <div id="faq-accueil-${i}" class="hidden px-5 pb-4" role="region">
-              <p class="text-sm text-gray-600 dark:text-gray-400 leading-relaxed">${faq.a}</p>
+            <div class="px-6 pb-5 text-gray-600 dark:text-gray-400 text-sm leading-relaxed hidden">
+              ${item.a}
             </div>
           </div>
         `).join('')}
@@ -359,169 +374,73 @@ export function renderHomePage(nomProjet: string): string {
   </section>
 
   <!-- ===================================================== -->
-  <!-- CTA final                                               -->
+  <!-- CTA FINAL                                              -->
   <!-- ===================================================== -->
-  <section class="py-16 bg-red-600 dark:bg-red-700">
-    <div class="max-w-3xl mx-auto px-4 sm:px-6 text-center">
-      <h2 class="text-2xl sm:text-3xl font-extrabold text-white mb-4">Commencez gratuitement dès aujourd'hui</h2>
-      <p class="text-red-100 mb-8">30 jours d'essai avec le plan Faso. Aucune carte bancaire requise.</p>
-      <div class="flex flex-col sm:flex-row gap-3 justify-center">
-        <a href="/inscription"
-          class="inline-flex items-center justify-center gap-2 bg-white text-red-600 font-bold px-8 py-3.5 rounded-xl hover:bg-red-50 transition-colors shadow-lg">
-          <i class="fa-solid fa-store" aria-hidden="true"></i>
-          Créer ma boutique gratuitement
-        </a>
-        <a href="/contact"
-          class="inline-flex items-center justify-center gap-2 border border-red-300 text-white font-semibold px-8 py-3.5 rounded-xl hover:bg-red-700 dark:hover:bg-red-800 transition-colors">
-          <i class="fa-solid fa-envelope" aria-hidden="true"></i>
-          Une question ? Contactez-nous
-        </a>
+  <section class="py-20 bg-white dark:bg-[#0B0A09]">
+    <div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="bg-red-600 rounded-3xl p-10 sm:p-16 text-center text-white relative overflow-hidden shadow-2xl shadow-red-200 dark:shadow-none">
+        <!-- Déco SVG -->
+        <svg class="absolute top-0 right-0 w-64 h-64 opacity-10 translate-x-20 -translate-y-20" viewBox="0 0 200 200" fill="none">
+          <circle cx="100" cy="100" r="100" fill="white"/>
+        </svg>
+
+        <h2 class="text-3xl sm:text-4xl font-extrabold mb-6 relative z-10">
+          \${isEn ? 'Ready to boost your sales?' : 'Prêt à booster vos ventes ?'}
+        </h2>
+        <p class="text-lg opacity-90 mb-10 max-w-xl mx-auto relative z-10">
+          \${isEn ? 'Join hundreds of restaurants already using MonMenu to simplify their online ordering.' : 'Rejoignez des centaines de restaurants qui utilisent déjà MonMenu pour simplifier leur commande en ligne.'}
+        </p>
+        <div class="flex flex-col sm:flex-row justify-center gap-4 relative z-10">
+          <a href="/inscription" class="bg-white text-red-600 font-bold px-8 py-4 rounded-xl hover:bg-gray-50 transition-colors shadow-lg">
+            \${isEn ? 'Create my shop' : 'Créer ma boutique'}
+          </a>
+          <a href="/contact" class="bg-red-700 text-white font-bold px-8 py-4 rounded-xl hover:bg-red-800 transition-colors border border-red-500">
+            \${isEn ? 'Contact sales' : 'Contacter un conseiller'}
+          </a>
+        </div>
       </div>
     </div>
   </section>
 
-  ${renderFooter(nomProjet)}
+  ${renderFooter(nomProjet, locale)}
 
-  <script src="/static/js/main.js"></script>
+  <!-- Script pour charger les plans dynamiquement -->
   <script>
-    // ---------------------------------------------------------
-    // Grille tarifs — 4 plans, 100% dynamiques depuis /api/v1/plans
-    // (aucun prix ni nom de plan codé en dur dans ce fichier)
-    // Devise : FCFA uniquement (pas de sélecteur), l'API /api/v1/plans
-    // retourne déjà du FCFA par défaut si aucun paramètre ?devise n'est passé.
-    // ---------------------------------------------------------
-    async function chargerPlansAccueil() {
-      const grid = document.getElementById('plans-grid');
+    async function loadPlans() {
+      const container = document.getElementById('plans-container');
+      const isEn = \${isEn};
       try {
         const res = await fetch('/api/v1/plans');
-        if (!res.ok) throw new Error('API error');
-        const data = await res.json();
-        renderPlansGridAccueil(data.plans || [], 'FCFA');
-      } catch (e) {
-        console.error('Erreur chargement plans:', e);
-        grid.innerHTML = '<p class="text-gray-500 dark:text-gray-400 col-span-4 text-center py-8">Impossible de charger les tarifs pour le moment. <a href="/contact" class="text-red-600 dark:text-red-400 hover:underline">Contactez-nous</a>.</p>';
-      }
-    }
-
-    function formaterPrix(plan, devise) {
-      if (plan.prix_mensuel === 0) return 'Gratuit';
-      const prix = plan.prix_mensuel_converti || plan.prix_mensuel || 0;
-      return prix.toLocaleString('fr-FR') + ' ' + devise + ' / mois';
-    }
-
-    function renderPlansGridAccueil(plans, devise) {
-      const grid = document.getElementById('plans-grid');
-      if (!plans.length) {
-        grid.innerHTML = '<p class="text-gray-500 dark:text-gray-400 col-span-4 text-center py-8">Aucun plan disponible pour le moment.</p>';
-        return;
-      }
-
-      grid.innerHTML = plans.map(plan => {
-        const f = plan.fonctionnalites || {};
-        const recommande = !!f.recommande;
-        const gratuit = plan.prix_mensuel === 0;
-        const accentBleu = plan.nom === 'Mogho'; // plan le plus complet : accent bleu, cf. charte
-
-        const bordure = recommande
-          ? 'border-2 border-red-600 dark:border-red-500 shadow-xl'
-          : accentBleu
-            ? 'border-2 border-blue-600 dark:border-blue-500 shadow-xl'
-            : 'border border-gray-100 dark:border-gray-800 shadow-sm';
-
-        const etiquette = recommande
-          ? '<div class="absolute -top-3.5 left-1/2 -translate-x-1/2 bg-red-600 text-white text-xs font-bold px-4 py-1 rounded-full whitespace-nowrap">Le plus choisi</div>'
-          : accentBleu
-            ? '<div class="absolute -top-3.5 left-1/2 -translate-x-1/2 bg-blue-600 text-white text-xs font-bold px-4 py-1 rounded-full whitespace-nowrap">Pensé pour grandir</div>'
-            : '';
-
-        const boutonClasse = recommande
-          ? 'bg-red-600 hover:bg-red-700 text-white shadow-md'
-          : accentBleu
-            ? 'bg-blue-600 hover:bg-blue-700 text-white shadow-md'
-            : 'bg-gray-50 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-900 dark:text-gray-100 border border-gray-200 dark:border-gray-700';
-
-        const commandesTexte = plan.commandes_incluses_affichage === 'Illimitées'
-          ? 'Commandes illimitées'
-          : (plan.commandes_incluses_affichage || 0) + ' commandes/mois incluses';
-
-        return \`<div class="relative bg-white dark:bg-gray-900 rounded-2xl p-6 flex flex-col \${bordure}">
-          \${etiquette}
-          <div class="mb-5">
-            <div class="font-bold text-lg text-gray-900 dark:text-white">\${plan.nom}</div>
-            <div class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">\${f.sous_titre || ''}</div>
-            <div class="text-3xl font-extrabold text-gray-900 dark:text-white mt-4">
-              \${gratuit ? '<span class="text-red-600 dark:text-red-400">Gratuit</span>' : formaterPrix(plan, devise)}
+        const plans = await res.json();
+        if (plans && plans.length > 0) {
+          container.innerHTML = plans.map(p => \`
+            <div class="bg-white dark:bg-gray-900 rounded-2xl p-8 border \${p.is_popular ? 'border-red-500 ring-4 ring-red-500/10' : 'border-gray-100 dark:border-gray-800'} flex flex-col relative">
+              \${p.is_popular ? \`<span class="absolute -top-4 left-1/2 -translate-x-1/2 bg-red-600 text-white text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-widest">\${isEn ? 'Most Popular' : 'Le plus populaire'}</span>\` : ''}
+              <h3 class="text-lg font-bold text-gray-900 dark:text-white mb-2">\${isEn ? p.name_en || p.name : p.name}</h3>
+              <div class="mb-6">
+                <span class="text-3xl font-extrabold text-gray-900 dark:text-white">\${new Intl.NumberFormat().format(p.price)}</span>
+                <span class="text-gray-500 dark:text-gray-400 text-sm">FCFA/\${isEn ? 'month' : 'mois'}</span>
+              </div>
+              <ul class="space-y-4 mb-8 flex-grow">
+                \${(isEn ? p.features_en || p.features : p.features).map(f => \`
+                  <li class="flex items-start gap-3 text-sm text-gray-600 dark:text-gray-400">
+                    <i class="fa-solid fa-check text-green-500 mt-0.5" aria-hidden="true"></i>
+                    <span>\${f}</span>
+                  </li>
+                \`).join('')}
+              </ul>
+              <a href="/inscription?plan=\${p.id}" class="w-full py-3 rounded-xl font-bold text-center transition-all \${p.is_popular ? 'bg-red-600 text-white hover:bg-red-700 shadow-lg shadow-red-200 dark:shadow-none' : 'bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-white hover:bg-gray-200 dark:hover:bg-gray-700'}">
+                \${isEn ? 'Choose this plan' : 'Choisir ce plan'}
+              </a>
             </div>
-            \${gratuit && f.duree_essai_jours ? '<div class="text-xs text-blue-600 dark:text-blue-400 mt-1.5 font-semibold">' + f.duree_essai_jours + ' jours d\\'essai</div>' : ''}
-            <div class="text-xs text-gray-500 dark:text-gray-400 mt-2">\${commandesTexte}</div>
-          </div>
-          <ul class="space-y-2 mb-6 text-sm text-gray-700 dark:text-gray-300 flex-1">
-            <li class="flex items-start gap-2"><i class="fa-solid fa-check text-red-500 dark:text-red-400 flex-shrink-0 mt-0.5"></i>Boutique en ligne + QR code</li>
-            <li class="flex items-start gap-2"><i class="fa-solid fa-check text-red-500 dark:text-red-400 flex-shrink-0 mt-0.5"></i>Notifications WhatsApp</li>
-            <li class="flex items-start gap-2"><i class="fa-solid fa-check text-red-500 dark:text-red-400 flex-shrink-0 mt-0.5"></i>\${plan.limite_pdv_affichage === 'Illimités' ? 'Points de vente illimités' : plan.limite_pdv_affichage + ' point(s) de vente'}</li>
-            \${f.statistiques_avancees ? '<li class="flex items-start gap-2"><i class="fa-solid fa-check text-blue-500 dark:text-blue-400 flex-shrink-0 mt-0.5"></i>Statistiques avancées</li>' : '<li class="flex items-start gap-2"><i class="fa-solid fa-check text-gray-400 flex-shrink-0 mt-0.5"></i>Statistiques de base</li>'}
-            \${f.codes_promo ? '<li class="flex items-start gap-2"><i class="fa-solid fa-check text-blue-500 dark:text-blue-400 flex-shrink-0 mt-0.5"></i>Codes promotionnels</li>' : ''}
-            \${f.domaine_perso ? '<li class="flex items-start gap-2"><i class="fa-solid fa-check text-blue-500 dark:text-blue-400 flex-shrink-0 mt-0.5"></i>Domaine personnalisé</li>' : ''}
-            \${f.export_csv ? '<li class="flex items-start gap-2"><i class="fa-solid fa-check text-blue-500 dark:text-blue-400 flex-shrink-0 mt-0.5"></i>Export CSV</li>' : ''}
-            \${f.multi_boutique ? '<li class="flex items-start gap-2"><i class="fa-solid fa-check text-blue-500 dark:text-blue-400 flex-shrink-0 mt-0.5"></i>Multi-boutique</li>' : ''}
-            \${f.support_whatsapp_prioritaire ? '<li class="flex items-start gap-2"><i class="fa-solid fa-check text-blue-500 dark:text-blue-400 flex-shrink-0 mt-0.5"></i>Support WhatsApp prioritaire</li>' : ''}
-          </ul>
-          <a href="/inscription?plan=\${encodeURIComponent(plan.id)}"
-            class="block w-full text-center \${boutonClasse} font-bold py-3 rounded-xl transition-colors text-sm">
-            \${gratuit ? 'Démarrer l\\'essai gratuit' : 'Choisir ' + plan.nom}
-          </a>
-        </div>\`;
-      }).join('');
-    }
-
-    function toggleFaqAccueil(i) {
-      const content = document.getElementById('faq-accueil-' + i);
-      const icon = document.getElementById('faq-accueil-icon-' + i);
-      content.classList.toggle('hidden');
-      icon.classList.toggle('rotate-180');
-    }
-
-    // ---------------------------------------------------------
-    // Restaurants partenaires — 100% réel, chargé depuis
-    // GET /api/v1/tenants (endpoint public liste, ajouté à
-    // api-tenants.ts). Ne renvoie que des restaurants au statut
-    // "actif" avec un logo réel : aucun nom/logo inventé.
-    // ---------------------------------------------------------
-    async function chargerPartenairesAccueil() {
-      const grid = document.getElementById('partenaires-grid');
-      const vide = document.getElementById('partenaires-vide');
-      try {
-        const res = await fetch('/api/v1/tenants?limit=6');
-        if (!res.ok) throw new Error('API error');
-        const data = await res.json();
-        const tenants = data.tenants || [];
-
-        if (!tenants.length) {
-          grid.classList.add('hidden');
-          vide.classList.remove('hidden');
-          return;
+          \`).join('');
         }
-
-        grid.innerHTML = tenants.map(t => {
-          const vignette = t.logo_url
-            ? '<img src="' + t.logo_url + '" alt="' + t.nom + '" loading="lazy" class="max-h-12 max-w-full object-contain">'
-            : '<span class="text-sm font-semibold text-gray-500 dark:text-gray-400 text-center px-2">' + t.nom + '</span>';
-          return '<a href="/' + t.slug + '" class="w-full h-16 flex items-center justify-center grayscale hover:grayscale-0 transition-all opacity-70 hover:opacity-100" title="' + t.nom + '">' + vignette + '</a>';
-        }).join('');
-      } catch (e) {
-        console.error('Erreur chargement partenaires:', e);
-        // En cas d'échec réseau/API, on affiche l'état vide plutôt qu'un
-        // squelette de chargement figé indéfiniment.
-        grid.classList.add('hidden');
-        vide.classList.remove('hidden');
+      } catch (err) {
+        console.error('Erreur chargement plans:', err);
       }
     }
-
-    document.addEventListener('DOMContentLoaded', () => {
-      chargerPlansAccueil();
-      chargerPartenairesAccueil();
-    });
+    loadPlans();
   </script>
 </body>
-</html>`
+</html>\`;
 }

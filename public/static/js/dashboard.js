@@ -1,8 +1,17 @@
-// MonMenu — Dashboard restaurant (v1.2.0 — §2 Supabase Realtime)
+// MonMenu — Dashboard restaurant (v1.3.0 — §2 cookies httpOnly + CSRF)
+// MIGRATION AUTH :
+//   - Plus de dépendance à localStorage pour le token JWT.
+//   - Le cookie httpOnly "sb-access-token" est posé par le serveur (/api/v1/auth/login).
+//   - Tous les fetch() utilisent credentials:'include' pour que le navigateur
+//     envoie automatiquement le cookie sur chaque requête vers la même origine.
+//   - Le header Authorization: Bearer est SUPPRIMÉ du dashboard web (cookie suffit).
+//   - Protection CSRF : header "X-Requested-With: XMLHttpRequest" ajouté sur
+//     toutes les requêtes d'écriture (POST/PATCH/DELETE) — vérifié côté serveur.
 'use strict';
 
 let currentSection = 'commandes';
 let currentFilter = null;
+// authToken conservé pour compatibilité interne mais toujours null (cookie httpOnly utilisé)
 let authToken = null;
 let tenantData = null;
 let commandesInterval = null;
@@ -134,9 +143,20 @@ function teardownRealtime() {
 }
 
 // ---- Init Dashboard ----
+// §2 — Migration cookies httpOnly :
+//   L'ancien code lisait le token dans localStorage puis redirectait si absent.
+//   Désormais, le token vit dans un cookie httpOnly inaccessible en JS :
+//   - on ne peut plus vérifier sa présence côté client,
+//   - la vérification est faite côté serveur (src/index.tsx /dashboard/* vérifie le JWT),
+//   - si la session est invalide, le premier appel API retournera 401 → showAuthError().
+//   → On retire la redirection synchrone et on initialise le tenant depuis localStorage
+//     (données d'affichage non sensibles uniquement : nom, slug, couleur).
 async function initDashboard() {
-  authToken = localStorage.getItem('monmenu_auth_token');
-  if (!authToken) { window.location.href = '/dashboard'; return; }
+  // Plus de lecture de token localStorage — le cookie httpOnly est géré automatiquement
+  // par le navigateur. Si la session est expirée, le premier appel /api/v1/dashboard/*
+  // retournera 401 et showAuthError() redirigera vers /dashboard.
+  authToken = null; // Toujours null — cookie httpOnly utilisé à la place
+
   const tenantStr = localStorage.getItem('monmenu_tenant');
   if (tenantStr) { try { tenantData = JSON.parse(tenantStr); } catch {} }
   const nameEl = document.getElementById('tenant-name');
@@ -243,7 +263,7 @@ async function fetchCommandes() {
   if (!listEl) return;
   try {
     const url = '/api/v1/dashboard/commandes' + (currentFilter ? '?statut=' + currentFilter : '');
-    const res = await fetch(url, { headers: { 'Authorization': 'Bearer ' + authToken } });
+    const res = await fetch(url, { credentials: 'include' });
     if (res.status === 401) { showAuthError(); return; }
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const data = await res.json();
@@ -325,7 +345,8 @@ async function changerStatut(commandeId, newStatut) {
   try {
     const res = await fetch('/api/v1/dashboard/commandes/' + commandeId + '/statut', {
       method: 'PATCH',
-      headers: { 'Content-Type':'application/json', 'Authorization':'Bearer ' + authToken },
+      headers: { 'Content-Type':'application/json', 'X-Requested-With':'XMLHttpRequest' },
+      credentials: 'include',
       body: JSON.stringify({ statut: newStatut })
     });
     if (res.ok) await fetchCommandes();
@@ -350,9 +371,7 @@ async function exportCommandes() {
   const dateDebut = new Date(Date.now() - 30*86400000).toISOString().split('T')[0];
   const dateFin = new Date().toISOString().split('T')[0];
   try {
-    const res = await fetch(`/api/v1/dashboard/commandes/export-csv?date_debut=${dateDebut}&date_fin=${dateFin}`, {
-      headers: { 'Authorization': 'Bearer ' + authToken }
-    });
+    const res = await fetch(`/api/v1/dashboard/commandes/export-csv?date_debut=${dateDebut}&date_fin=${dateFin}`, { credentials: 'include' });
     if (!res.ok) { alert('Erreur export.'); return; }
     const blob = await res.blob();
     const a = document.createElement('a');
@@ -370,7 +389,7 @@ async function loadMenu() {
   const content = document.getElementById('dashboard-content');
   content.innerHTML = `<div class="text-center py-8"><i class="fa-solid fa-circle-notch fa-spin text-xl text-gray-400"></i></div>`;
   try {
-    const res = await fetch('/api/v1/dashboard/menu', { headers: { 'Authorization':'Bearer '+authToken } });
+    const res = await fetch('/api/v1/dashboard/menu', { credentials: 'include' });
     if (!res.ok) throw new Error();
     const data = await res.json();
     renderMenuEditor(data.categories || [], content);
@@ -455,7 +474,7 @@ async function submitAddCategorie(e) {
   const nom = document.getElementById('cat-nom').value.trim();
   try {
     const res = await fetch('/api/v1/dashboard/categories', {
-      method:'POST', headers:{'Content-Type':'application/json','Authorization':'Bearer '+authToken},
+      method:'POST', headers:{'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials:'include',
       body: JSON.stringify({ nom })
     });
     if (res.ok) { closeModal(); loadMenu(); }
@@ -477,7 +496,7 @@ async function submitEditCategorie(e, catId) {
   const nom = document.getElementById('edit-cat-nom').value.trim();
   try {
     const res = await fetch('/api/v1/dashboard/categories/' + catId, {
-      method:'PATCH', headers:{'Content-Type':'application/json','Authorization':'Bearer '+authToken},
+      method:'PATCH', headers:{'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials:'include',
       body: JSON.stringify({ nom })
     });
     if (res.ok) { closeModal(); loadMenu(); }
@@ -488,7 +507,7 @@ async function supprimerCategorie(catId) {
   if (!confirm('Supprimer cette catégorie ? Elle doit être vide.')) return;
   try {
     const res = await fetch('/api/v1/dashboard/categories/' + catId, {
-      method:'DELETE', headers:{'Authorization':'Bearer '+authToken}
+      method:'DELETE', headers:{'X-Requested-With':'XMLHttpRequest'}, credentials:'include'
     });
     if (res.ok) loadMenu();
     else { const d = await res.json(); alert(d.error||'Impossible de supprimer.'); }
@@ -535,7 +554,7 @@ async function submitAddProduit(e, categorieId) {
       const fd = new FormData();
       fd.append('file', photoInput.files[0]);
       const upRes = await fetch('/api/v1/dashboard/upload-image', {
-        method:'POST', headers:{'Authorization':'Bearer '+authToken}, body: fd
+        method:'POST', headers:{'X-Requested-With':'XMLHttpRequest'}, credentials:'include', body: fd
       });
       if (upRes.ok) { const upData = await upRes.json(); photo_url = upData.url;
         const prev = document.getElementById('photo-preview');
@@ -546,7 +565,7 @@ async function submitAddProduit(e, categorieId) {
   }
   try {
     const res = await fetch('/api/v1/dashboard/produits', {
-      method:'POST', headers:{'Content-Type':'application/json','Authorization':'Bearer '+authToken},
+      method:'POST', headers:{'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials:'include',
       body: JSON.stringify({ categorie_id: categorieId, nom, description, prix, disponible:true, photo_url })
     });
     if (res.ok) { closeModal(); loadMenu(); }
@@ -596,7 +615,7 @@ async function submitEditProduit(e, prodId) {
       const fd = new FormData();
       fd.append('file', photoInput.files[0]);
       const upRes = await fetch('/api/v1/dashboard/upload-image', {
-        method:'POST', headers:{'Authorization':'Bearer '+authToken}, body:fd
+        method:'POST', headers:{'X-Requested-With':'XMLHttpRequest'}, credentials:'include', body:fd
       });
       if (upRes.ok) { const upData = await upRes.json(); photo_url = upData.url; }
     } catch {}
@@ -606,7 +625,7 @@ async function submitEditProduit(e, prodId) {
   if (photo_url !== undefined) payload.photo_url = photo_url;
   try {
     const res = await fetch('/api/v1/dashboard/produits/' + prodId, {
-      method:'PATCH', headers:{'Content-Type':'application/json','Authorization':'Bearer '+authToken},
+      method:'PATCH', headers:{'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials:'include',
       body: JSON.stringify(payload)
     });
     if (res.ok) { closeModal(); loadMenu(); }
@@ -617,7 +636,7 @@ async function supprimerProduit(prodId) {
   if (!confirm('Supprimer ce produit définitivement ?')) return;
   try {
     const res = await fetch('/api/v1/dashboard/produits/' + prodId, {
-      method:'DELETE', headers:{'Authorization':'Bearer '+authToken}
+      method:'DELETE', headers:{'X-Requested-With':'XMLHttpRequest'}, credentials:'include'
     });
     if (res.ok) loadMenu();
     else { const d = await res.json(); alert(d.error||'Erreur'); }
@@ -626,7 +645,7 @@ async function supprimerProduit(prodId) {
 async function toggleDisponible(prodId, currentDisponible) {
   try {
     await fetch('/api/v1/dashboard/produits/' + prodId, {
-      method:'PATCH', headers:{'Content-Type':'application/json','Authorization':'Bearer '+authToken},
+      method:'PATCH', headers:{'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials:'include',
       body: JSON.stringify({ disponible: !currentDisponible })
     });
     loadMenu();
@@ -690,7 +709,7 @@ async function loadStatistiques() {
     <p class="text-xs text-gray-400 mt-3 text-center">Données en temps réel depuis la base de données.</p>`;
 
   try {
-    const res = await fetch('/api/v1/dashboard/stats', { headers:{'Authorization':'Bearer '+authToken} });
+    const res = await fetch('/api/v1/dashboard/stats', { credentials: 'include' });
     if (!res.ok) return;
     const data = await res.json();
     if (data.today !== undefined) document.getElementById('stat-today').textContent = data.today;
@@ -763,7 +782,7 @@ async function loadLivreurs() {
   const content = document.getElementById('dashboard-content');
   content.innerHTML = `<div class="text-center py-8"><i class="fa-solid fa-circle-notch fa-spin text-xl text-gray-400"></i></div>`;
   try {
-    const res = await fetch('/api/v1/dashboard/livreurs', { headers:{'Authorization':'Bearer '+authToken} });
+    const res = await fetch('/api/v1/dashboard/livreurs', { credentials: 'include' });
     if (!res.ok) throw new Error();
     const data = await res.json();
     renderLivreurs(data.livreurs||[], content);
@@ -822,7 +841,7 @@ async function submitAddLivreur(e) {
   const whatsapp_number = document.getElementById('liv-tel').value.trim();
   try {
     const res = await fetch('/api/v1/dashboard/livreurs', {
-      method:'POST', headers:{'Content-Type':'application/json','Authorization':'Bearer '+authToken},
+      method:'POST', headers:{'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials:'include',
       body: JSON.stringify({ nom, whatsapp_number })
     });
     if (res.ok) { closeModal(); loadLivreurs(); }
@@ -832,7 +851,7 @@ async function submitAddLivreur(e) {
 async function toggleLivreurActif(livId, currentActif) {
   try {
     await fetch('/api/v1/dashboard/livreurs/' + livId, {
-      method:'PATCH', headers:{'Content-Type':'application/json','Authorization':'Bearer '+authToken},
+      method:'PATCH', headers:{'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials:'include',
       body: JSON.stringify({ actif: currentActif ? 0 : 1 })
     });
     loadLivreurs();
@@ -842,7 +861,7 @@ async function supprimerLivreur(livId) {
   if (!confirm('Supprimer ce livreur ?')) return;
   try {
     const res = await fetch('/api/v1/dashboard/livreurs/' + livId, {
-      method:'DELETE', headers:{'Authorization':'Bearer '+authToken}
+      method:'DELETE', headers:{'X-Requested-With':'XMLHttpRequest'}, credentials:'include'
     });
     if (res.ok) loadLivreurs();
   } catch { alert('Erreur réseau.'); }
@@ -855,7 +874,7 @@ async function loadQRCode() {
   const content = document.getElementById('dashboard-content');
   content.innerHTML = `<div class="text-center py-8"><i class="fa-solid fa-circle-notch fa-spin text-xl text-gray-400"></i></div>`;
   try {
-    const res = await fetch('/api/v1/dashboard/qrcode', { headers:{'Authorization':'Bearer '+authToken} });
+    const res = await fetch('/api/v1/dashboard/qrcode', { credentials: 'include' });
     if (!res.ok) throw new Error();
     const data = await res.json();
     content.innerHTML = `
@@ -922,7 +941,7 @@ async function loadApparence() {
   content.innerHTML = `<div class="text-center py-8"><i class="fa-solid fa-circle-notch fa-spin text-xl text-gray-400"></i></div>`;
   let tenant = tenantData || {};
   try {
-    const res = await fetch('/api/v1/dashboard/profil', { headers:{'Authorization':'Bearer '+authToken} });
+    const res = await fetch('/api/v1/dashboard/profil', { credentials: 'include' });
     if (res.ok) tenant = await res.json();
   } catch {}
   content.innerHTML = `
@@ -1004,7 +1023,7 @@ async function saveApparence(e) {
   };
   try {
     const res = await fetch('/api/v1/dashboard/apparence', {
-      method:'PATCH', headers:{'Content-Type':'application/json','Authorization':'Bearer '+authToken},
+      method:'PATCH', headers:{'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials:'include',
       body: JSON.stringify(data)
     });
     if (res.ok) {
@@ -1021,7 +1040,7 @@ async function _uploadMedia(fileInputId, progressId) {
   if (prog) prog.classList.remove('hidden');
   try {
     const fd = new FormData(); fd.append('file', fileInput.files[0]);
-    const res = await fetch('/api/v1/dashboard/upload-image', { method:'POST', headers:{'Authorization':'Bearer '+authToken}, body:fd });
+    const res = await fetch('/api/v1/dashboard/upload-image', { method:'POST', headers:{'X-Requested-With':'XMLHttpRequest'}, credentials:'include', body:fd });
     if (prog) prog.classList.add('hidden');
     if (res.ok) { const d = await res.json(); return d.url; }
     const err = await res.json(); return { error: err.error || 'Échec upload' };
@@ -1036,7 +1055,7 @@ async function saveLogo() {
   else if (upload && upload.error) { fb.textContent = 'Erreur upload : '+upload.error; fb.className = 'text-xs bg-red-50 text-red-600 rounded-lg px-3 py-2'; return; }
   try {
     const res = await fetch('/api/v1/dashboard/apparence', {
-      method:'PATCH', headers:{'Content-Type':'application/json','Authorization':'Bearer '+authToken},
+      method:'PATCH', headers:{'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials:'include',
       body: JSON.stringify({ logo_url })
     });
     if (res.ok) { fb.textContent = logo_url?'Logo mis à jour.':'Logo supprimé.'; fb.className = 'text-xs bg-green-50 text-green-700 rounded-lg px-3 py-2'; if (logo_url) document.getElementById('app-logo').value = logo_url; }
@@ -1052,7 +1071,7 @@ async function saveBanniere() {
   else if (upload && upload.error) { fb.textContent = 'Erreur upload : '+upload.error; fb.className = 'text-xs bg-red-50 text-red-600 rounded-lg px-3 py-2'; return; }
   try {
     const res = await fetch('/api/v1/dashboard/apparence', {
-      method:'PATCH', headers:{'Content-Type':'application/json','Authorization':'Bearer '+authToken},
+      method:'PATCH', headers:{'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials:'include',
       body: JSON.stringify({ banniere_url })
     });
     if (res.ok) { fb.textContent = banniere_url?'Bannière mise à jour.':'Bannière supprimée.'; fb.className = 'text-xs bg-green-50 text-green-700 rounded-lg px-3 py-2'; if (banniere_url) document.getElementById('app-banniere').value = banniere_url; }
@@ -1068,7 +1087,7 @@ async function loadParametres() {
   content.innerHTML = `<div class="text-center py-8"><i class="fa-solid fa-circle-notch fa-spin text-xl text-gray-400"></i></div>`;
   let tenant = tenantData || {};
   try {
-    const res = await fetch('/api/v1/dashboard/profil', { headers:{'Authorization':'Bearer '+authToken} });
+    const res = await fetch('/api/v1/dashboard/profil', { credentials: 'include' });
     if (res.ok) tenant = await res.json();
   } catch {}
   content.innerHTML = `
@@ -1141,7 +1160,7 @@ async function saveParametres(e) {
   };
   try {
     const res = await fetch('/api/v1/dashboard/parametres', {
-      method:'PATCH', headers:{'Content-Type':'application/json','Authorization':'Bearer '+authToken},
+      method:'PATCH', headers:{'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials:'include',
       body: JSON.stringify(data)
     });
     if (res.ok) {
@@ -1164,7 +1183,7 @@ async function loadCodesPromo() {
   const content = document.getElementById('dashboard-content');
   content.innerHTML = `<div class="text-center py-8"><i class="fa-solid fa-circle-notch fa-spin text-xl text-gray-400"></i></div>`;
   try {
-    const res = await fetch('/api/v1/dashboard/codes-promo', { headers:{'Authorization':'Bearer '+authToken} });
+    const res = await fetch('/api/v1/dashboard/codes-promo', { credentials: 'include' });
     if (!res.ok) throw new Error();
     const data = await res.json();
     renderCodesPromo(data.codes||[], content);
@@ -1262,7 +1281,7 @@ async function submitAddCodePromo(e) {
   const usage_max = document.getElementById('promo-max').value ? parseInt(document.getElementById('promo-max').value) : null;
   try {
     const res = await fetch('/api/v1/dashboard/codes-promo', {
-      method:'POST', headers:{'Content-Type':'application/json','Authorization':'Bearer '+authToken},
+      method:'POST', headers:{'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials:'include',
       body: JSON.stringify({ code, type, valeur, date_fin, usage_max })
     });
     if (res.ok) { closeModal(); loadCodesPromo(); }
@@ -1272,7 +1291,7 @@ async function submitAddCodePromo(e) {
 async function supprimerCodePromo(promoId) {
   if (!confirm('Supprimer ce code promo ?')) return;
   try {
-    const res = await fetch('/api/v1/dashboard/codes-promo/' + promoId, { method:'DELETE', headers:{'Authorization':'Bearer '+authToken} });
+    const res = await fetch('/api/v1/dashboard/codes-promo/' + promoId, { method:'DELETE', headers:{'X-Requested-With':'XMLHttpRequest'}, credentials:'include' });
     if (res.ok) loadCodesPromo();
   } catch { alert('Erreur réseau.'); }
 }
@@ -1284,7 +1303,7 @@ async function loadPdv() {
   const content = document.getElementById('dashboard-content');
   content.innerHTML = `<div class="text-center py-8"><i class="fa-solid fa-circle-notch fa-spin text-xl text-gray-400"></i></div>`;
   try {
-    const res = await fetch('/api/v1/dashboard/pdv', { headers:{'Authorization':'Bearer '+authToken} });
+    const res = await fetch('/api/v1/dashboard/pdv', { credentials: 'include' });
     if (!res.ok) throw new Error();
     const data = await res.json();
     renderPdvConfig(data.pdv, content);
@@ -1372,7 +1391,7 @@ async function savePdv(e) {
   };
   try {
     const res = await fetch('/api/v1/dashboard/pdv', {
-      method:'PATCH', headers:{'Content-Type':'application/json','Authorization':'Bearer '+authToken},
+      method:'PATCH', headers:{'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials:'include',
       body: JSON.stringify(data)
     });
     const result = await res.json();
@@ -1400,14 +1419,19 @@ function showModal(titre, contenu) {
   modal.classList.remove('hidden');
 }
 function closeModal() { const m = document.getElementById('dash-modal'); if (m) m.classList.add('hidden'); }
-function getAuthToken() { return authToken || localStorage.getItem('monmenu_auth_token') || ''; }
+// §2 — getAuthToken() conservé pour compatibilité interne mais toujours vide :
+// le cookie httpOnly posé par le serveur est utilisé automatiquement par le navigateur.
+function getAuthToken() { return ''; }
 function getTenantSlug() {
   if (tenantData && tenantData.slug) return tenantData.slug;
   const t = localStorage.getItem('monmenu_tenant');
   if (t) { try { return JSON.parse(t).slug||''; } catch {} }
   return '';
 }
-function showAuthError() { localStorage.removeItem('monmenu_auth_token'); localStorage.removeItem('monmenu_tenant'); window.location.href = '/dashboard'; }
+// §2 — showAuthError() : on ne retire plus monmenu_auth_token (n'existe plus),
+// mais on supprime monmenu_tenant (données d'affichage) et on redirige.
+// La destruction du cookie httpOnly est faite par le serveur via /api/v1/auth/logout.
+function showAuthError() { localStorage.removeItem('monmenu_tenant'); window.location.href = '/dashboard'; }
 function escHtml(str) {
   if (!str) return '';
   return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');

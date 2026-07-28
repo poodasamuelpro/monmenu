@@ -44,14 +44,15 @@ export function renderNav(nomProjet: string, activePage: string = '', locale: st
 
       <!-- Actions -->
       <div class="flex items-center gap-3">
-        <!-- §3 — Sélecteur de langue FR/EN -->
-        <div class="relative group">
-          <button type="button"
+        <!-- §3 — Sélecteur de langue FR/EN (JS-driven, fonctionne sur mobile) -->
+        <div class="relative" id="lang-selector">
+          <button type="button" id="lang-btn"
+            onclick="toggleLangMenu()"
             class="w-9 h-9 rounded-lg border border-gray-200 dark:border-gray-700 flex items-center justify-center text-gray-600 dark:text-gray-300 hover:border-red-300 dark:hover:border-red-500 transition-colors flex-shrink-0 text-xs font-bold uppercase"
-            aria-label="Changer de langue" aria-haspopup="true">
+            aria-label="Changer de langue" aria-haspopup="true" aria-expanded="false">
             ${locale === 'en' ? 'EN' : 'FR'}
           </button>
-          <div class="absolute right-0 top-10 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg py-1 min-w-[90px] z-50 hidden group-hover:block">
+          <div id="lang-menu" class="absolute right-0 top-10 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg py-1 min-w-[90px] z-50 hidden">
             <a href="/fr" class="flex items-center gap-2 px-3 py-2 text-sm ${locale === 'fr' ? 'text-red-600 font-semibold' : 'text-gray-700 dark:text-gray-300'} hover:bg-gray-50 dark:hover:bg-gray-700">
               🇫🇷 Français
             </a>
@@ -109,15 +110,52 @@ export function renderNav(nomProjet: string, activePage: string = '', locale: st
           <i class="fa-solid fa-envelope text-gray-400 dark:text-gray-500 w-4 text-center" aria-hidden="true"></i>
           Contact
         </a>
+        <!-- Sélecteur langue mobile -->
+        <div class="border-t border-gray-100 dark:border-gray-800 mt-1 pt-1">
+          <div class="px-3 py-2 text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wide">
+            ${locale === 'en' ? 'Language' : 'Langue'}
+          </div>
+          <a href="/fr" role="menuitem"
+            class="px-3 py-2.5 text-sm font-medium ${locale === 'fr' ? 'text-red-600 dark:text-red-400' : 'text-gray-700 dark:text-gray-300'} hover:bg-gray-50 dark:hover:bg-gray-800 rounded-lg flex items-center gap-2">
+            <span class="w-4 text-center">🇫🇷</span>
+            Français ${locale === 'fr' ? '✓' : ''}
+          </a>
+          <a href="/en" role="menuitem"
+            class="px-3 py-2.5 text-sm font-medium ${locale === 'en' ? 'text-red-600 dark:text-red-400' : 'text-gray-700 dark:text-gray-300'} hover:bg-gray-50 dark:hover:bg-gray-800 rounded-lg flex items-center gap-2">
+            <span class="w-4 text-center">🇬🇧</span>
+            English ${locale === 'en' ? '✓' : ''}
+          </a>
+        </div>
         <div class="border-t border-gray-100 dark:border-gray-800 mt-1 pt-1">
           <a href="/dashboard" role="menuitem"
             class="px-3 py-2.5 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 rounded-lg flex items-center gap-2">
             <i class="fa-regular fa-circle-user text-gray-400 dark:text-gray-500 w-4 text-center" aria-hidden="true"></i>
-            Connexion restaurant
+            ${locale === 'en' ? 'Restaurant login' : 'Connexion restaurant'}
           </a>
         </div>
       </div>
     </div>
   </nav>
-</header>`
+</header>
+<script>
+  // §3 — Sélecteur de langue : toggle JS (fonctionne sur desktop ET mobile)
+  function toggleLangMenu() {
+    const menu = document.getElementById('lang-menu');
+    const btn = document.getElementById('lang-btn');
+    if (!menu || !btn) return;
+    const isHidden = menu.classList.contains('hidden');
+    menu.classList.toggle('hidden', !isHidden);
+    btn.setAttribute('aria-expanded', isHidden ? 'true' : 'false');
+  }
+  // Fermer le menu si on clique ailleurs
+  document.addEventListener('click', function(e) {
+    const selector = document.getElementById('lang-selector');
+    if (selector && !selector.contains(e.target)) {
+      const menu = document.getElementById('lang-menu');
+      const btn = document.getElementById('lang-btn');
+      if (menu) menu.classList.add('hidden');
+      if (btn) btn.setAttribute('aria-expanded', 'false');
+    }
+  });
+</script>`
 }
