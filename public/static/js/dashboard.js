@@ -1,12 +1,20 @@
-// MonMenu — Dashboard restaurant (v1.3.0 — §2 cookies httpOnly + CSRF)
-// MIGRATION AUTH :
-//   - Plus de dépendance à localStorage pour le token JWT.
-//   - Le cookie httpOnly "sb-access-token" est posé par le serveur (/api/v1/auth/login).
-//   - Tous les fetch() utilisent credentials:'include' pour que le navigateur
-//     envoie automatiquement le cookie sur chaque requête vers la même origine.
-//   - Le header Authorization: Bearer est SUPPRIMÉ du dashboard web (cookie suffit).
-//   - Protection CSRF : header "X-Requested-With: XMLHttpRequest" ajouté sur
-//     toutes les requêtes d'écriture (POST/PATCH/DELETE) — vérifié côté serveur.
+// MonMenu — Dashboard restaurant (v1.4.0 — correctifs QR code, codes promo,
+// édition produits avec apostrophes, horaires PDV enrichis, réception commandes)
+//
+// CHANGELOG de ce fichier par rapport à la version précédente :
+//   1. escJs() ajoutée — corrige le bug où un nom de produit/catégorie contenant
+//      une apostrophe (ex: "Sauce à l'arachide") cassait silencieusement les
+//      boutons onclick="showEditProduitModal('...')" générés en JS inline.
+//      C'était la cause probable de "impossible de modifier/changer l'image".
+//   2. loadQRCode() corrigé — utilise désormais les champs qr_display /
+//      qr_download_png / qr_download_svg renvoyés par l'API (au lieu de
+//      qr_color inexistant), QR neutre noir/blanc, téléchargement fiable.
+//   3. Codes promo — bouton "Copier" par ligne + bouton "Exporter" (CSV).
+//   4. Horaires "Mon restaurant" (PDV) — éditeur jour par jour au lieu d'un
+//      champ texte libre, cohérent avec le format JSON lu par boutique.ts/js.
+//   5. loadCommandes() — va chercher le tenant_id via /profil si absent du
+//      localStorage, pour activer le Realtime de façon fiable dès le 1er
+//      chargement (au lieu de tomber sur le fallback polling 2 min).
 'use strict';
 
 let currentSection = 'commandes';
@@ -20,6 +28,13 @@ let commandesInterval = null;
 let _supabaseClient = null;
 let _realtimeChannel = null;
 let _realtimeFallbackInterval = null; // fallback polling 2 min si Realtime échoue
+
+// Jours de la semaine pour l'éditeur d'horaires (PDV + réutilisé ailleurs si besoin)
+const JOURS_SEMAINE = ['lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche'];
+const JOURS_LABELS = {
+  lundi: 'Lundi', mardi: 'Mardi', mercredi: 'Mercredi', jeudi: 'Jeudi',
+  vendredi: 'Vendredi', samedi: 'Samedi', dimanche: 'Dimanche'
+};
 
 /**
  * §2 — Initialise le client Supabase (clé anon) + abonnement Realtime.
@@ -247,13 +262,37 @@ async function loadCommandes() {
       </div>
     </div>`;
   await fetchCommandes();
+
   // §2 — Supabase Realtime remplace le polling 30s (setInterval supprimé)
-  // Activer le Realtime si le tenant est connu, sinon fallback 2 min
-  const tenantId = tenantData?.id ?? null;
+  // FIX réception commandes : si tenantData.id est absent du localStorage
+  // (ex: 1er chargement du dashboard après connexion, ou cache vidé), on va
+  // le chercher via /api/v1/dashboard/profil AVANT de décider du fallback,
+  // pour activer le Realtime de façon fiable dès la première visite plutôt
+  // que de rester bloqué sur un polling 2 minutes en silence.
+  let tenantId = tenantData?.id ?? null;
+  if (!tenantId) {
+    try {
+      const res = await fetch('/api/v1/dashboard/profil', { credentials: 'include' });
+      if (res.ok) {
+        const profil = await res.json();
+        tenantData = profil;
+        tenantId = profil.id;
+        try {
+          localStorage.setItem('monmenu_tenant', JSON.stringify({
+            id: profil.id, nom: profil.nom, slug: profil.slug,
+            couleur_primaire: profil.couleur_primaire, couleur_secondaire: profil.couleur_secondaire
+          }));
+        } catch {}
+        const nameEl = document.getElementById('tenant-name');
+        if (nameEl) nameEl.textContent = profil.nom || 'Mon Restaurant';
+      }
+    } catch { /* silencieux — fallback polling ci-dessous */ }
+  }
+
   if (tenantId) {
     initRealtimeCommandes(tenantId);
   } else {
-    // Tenant inconnu (localStorage vide) — fallback polling 2 min
+    // Tenant toujours inconnu (ex: session invalide) — fallback polling 2 min
     _startFallbackPolling();
   }
 }
@@ -424,7 +463,7 @@ function renderMenuEditor(categories, container) {
             <button onclick="showAddProduitModal('${cat.id}')" class="text-xs bg-blue-50 text-blue-600 font-semibold px-3 py-1.5 rounded-lg hover:bg-blue-100 transition-colors">
               <i class="fa-solid fa-plus mr-1"></i>Produit
             </button>
-            <button onclick="showEditCategorieModal('${cat.id}','${escHtml(cat.nom)}')" class="text-xs bg-gray-50 text-gray-600 font-semibold px-3 py-1.5 rounded-lg hover:bg-gray-100">
+            <button onclick="showEditCategorieModal('${cat.id}','${escJs(cat.nom)}')" class="text-xs bg-gray-50 text-gray-600 font-semibold px-3 py-1.5 rounded-lg hover:bg-gray-100">
               <i class="fa-solid fa-pen text-xs"></i>
             </button>
             <button onclick="supprimerCategorie('${cat.id}')" class="text-xs bg-red-50 text-red-500 font-semibold px-3 py-1.5 rounded-lg hover:bg-red-100">
@@ -446,7 +485,7 @@ function renderMenuEditor(categories, container) {
               <div class="flex items-center gap-2 flex-shrink-0">
                 <span class="text-xs px-2 py-0.5 rounded-full cursor-pointer ${p.disponible ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}"
                   onclick="toggleDisponible('${p.id}',${p.disponible?1:0})" title="${p.disponible?'Désactiver':'Activer'}">${p.disponible?'Dispo':'Indispo'}</span>
-                <button onclick="showEditProduitModal('${p.id}','${escHtml(p.nom)}','${escHtml(p.description||'')}',${p.prix},'${escHtml(p.photo_url||'')}')" class="p-1.5 text-gray-400 hover:text-blue-600" title="Modifier">
+                <button onclick="showEditProduitModal('${p.id}','${escJs(p.nom)}','${escJs(p.description||'')}',${p.prix},'${escJs(p.photo_url||'')}')" class="p-1.5 text-gray-400 hover:text-blue-600" title="Modifier">
                   <i class="fa-solid fa-pen text-xs"></i>
                 </button>
                 <button onclick="supprimerProduit('${p.id}')" class="p-1.5 text-gray-400 hover:text-red-500" title="Supprimer">
@@ -618,7 +657,8 @@ async function submitEditProduit(e, prodId) {
         method:'POST', headers:{'X-Requested-With':'XMLHttpRequest'}, credentials:'include', body:fd
       });
       if (upRes.ok) { const upData = await upRes.json(); photo_url = upData.url; }
-    } catch {}
+      else { const err = await upRes.json(); alert('Erreur upload : ' + (err.error || 'Échec')); }
+    } catch { alert('Erreur upload.'); }
     if (prog) prog.classList.add('hidden');
   }
   const payload = { nom, description, prix };
@@ -644,10 +684,11 @@ async function supprimerProduit(prodId) {
 }
 async function toggleDisponible(prodId, currentDisponible) {
   try {
-    await fetch('/api/v1/dashboard/produits/' + prodId, {
+    const res = await fetch('/api/v1/dashboard/produits/' + prodId, {
       method:'PATCH', headers:{'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials:'include',
       body: JSON.stringify({ disponible: !currentDisponible })
     });
+    if (!res.ok) { const d = await res.json().catch(()=>({})); alert(d.error || 'Erreur lors du changement de disponibilité.'); return; }
     loadMenu();
   } catch { alert('Erreur réseau.'); }
 }
@@ -870,6 +911,11 @@ async function supprimerLivreur(livId) {
 // ==============================
 // SECTION QR CODE
 // ==============================
+// FIX QR code : utilise désormais qr_display / qr_download_png / qr_download_svg
+// renvoyés par l'API (au lieu de data.qr_color, qui n'existe plus côté serveur).
+// Le QR affiché ET téléchargé est neutre (noir sur blanc), plus la couleur du
+// restaurant. api.qrserver.com est désormais autorisé par la CSP (security.ts),
+// donc l'image se charge directement sans passer par un proxy serveur.
 async function loadQRCode() {
   const content = document.getElementById('dashboard-content');
   content.innerHTML = `<div class="text-center py-8"><i class="fa-solid fa-circle-notch fa-spin text-xl text-gray-400"></i></div>`;
@@ -882,18 +928,21 @@ async function loadQRCode() {
         <div class="bg-white rounded-2xl border border-gray-100 p-6 text-center">
           <h2 class="font-bold text-gray-900 mb-1">QR Code de votre boutique</h2>
           <p class="text-xs text-gray-500 mb-5">Imprimez-le et affichez-le en salle, sur vos emballages ou en vitrine.</p>
-          <img src="${escHtml(data.qr_color)}" alt="QR Code" class="w-48 h-48 mx-auto rounded-2xl border-4 border-white shadow-md mb-4">
+          <div id="qr-image-wrap" class="w-48 h-48 mx-auto rounded-2xl border border-gray-200 shadow-sm mb-4 bg-white flex items-center justify-center overflow-hidden">
+            <img src="${escHtml(data.qr_display)}" alt="QR Code" class="w-full h-full object-contain p-3"
+              onerror="this.parentElement.innerHTML='<div class=&quot;text-xs text-red-500 p-4&quot;><i class=&quot;fa-solid fa-triangle-exclamation mb-2 block text-lg&quot;></i>QR indisponible pour le moment.<br><button onclick=&quot;loadQRCode()&quot; class=&quot;underline mt-2&quot;>Réessayer</button></div>'">
+          </div>
           <p class="text-xs text-gray-400 mb-4"><strong>${escHtml(data.boutique_url)}</strong></p>
           <div class="flex gap-3 justify-center flex-wrap">
-            <a href="${escHtml(data.qr_download_png)}" download="qrcode-${escHtml(data.slug)}.png"
-              class="flex items-center gap-1.5 bg-red-600 text-white text-sm font-semibold px-4 py-2 rounded-xl hover:bg-red-700">
+            <a href="${escHtml(data.qr_download_png)}" download="qrcode-${escHtml(data.slug)}.png" target="_blank" rel="noopener"
+              class="flex items-center gap-1.5 bg-gray-900 text-white text-sm font-semibold px-4 py-2 rounded-xl hover:bg-gray-800 transition-colors">
               <i class="fa-solid fa-download"></i> PNG HD
             </a>
-            <a href="${escHtml(data.qr_download_svg)}" download="qrcode-${escHtml(data.slug)}.svg"
+            <a href="${escHtml(data.qr_download_svg)}" download="qrcode-${escHtml(data.slug)}.svg" target="_blank" rel="noopener"
               class="flex items-center gap-1.5 border border-gray-200 text-gray-700 text-sm font-semibold px-4 py-2 rounded-xl hover:bg-gray-50">
               <i class="fa-solid fa-vector-square"></i> SVG
             </a>
-            <button onclick="copyLink('${escHtml(data.boutique_url)}')"
+            <button onclick="copyLink('${escJs(data.boutique_url)}')"
               class="flex items-center gap-1.5 border border-gray-200 text-gray-700 text-sm font-semibold px-4 py-2 rounded-xl hover:bg-gray-50">
               <i class="fa-solid fa-copy"></i> Copier lien
             </button>
@@ -918,7 +967,7 @@ async function loadQRCode() {
           <p class="text-sm font-semibold text-blue-800 mb-2"><i class="fa-solid fa-link mr-1.5"></i>URL de votre boutique</p>
           <div class="flex items-center gap-2">
             <code class="flex-1 bg-white border border-blue-200 rounded-lg px-3 py-2 text-xs text-blue-900 font-mono break-all">${escHtml(data.boutique_url)}</code>
-            <button onclick="copyLink('${escHtml(data.boutique_url)}')" class="bg-blue-600 text-white text-xs font-semibold px-3 py-2 rounded-lg hover:bg-blue-700 flex-shrink-0">Copier</button>
+            <button onclick="copyLink('${escJs(data.boutique_url)}')" class="bg-blue-600 text-white text-xs font-semibold px-3 py-2 rounded-lg hover:bg-blue-700 flex-shrink-0">Copier</button>
           </div>
         </div>
       </div>`;
@@ -1179,6 +1228,8 @@ function confirmerSuppression() {
 // ==============================
 // SECTION CODES PROMO
 // ==============================
+// FIX codes promo : bouton "Copier" par code (presse-papier) + bouton
+// "Exporter" (CSV téléchargeable) pour l'ensemble des codes.
 async function loadCodesPromo() {
   const content = document.getElementById('dashboard-content');
   content.innerHTML = `<div class="text-center py-8"><i class="fa-solid fa-circle-notch fa-spin text-xl text-gray-400"></i></div>`;
@@ -1192,11 +1243,16 @@ async function loadCodesPromo() {
 function renderCodesPromo(codes, container) {
   const now = new Date();
   container.innerHTML = `
-    <div class="flex items-center justify-between mb-5">
+    <div class="flex items-center justify-between mb-5 flex-wrap gap-2">
       <p class="text-sm text-gray-500">${codes.length} code(s) promo</p>
-      <button onclick="showAddCodePromoModal()" class="bg-red-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-red-700 flex items-center gap-1.5">
-        <i class="fa-solid fa-plus text-xs"></i> Nouveau code
-      </button>
+      <div class="flex gap-2">
+        <button onclick="exportCodesPromo()" class="flex items-center gap-1.5 text-xs text-green-700 hover:text-green-800 border border-green-200 rounded-lg px-3 py-1.5 transition-colors bg-green-50 hover:bg-green-100">
+          <i class="fa-solid fa-file-csv"></i> Exporter
+        </button>
+        <button onclick="showAddCodePromoModal()" class="bg-red-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-red-700 flex items-center gap-1.5">
+          <i class="fa-solid fa-plus text-xs"></i> Nouveau code
+        </button>
+      </div>
     </div>
     ${codes.length === 0 ? `
       <div class="text-center py-16 border-2 border-dashed border-gray-200 rounded-2xl">
@@ -1225,6 +1281,9 @@ function renderCodesPromo(codes, container) {
                 ${c.usage_max ? ' • '+c.usage_actuel+'/'+c.usage_max+' util.' : ' • '+c.usage_actuel+' util.'}
               </div>
             </div>
+            <button onclick="copierCodePromo('${escJs(c.code)}')" class="p-2 text-gray-400 hover:text-blue-600" title="Copier le code">
+              <i class="fa-solid fa-copy text-sm"></i>
+            </button>
             <button onclick="supprimerCodePromo('${c.id}')" class="p-2 text-gray-400 hover:text-red-500" title="Supprimer">
               <i class="fa-solid fa-trash text-sm"></i>
             </button>
@@ -1284,7 +1343,12 @@ async function submitAddCodePromo(e) {
       method:'POST', headers:{'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials:'include',
       body: JSON.stringify({ code, type, valeur, date_fin, usage_max })
     });
-    if (res.ok) { closeModal(); loadCodesPromo(); }
+    if (res.ok) {
+      const d = await res.json();
+      closeModal();
+      loadCodesPromo();
+      if (d && d.code) copierCodePromo(d.code, true);
+    }
     else { const d = await res.json(); alert(d.error||'Erreur'); }
   } catch { alert('Erreur réseau.'); }
 }
@@ -1296,9 +1360,40 @@ async function supprimerCodePromo(promoId) {
   } catch { alert('Erreur réseau.'); }
 }
 
+// Copie un code promo dans le presse-papier avec un petit toast de confirmation.
+// silencieux=true : n'affiche pas de toast (utilisé juste après création, où
+// on veut surtout que le code soit prêt à coller sans surcharger l'UI).
+function copierCodePromo(code, silencieux) {
+  navigator.clipboard.writeText(code).then(() => {
+    if (silencieux) return;
+    const toast = document.createElement('div');
+    toast.className = 'fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-gray-900 text-white text-sm px-4 py-2.5 rounded-xl shadow-lg';
+    toast.innerHTML = '<i class="fa-solid fa-check mr-1.5"></i>Code « ' + escHtml(code) + ' » copié !';
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 1800);
+  }).catch(() => alert('Code : ' + code));
+}
+
+async function exportCodesPromo() {
+  try {
+    const res = await fetch('/api/v1/dashboard/codes-promo/export-csv', { credentials: 'include' });
+    if (!res.ok) { alert('Erreur export.'); return; }
+    const blob = await res.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'codes-promo.csv';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  } catch { alert('Erreur réseau.'); }
+}
+
 // ==============================
-// SECTION PDV
+// SECTION PDV — Mon restaurant (horaires enrichis)
 // ==============================
+// FIX horaires : remplace l'ancien champ texte libre par un éditeur jour par
+// jour (ouvert/fermé + créneau début-fin), au format JSON identique à celui
+// déjà utilisé et lu par boutique.ts / boutique.js côté client (clé "lundi",
+// "mardi"... avec { ouvert, debut, fin }).
 async function loadPdv() {
   const content = document.getElementById('dashboard-content');
   content.innerHTML = `<div class="text-center py-8"><i class="fa-solid fa-circle-notch fa-spin text-xl text-gray-400"></i></div>`;
@@ -1309,6 +1404,12 @@ async function loadPdv() {
     renderPdvConfig(data.pdv, content);
   } catch { content.innerHTML = '<p class="text-red-500 text-sm p-4">Erreur de chargement du point de vente.</p>'; }
 }
+
+function parsePdvHoraires(raw) {
+  if (!raw) return {};
+  try { return typeof raw === 'string' ? JSON.parse(raw) : raw; } catch { return {}; }
+}
+
 function renderPdvConfig(pdv, container) {
   container.innerHTML = `
     <div class="max-w-lg space-y-4">
@@ -1349,10 +1450,13 @@ function renderPdvConfig(pdv, container) {
               <p class="text-xs text-gray-400 mt-1">Frais par km.</p>
             </div>
           </div>
+
           <div>
-            <label class="block text-sm font-semibold text-gray-700 mb-1.5">Horaires (optionnel)</label>
-            <input id="pdv-horaires" type="text" maxlength="200" value="${escHtml(pdv?.horaires||'')}" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200" placeholder="Lun-Sam 8h-22h">
+            <label class="block text-sm font-semibold text-gray-700 mb-2">Horaires d'ouverture</label>
+            <div id="pdv-horaires-container" class="bg-gray-50 rounded-xl p-3"></div>
+            <p class="text-xs text-gray-400 mt-1.5">Ces horaires déterminent le badge « Ouvert / Fermé » affiché sur votre boutique publique.</p>
           </div>
+
           <p id="pdv-feedback" class="text-xs hidden rounded-lg px-3 py-2"></p>
           <button type="submit" class="w-full bg-red-600 text-white font-bold py-3 rounded-xl hover:bg-red-700">
             <i class="fa-solid fa-floppy-disk mr-1.5"></i> Enregistrer
@@ -1366,7 +1470,54 @@ function renderPdvConfig(pdv, container) {
       `<div class="bg-orange-50 border border-orange-100 rounded-2xl p-4 text-sm text-orange-700">
         <i class="fa-solid fa-triangle-exclamation mr-1.5"></i>GPS non configuré. Le calcul des frais de livraison nécessite vos coordonnées GPS.</div>`}
     </div>`;
+
+  renderPdvHorairesEditor(parsePdvHoraires(pdv?.horaires));
 }
+
+function renderPdvHorairesEditor(horaires) {
+  const container = document.getElementById('pdv-horaires-container');
+  if (!container) return;
+  container.innerHTML = JOURS_SEMAINE.map(jour => {
+    const entry = horaires[jour] || {};
+    const ouvert = entry.ouvert !== false;
+    const debut = entry.debut || '08:00';
+    const fin = entry.fin || '22:00';
+    return `<div class="flex items-center gap-3 py-2.5 border-b border-gray-200/70 last:border-0">
+      <div class="w-20 text-sm font-medium text-gray-700 flex-shrink-0">${JOURS_LABELS[jour]}</div>
+      <label class="relative inline-flex items-center cursor-pointer flex-shrink-0">
+        <input type="checkbox" id="pdv-h-${jour}-ouvert" class="sr-only peer" ${ouvert ? 'checked' : ''} onchange="_togglePdvHoraire('${jour}')">
+        <div class="w-9 h-5 bg-gray-300 rounded-full peer peer-checked:bg-red-600 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-4"></div>
+      </label>
+      <div id="pdv-h-${jour}-times" class="flex items-center gap-1.5 flex-1 ${ouvert ? '' : 'hidden'}">
+        <input type="time" id="pdv-h-${jour}-debut" value="${debut}" class="border border-gray-200 rounded-lg px-2 py-1.5 text-xs w-[6.5rem] bg-white">
+        <span class="text-gray-400 text-xs">–</span>
+        <input type="time" id="pdv-h-${jour}-fin" value="${fin}" class="border border-gray-200 rounded-lg px-2 py-1.5 text-xs w-[6.5rem] bg-white">
+      </div>
+      <span id="pdv-h-${jour}-closed" class="${ouvert ? 'hidden' : ''} text-xs text-gray-400 italic ml-auto">Fermé</span>
+    </div>`;
+  }).join('');
+}
+
+function _togglePdvHoraire(jour) {
+  const checked = document.getElementById('pdv-h-' + jour + '-ouvert').checked;
+  document.getElementById('pdv-h-' + jour + '-times').classList.toggle('hidden', !checked);
+  document.getElementById('pdv-h-' + jour + '-closed').classList.toggle('hidden', checked);
+}
+
+function collecterPdvHoraires() {
+  const horaires = {};
+  JOURS_SEMAINE.forEach(jour => {
+    const ouvertEl = document.getElementById('pdv-h-' + jour + '-ouvert');
+    const ouvert = ouvertEl ? ouvertEl.checked : false;
+    horaires[jour] = {
+      ouvert,
+      debut: ouvert ? document.getElementById('pdv-h-' + jour + '-debut').value : null,
+      fin: ouvert ? document.getElementById('pdv-h-' + jour + '-fin').value : null
+    };
+  });
+  return horaires;
+}
+
 function useMyLocation() {
   if (!navigator.geolocation) { alert('Géolocalisation non supportée.'); return; }
   navigator.geolocation.getCurrentPosition(pos => {
@@ -1387,7 +1538,7 @@ async function savePdv(e) {
     longitude: parseFloat(document.getElementById('pdv-lon').value)||null,
     tarif_livraison_base: parseFloat(document.getElementById('pdv-tarif-base').value)||500,
     tarif_par_km: parseFloat(document.getElementById('pdv-tarif-km').value)||200,
-    horaires: document.getElementById('pdv-horaires').value.trim()||null
+    horaires: JSON.stringify(collecterPdvHoraires())
   };
   try {
     const res = await fetch('/api/v1/dashboard/pdv', {
@@ -1432,9 +1583,29 @@ function getTenantSlug() {
 // mais on supprime monmenu_tenant (données d'affichage) et on redirige.
 // La destruction du cookie httpOnly est faite par le serveur via /api/v1/auth/logout.
 function showAuthError() { localStorage.removeItem('monmenu_tenant'); window.location.href = '/dashboard'; }
+
 function escHtml(str) {
   if (!str) return '';
   return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// FIX (bug apostrophes) — Échappe une chaîne pour insertion sûre à l'intérieur
+// d'un littéral JS délimité par apostrophes, tel que généré dans les attributs
+// onclick="fn('...')" de ce fichier. escHtml() seul ne suffit PAS : il échappe
+// les caractères HTML (<, >, &, ") mais PAS l'apostrophe ('). Or de nombreux
+// noms de produits/catégories contiennent des apostrophes françaises
+// ("Sauce à l'arachide", "Poulet à l'ail"...) : sans cet échappement, le HTML
+// généré casse le littéral JS et rend le bouton totalement silencieux (aucune
+// erreur visible pour l'utilisateur, la modale ne s'ouvre juste pas).
+// Utiliser escJs() (au lieu de escHtml()) pour toute valeur insérée à
+// l'intérieur d'un onclick="...('...')" au lieu d'un attribut HTML classique.
+function escJs(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '');
 }
 
 // Expositions globales
@@ -1478,8 +1649,12 @@ window.showAddCodePromoModal = showAddCodePromoModal;
 window.updatePromoValeurMax = updatePromoValeurMax;
 window.submitAddCodePromo = submitAddCodePromo;
 window.supprimerCodePromo = supprimerCodePromo;
+window.copierCodePromo = copierCodePromo;
+window.exportCodesPromo = exportCodesPromo;
 window.loadPdv = loadPdv;
 window.savePdv = savePdv;
 window.useMyLocation = useMyLocation;
+window._togglePdvHoraire = _togglePdvHoraire;
 window.showModal = showModal;
 window.closeModal = closeModal;
+window.escJs = escJs;
