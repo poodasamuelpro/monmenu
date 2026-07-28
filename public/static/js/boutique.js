@@ -1,4 +1,4 @@
-// MonMenu — Boutique restaurant (JS côté client)
+// MonMenu — Boutique restaurant (JS côté client) 
 'use strict';
 
 let tenantId = '';
