@@ -12,6 +12,19 @@
 //   Les clients API/mobile qui utilisent Authorization: Bearer sont exemptés
 //   (les Bearer tokens ne sont jamais envoyés automatiquement par le navigateur,
 //   donc ils ne sont pas exposés aux attaques CSRF).
+//
+// FIX (2026-07-28) — 3 occurrences du bug d'URL media corrigées :
+//   Toutes les routes de ce fichier sont montées par le parent app sous le
+//   préfixe /api/v1/dashboard (voir dashboardRouter.get('/media/:key{.+}', ...)
+//   qui répond donc sur /api/v1/dashboard/media/:key et NON /api/v1/media/:key).
+//   Les 3 endroits qui construisaient l'URL publique pointaient vers le mauvais
+//   préfixe (/api/v1/media/...), causant un 404 malgré un fichier R2 valide :
+//     1. POST /upload-image
+//     2. POST /setup-restaurant (upload logo)
+//     3. POST /setup-restaurant (upload bannière)
+//   ⚠️ Les photo_url déjà enregistrées en base avec l'ancienne URL cassée ne
+//   sont PAS corrigées automatiquement par ce patch (voir discussion : soit
+//   re-upload, soit route de compatibilité à ajouter séparément).
 
 import { Hono } from 'hono'
 import { getCookie } from 'hono/cookie'
@@ -1273,10 +1286,12 @@ dashboardRouter.post('/upload-image', async (c) => {
 
   // §4 — URL dynamique via le Worker (pas de domaine statique codé en dur)
   // Utilise l'origine de la requête pour construire une URL portable :
-  // sur *.workers.dev → https://monmenu.<account>.workers.dev/api/v1/media/<key>
-  // sur un domaine personnalisé → https://monmenu.com/api/v1/media/<key> (le jour J)
+  // sur *.workers.dev → https://monmenu.<account>.workers.dev/api/v1/dashboard/media/<key>
+  // sur un domaine personnalisé → https://monmenu.com/api/v1/dashboard/media/<key> (le jour J)
+  // FIX : ce router est monté sous /api/v1/dashboard — la route media vit donc
+  // à /api/v1/dashboard/media/:key, pas /api/v1/media/:key (bug corrigé ici).
   const origin = new URL(c.req.url).origin
-  const publicUrl = `${origin}/api/v1/media/${encodeURIComponent(key)}`
+  const publicUrl = `${origin}/api/v1/dashboard/media/${encodeURIComponent(key)}`
 
   return c.json({ success: true, url: publicUrl, key }, 201)
 })
@@ -1440,7 +1455,8 @@ dashboardRouter.post('/setup-restaurant', async (c) => {
       httpMetadata: { contentType: logoFile.type },
       customMetadata: { tenant_id: auth.tenant_id }
     })
-    logoUrl = `${origin}/api/v1/media/${encodeURIComponent(key)}`
+    // FIX : préfixe /dashboard/ ajouté (voir note en tête de fichier)
+    logoUrl = `${origin}/api/v1/dashboard/media/${encodeURIComponent(key)}`
   }
 
   // Upload bannière si fournie
@@ -1454,7 +1470,8 @@ dashboardRouter.post('/setup-restaurant', async (c) => {
       httpMetadata: { contentType: banniereFile.type },
       customMetadata: { tenant_id: auth.tenant_id }
     })
-    banniereUrl = `${origin}/api/v1/media/${encodeURIComponent(key)}`
+    // FIX : préfixe /dashboard/ ajouté (voir note en tête de fichier)
+    banniereUrl = `${origin}/api/v1/dashboard/media/${encodeURIComponent(key)}`
   }
 
   // Mise à jour du tenant (nom, logo, bannière, couleurs)
