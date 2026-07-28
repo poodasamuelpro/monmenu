@@ -30,7 +30,6 @@ import { renderSuiviPage } from './pages/suivi'
 import { renderBoutiquePage, type TenantBoutique } from './pages/boutique'
 import { render404Page } from './pages/not-found'
 import { renderBienvenuePage } from './pages/bienvenue'
-import { renderTarifsPage } from './pages/tarifs'
 
 const app = new Hono<{ Bindings: Env }>()
 
