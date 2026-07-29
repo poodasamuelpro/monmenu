@@ -15,6 +15,11 @@
 // FIX (2026-07-28) — 3 occurrences du bug d'URL media corrigées.
 // FIX (correctif QR code) — QR toujours noir sur blanc.
 // FIX (codes promo) — export CSV codes promo.
+//
+// FIX (pré-remplissage bienvenue) — GET /profil renvoie désormais aussi
+// les horaires du point de vente (pdv_horaires), afin que la page
+// /bienvenue puisse pré-remplir l'étape 2 si l'utilisateur y revient
+// après un premier passage (ou après un "Passer" suivi d'un retour).
 
 import { Hono } from 'hono'
 import { getCookie } from 'hono/cookie'
@@ -946,6 +951,9 @@ dashboardRouter.patch('/parametres', async (c) => {
 })
 
 // ---- GET /api/v1/dashboard/profil ----
+// FIX (pré-remplissage bienvenue) — pdv_horaires ajouté à la réponse afin
+// que la page /bienvenue puisse restaurer l'étape 2 (horaires) si
+// l'utilisateur y revient après un premier passage.
 dashboardRouter.get('/profil', async (c) => {
   setSecurityHeaders(c)
   const auth = await verifyAuth(c)
@@ -973,7 +981,7 @@ dashboardRouter.get('/profil', async (c) => {
 
   const { data: pdv } = await supabase
     .from('points_de_vente')
-    .select('id, nom, adresse, latitude, longitude')
+    .select('id, nom, adresse, latitude, longitude, horaires')
     .eq('tenant_id', auth.tenant_id)
     .eq('actif', true)
     .limit(1)
@@ -996,6 +1004,7 @@ dashboardRouter.get('/profil', async (c) => {
     pdv_adresse: pdv?.adresse ?? null,
     pdv_latitude: pdv?.latitude ?? null,
     pdv_longitude: pdv?.longitude ?? null,
+    horaires: pdv?.horaires ?? null,
     boutique_url: `/${tenant.slug}`,
     total_commandes: totalCommandes ?? 0
   })
