@@ -1,9 +1,11 @@
 // =============================================================
 // PAGE D'ACCUEIL — renderHomePage()
-// AJOUT (statut essai/actif) — loadPartenaires() affiche désormais
-// un badge "Nouveau" sur les restaurants en essai, distingués des
-// restaurants actifs. La priorité/tri vient déjà de l'API
-// (/api/v1/tenants, voir api-tenants.ts) — rien à changer côté ordre.
+// AJOUT (statut essai/actif) — loadPartenaires() affiche un badge
+// "Nouveau" sur les restaurants en essai.
+// AJOUT (screenshots) — nouvelle section "Vos boutiques en action" :
+// carrousel de vraies captures d'écran mobile (thum.io, rafraîchies
+// chaque nuit par le cron — voir api-cron.ts), affichées dans un
+// cadre iPhone en CSS pur (encoche, bords arrondis, indicateur home).
 // =============================================================
 import { renderHead, jsonLdOrganization, jsonLdWebSite } from '../components/head'
 import { renderNav } from '../components/nav'
@@ -34,6 +36,8 @@ export function renderHomePage(nomProjet: string, locale: string = 'fr'): string
     : ['Sans engagement', 'Prêt en quelques minutes', 'Support en français']
 
   const partenairesLabel = isEn ? 'Trusted by restaurants across the region' : 'Ils nous font confiance'
+  const showcaseTitle = isEn ? 'Your future customers, on their phone' : 'Vos futurs clients, sur leur téléphone'
+  const showcaseSubtitle = isEn ? 'Real preview of shops created with MonMenu — updated every night.' : 'Aperçu réel des boutiques créées avec MonMenu — mis à jour chaque nuit.'
 
   return `${renderHead(
     isEn ? `${nomProjet} — Order online at your favourite restaurants` : `${nomProjet} — Commandez en ligne dans vos restaurants préférés`,
@@ -65,8 +69,19 @@ export function renderHomePage(nomProjet: string, locale: string = 'fr'): string
     .partenaires-scroll:hover {
       animation-play-state: paused;
     }
+    @keyframes boutiques-marquee {
+      from { transform: translateX(0); }
+      to { transform: translateX(-50%); }
+    }
+    .boutiques-scroll {
+      animation: boutiques-marquee 50s linear infinite;
+      width: max-content;
+    }
+    .boutiques-scroll:hover {
+      animation-play-state: paused;
+    }
     @media (prefers-reduced-motion: reduce) {
-      .partenaires-scroll { animation: none; }
+      .partenaires-scroll, .boutiques-scroll { animation: none; }
     }
   </style>
 
@@ -183,8 +198,7 @@ export function renderHomePage(nomProjet: string, locale: string = 'fr'): string
   </section>
 
   <!-- ===================================================== -->
-  <!-- RESTAURANTS PARTENAIRES — carrousel dynamique          -->
-  <!-- Charge actif ET essai (non expiré) depuis /api/v1/tenants -->
+  <!-- RESTAURANTS PARTENAIRES — carrousel de logos            -->
   <!-- ===================================================== -->
   <section class="py-14 bg-gray-50 dark:bg-[#0B0A09]/50 border-y border-gray-100 dark:border-gray-800" id="partenaires">
     <div id="partenaires-container" class="hidden">
@@ -394,6 +408,30 @@ export function renderHomePage(nomProjet: string, locale: string = 'fr'): string
   </section>
 
   <!-- ===================================================== -->
+  <!-- AJOUT — Vos boutiques en action : carrousel de vraies   -->
+  <!-- captures d'écran mobile, rafraîchies chaque nuit par le -->
+  <!-- cron (api-cron.ts → capturerScreenshotsQuotidiens via    -->
+  <!-- thum.io). Affichées dans un cadre iPhone en CSS pur.     -->
+  <!-- ===================================================== -->
+  <section class="py-20 bg-gray-50 dark:bg-[#0B0A09]/50" id="boutiques-showcase">
+    <div id="boutiques-showcase-container" class="hidden">
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mb-10 text-center">
+        <h2 class="text-3xl sm:text-4xl font-extrabold text-gray-900 dark:text-white mb-3">
+          ${showcaseTitle}
+        </h2>
+        <p class="text-gray-600 dark:text-gray-300 max-w-2xl mx-auto">
+          ${showcaseSubtitle}
+        </p>
+      </div>
+      <div class="relative w-full overflow-hidden">
+        <div class="pointer-events-none absolute inset-y-0 left-0 w-16 sm:w-32 bg-gradient-to-r from-gray-50 dark:from-[#0B0A09] to-transparent z-10"></div>
+        <div class="pointer-events-none absolute inset-y-0 right-0 w-16 sm:w-32 bg-gradient-to-l from-gray-50 dark:from-[#0B0A09] to-transparent z-10"></div>
+        <div id="boutiques-showcase-track" class="flex items-start gap-8 boutiques-scroll py-4"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================================================== -->
   <!-- CTA FINAL                                              -->
   <!-- ===================================================== -->
   <section class="py-20 bg-white dark:bg-[#0B0A09]">
@@ -512,11 +550,6 @@ export function renderHomePage(nomProjet: string, locale: string = 'fr'): string
 
   <!-- Script pour charger le carrousel des restaurants partenaires -->
   <script>
-    // Charge les tenants actifs ET en essai (non expiré) depuis
-    // GET /api/v1/tenants — voir api-tenants.ts. Un tenant en essai
-    // reçoit un petit badge "Nouveau" pour le distinguer visuellement
-    // (statut renvoyé désormais par l'API). Section masquée si la
-    // liste est vide : aucune donnée fictive n'est jamais affichée.
     async function loadPartenaires() {
       const container = document.getElementById('partenaires-container');
       const track = document.getElementById('partenaires-track');
@@ -528,7 +561,7 @@ export function renderHomePage(nomProjet: string, locale: string = 'fr'): string
         const data = await res.json();
         const tenants = Array.isArray(data) ? data : (data.tenants || []);
 
-        if (!tenants.length) return; // état vide honnête : section reste masquée
+        if (!tenants.length) return;
 
         const itemHtml = function (tnt) {
           const nom = String(tnt.nom || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
@@ -546,19 +579,77 @@ export function renderHomePage(nomProjet: string, locale: string = 'fr'): string
             '</a>';
         };
 
-        // Liste dupliquée pour un défilement infini sans coupure visible.
         track.innerHTML = tenants.map(itemHtml).join('') + tenants.map(itemHtml).join('');
-
-        // Vitesse de défilement constante quel que soit le nombre de logos.
         track.style.animationDuration = Math.max(15, tenants.length * 3) + 's';
 
         container.classList.remove('hidden');
       } catch (err) {
         console.error('Erreur chargement partenaires:', err);
-        // Échec silencieux côté UI : la section reste masquée.
       }
     }
     loadPartenaires();
+  </script>
+
+  <!-- Script pour charger le carrousel des captures d'écran boutique -->
+  <script>
+    // Charge les tenants actifs/essai et affiche pour chacun sa dernière
+    // capture d'écran mobile réelle (rafraîchie chaque nuit — voir
+    // api-cron.ts + lib/screenshot.ts, via thum.io). Chaque carte est
+    // masquée individuellement si son screenshot n'existe pas encore
+    // (404) — état honnête, jamais d'image cassée affichée.
+    async function loadBoutiquesShowcase() {
+      const container = document.getElementById('boutiques-showcase-container');
+      const track = document.getElementById('boutiques-showcase-track');
+      if (!container || !track) return;
+
+      try {
+        const res = await fetch('/api/v1/tenants?limit=12');
+        if (!res.ok) return;
+        const data = await res.json();
+        const tenants = Array.isArray(data) ? data : (data.tenants || []);
+
+        if (!tenants.length) return;
+
+        const phoneCard = function (tnt) {
+          const nom = String(tnt.nom || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+          const slug = String(tnt.slug || '');
+          return (
+            '<div class="flex-shrink-0 w-[200px]">' +
+              '<a href="/' + slug + '" class="block group" title="' + nom + '">' +
+                // Cadre iPhone : coque noire arrondie, encoche en haut,
+                // bouton latéral, indicateur home en bas — tout en CSS.
+                '<div class="relative mx-auto w-[200px] h-[410px] rounded-[36px] bg-gray-900 dark:bg-black p-[10px] shadow-2xl group-hover:scale-[1.03] transition-transform">' +
+                  // Bouton latéral (volume)
+                  '<div class="absolute -left-[2px] top-20 w-[3px] h-8 bg-gray-700 rounded-l"></div>' +
+                  '<div class="absolute -left-[2px] top-32 w-[3px] h-12 bg-gray-700 rounded-l"></div>' +
+                  // Bouton latéral (power)
+                  '<div class="absolute -right-[2px] top-28 w-[3px] h-16 bg-gray-700 rounded-r"></div>' +
+                  // Écran
+                  '<div class="relative w-full h-full rounded-[26px] overflow-hidden bg-white">' +
+                    '<img src="/api/v1/screenshots/' + slug + '" alt="Aperçu boutique ' + nom + '" loading="lazy" ' +
+                    'class="w-full h-full object-cover object-top" ' +
+                    'onerror="this.closest(\\'.flex-shrink-0\\').remove()">' +
+                    // Encoche
+                    '<div class="absolute left-1/2 -translate-x-1/2 top-0 w-24 h-6 bg-gray-900 rounded-b-2xl"></div>' +
+                    // Indicateur home
+                    '<div class="absolute left-1/2 -translate-x-1/2 bottom-1.5 w-24 h-1 bg-gray-900/70 rounded-full"></div>' +
+                  '</div>' +
+                '</div>' +
+                '<p class="text-center text-sm font-semibold text-gray-700 dark:text-gray-300 mt-4 truncate">' + nom + '</p>' +
+              '</a>' +
+            '</div>'
+          );
+        };
+
+        track.innerHTML = tenants.map(phoneCard).join('') + tenants.map(phoneCard).join('');
+        track.style.animationDuration = Math.max(25, tenants.length * 6) + 's';
+
+        container.classList.remove('hidden');
+      } catch (err) {
+        console.error('Erreur chargement showcase boutiques:', err);
+      }
+    }
+    loadBoutiquesShowcase();
   </script>
 </body>
 </html>`;
