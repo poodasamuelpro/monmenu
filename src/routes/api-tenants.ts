@@ -1,4 +1,4 @@
-```ts
+
 // API Tenants (Restaurants) — gestion publique + dashboard
 // ARCHITECTURE :
 //   • D1 (Cloudflare) → SITE WEB uniquement : config_globale, pays, plans

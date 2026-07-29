@@ -1,26 +1,9 @@
 // =============================================================
 // PAGE D'ACCUEIL — renderHomePage()
-// Réécriture complète :
-//  - Charte graphique respectée : rouge dominant, bleu en accent,
-//    noir/blanc en base, touche d'orange optionnelle non utilisée ici.
-//  - Mode clair ET sombre entièrement fonctionnels (Tailwind dark:,
-//    classe posée sur <html> par static/js/main.js — voir
-//    notes/INTEGRATION-DARK-MODE.md pour la config Tailwind requise
-//    dans components/head.ts).
-//  - AUCUNE photo volée au web : visuels 100% illustrés (CSS/SVG),
-//    en attendant les vraies photos que chaque restaurant upload
-//    depuis son tableau de bord (comme sur mymenu.ma en pratique).
-//  - Grille tarifaire à 4 plans, entièrement dynamique depuis D1 via
-//    /api/v1/plans — zéro prix codé en dur dans ce fichier.
-//  - FAQ étendue (9 questions), facilement extensible.
-//
-// AJOUT — Carrousel "Restaurants partenaires" (défilement infini) :
-//   Branché sur GET /api/v1/tenants (endpoint déjà existant côté API,
-//   voir api-tenants.ts) qui renvoie les tenants actifs avec logo.
-//   Section entièrement masquée si la liste est vide (aucune donnée
-//   fictive affichée) — respecte le cahier des charges §1.1/13.
-//   Placée juste après le Hero : c'est là que la preuve sociale a le
-//   plus d'impact, avant même le détail des fonctionnalités.
+// AJOUT (statut essai/actif) — loadPartenaires() affiche désormais
+// un badge "Nouveau" sur les restaurants en essai, distingués des
+// restaurants actifs. La priorité/tri vient déjà de l'API
+// (/api/v1/tenants, voir api-tenants.ts) — rien à changer côté ordre.
 // =============================================================
 import { renderHead, jsonLdOrganization, jsonLdWebSite } from '../components/head'
 import { renderNav } from '../components/nav'
@@ -70,11 +53,6 @@ export function renderHomePage(nomProjet: string, locale: string = 'fr'): string
     }
   )}
 <body class="font-sans bg-white dark:bg-[#0B0A09] text-gray-900 dark:text-gray-50 transition-colors">
-  <!-- §Partenaires — animation de défilement infini du carrousel de logos.
-       Tailwind n'a pas de keyframes prédéfinies pour ce type de marquee,
-       d'où ce petit bloc de style dédié. La durée est recalculée en JS
-       selon le nombre de logos (voir loadPartenaires()) pour garder une
-       vitesse de défilement constante quel que soit leur nombre. -->
   <style>
     @keyframes partenaires-marquee {
       from { transform: translateX(0); }
@@ -141,11 +119,6 @@ export function renderHomePage(nomProjet: string, locale: string = 'fr'): string
           </div>
         </div>
 
-        <!-- Scène illustrée + vraies balises <img> pour les photos de plats.
-             Chaque restaurant uploade ses propres photos depuis son tableau
-             de bord (comme sur mymenu.ma) : tant qu'aucune photo réelle
-             n'est disponible pour la démo, onerror bascule proprement sur
-             l'icône illustrée plutôt que d'afficher une image cassée. -->
         <div class="relative mx-auto max-w-md lg:max-w-none">
           <div class="relative rounded-[28px] bg-gray-900 dark:bg-black p-8 min-h-[420px] flex items-center justify-center overflow-hidden">
             <svg class="absolute inset-0 w-full h-full opacity-40" viewBox="0 0 400 420" preserveAspectRatio="none" aria-hidden="true">
@@ -155,7 +128,6 @@ export function renderHomePage(nomProjet: string, locale: string = 'fr'): string
               <i class="fa-solid fa-location-dot" aria-hidden="true"></i> Votre restaurant
             </div>
 
-            <!-- Téléphone -->
             <div class="relative w-56 rounded-3xl bg-white dark:bg-gray-900 border-[6px] border-black shadow-2xl overflow-hidden">
               <div class="bg-red-600 px-4 pt-4 pb-9 text-white">
                 <div class="font-bold text-sm">Votre boutique</div>
@@ -187,7 +159,6 @@ export function renderHomePage(nomProjet: string, locale: string = 'fr'): string
               </div>
             </div>
 
-            <!-- Bulle confirmation WhatsApp -->
             <div class="absolute right-4 bottom-10 bg-white dark:bg-gray-800 rounded-2xl rounded-br-md shadow-xl p-3.5 w-48 text-xs">
               <div class="flex items-center gap-1.5 font-bold text-gray-900 dark:text-white mb-1">
                 <i class="fa-brands fa-whatsapp text-green-500" aria-hidden="true"></i> Commande #42
@@ -213,9 +184,7 @@ export function renderHomePage(nomProjet: string, locale: string = 'fr'): string
 
   <!-- ===================================================== -->
   <!-- RESTAURANTS PARTENAIRES — carrousel dynamique          -->
-  <!-- AJOUT : chargé depuis GET /api/v1/tenants (tenants      -->
-  <!-- actifs avec logo). Section masquée tant qu'aucun        -->
-  <!-- restaurant actif n'a de logo — jamais de logos fictifs. -->
+  <!-- Charge actif ET essai (non expiré) depuis /api/v1/tenants -->
   <!-- ===================================================== -->
   <section class="py-14 bg-gray-50 dark:bg-[#0B0A09]/50 border-y border-gray-100 dark:border-gray-800" id="partenaires">
     <div id="partenaires-container" class="hidden">
@@ -225,7 +194,6 @@ export function renderHomePage(nomProjet: string, locale: string = 'fr'): string
         </p>
       </div>
       <div class="relative w-full overflow-hidden">
-        <!-- Fondus sur les bords pour un effet de défilement propre -->
         <div class="pointer-events-none absolute inset-y-0 left-0 w-16 sm:w-32 bg-gradient-to-r from-gray-50 dark:from-[#0B0A09] to-transparent z-10"></div>
         <div class="pointer-events-none absolute inset-y-0 right-0 w-16 sm:w-32 bg-gradient-to-l from-gray-50 dark:from-[#0B0A09] to-transparent z-10"></div>
         <div id="partenaires-track" class="flex items-center gap-14 partenaires-scroll py-2"></div>
@@ -328,7 +296,6 @@ export function renderHomePage(nomProjet: string, locale: string = 'fr'): string
                 <i class="fa-solid fa-play text-5xl text-gray-400 dark:text-gray-600" aria-hidden="true"></i>
              </div>
           </div>
-          <!-- Badge flottant -->
           <div class="absolute -bottom-6 -left-6 bg-white dark:bg-gray-800 p-4 rounded-xl shadow-xl flex items-center gap-3">
              <div class="w-10 h-10 rounded-full bg-green-100 dark:bg-green-900/40 flex items-center justify-center">
                 <i class="fa-brands fa-whatsapp text-green-600 text-xl" aria-hidden="true"></i>
@@ -358,7 +325,6 @@ export function renderHomePage(nomProjet: string, locale: string = 'fr'): string
       </div>
 
       <div id="plans-container" class="grid sm:grid-cols-2 lg:grid-cols-4 gap-6">
-        <!-- Chargé dynamiquement via /api/v1/plans -->
         ${[1, 2, 3, 4].map(() => `
           <div class="animate-pulse bg-gray-50 dark:bg-gray-900/50 rounded-2xl p-8 h-96 border border-gray-100 dark:border-gray-800">
             <div class="h-4 bg-gray-200 dark:bg-gray-800 rounded w-1/2 mb-6"></div>
@@ -433,7 +399,6 @@ export function renderHomePage(nomProjet: string, locale: string = 'fr'): string
   <section class="py-20 bg-white dark:bg-[#0B0A09]">
     <div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
       <div class="bg-red-600 rounded-3xl p-10 sm:p-16 text-center text-white relative overflow-hidden shadow-2xl shadow-red-200 dark:shadow-none">
-        <!-- Déco SVG -->
         <svg class="absolute top-0 right-0 w-64 h-64 opacity-10 translate-x-20 -translate-y-20" viewBox="0 0 200 200" fill="none">
           <circle cx="100" cy="100" r="100" fill="white"/>
         </svg>
@@ -547,10 +512,11 @@ export function renderHomePage(nomProjet: string, locale: string = 'fr'): string
 
   <!-- Script pour charger le carrousel des restaurants partenaires -->
   <script>
-    // §Partenaires — charge les tenants actifs avec logo depuis
-    // GET /api/v1/tenants (endpoint public, voir api-tenants.ts).
-    // Section entièrement masquée si la liste est vide : aucune donnée
-    // fictive n'est jamais affichée à la place.
+    // Charge les tenants actifs ET en essai (non expiré) depuis
+    // GET /api/v1/tenants — voir api-tenants.ts. Un tenant en essai
+    // reçoit un petit badge "Nouveau" pour le distinguer visuellement
+    // (statut renvoyé désormais par l'API). Section masquée si la
+    // liste est vide : aucune donnée fictive n'est jamais affichée.
     async function loadPartenaires() {
       const container = document.getElementById('partenaires-container');
       const track = document.getElementById('partenaires-track');
@@ -568,15 +534,19 @@ export function renderHomePage(nomProjet: string, locale: string = 'fr'): string
           const nom = String(tnt.nom || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
           const slug = String(tnt.slug || '');
           const logo = String(tnt.logo_url || '');
+          const estEssai = tnt.statut === 'essai';
+          const badge = estEssai
+            ? '<span class="absolute -top-1.5 -right-1.5 bg-blue-600 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full leading-none z-10">Nouveau</span>'
+            : '';
           return '<a href="/' + slug + '" title="' + nom + '" ' +
-            'class="flex-shrink-0 flex items-center justify-center h-14 w-32 grayscale hover:grayscale-0 opacity-70 hover:opacity-100 transition-all duration-300">' +
+            'class="relative flex-shrink-0 flex items-center justify-center h-14 w-32 grayscale hover:grayscale-0 opacity-70 hover:opacity-100 transition-all duration-300">' +
+            badge +
             '<img src="' + logo + '" alt="' + nom + '" class="max-h-14 max-w-full object-contain" loading="lazy" ' +
             'onerror="this.closest(\\'a\\').remove()">' +
             '</a>';
         };
 
-        // Liste dupliquée pour un défilement infini sans coupure visible
-        // (translateX(-50%) ramène exactement au début de la 2ᵉ copie).
+        // Liste dupliquée pour un défilement infini sans coupure visible.
         track.innerHTML = tenants.map(itemHtml).join('') + tenants.map(itemHtml).join('');
 
         // Vitesse de défilement constante quel que soit le nombre de logos.

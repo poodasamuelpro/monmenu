@@ -1483,6 +1483,4 @@ dashboardRouter.post('/setup-restaurant', async (c) => {
 
 export { dashboardRouter }
 
----
 
-### 7. NOUVEAU — `src/pages/compte-inactif.ts`

@@ -1,4 +1,4 @@
-```ts
+
 // src/routes/api-cron.ts — Handler Cron Cloudflare Workers (§1.8)
 // Déclenché chaque nuit à 02h00 UTC via wrangler.jsonc "crons": ["0 2 * * *"]
 // 1. Calcule et stocke les stats journalières dans stats_journalieres.
@@ -183,4 +183,3 @@ async function verifierEssaisExpires(env: Env): Promise<void> {
     }
   }
 }
-```
