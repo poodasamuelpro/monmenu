@@ -91,6 +91,18 @@ export function renderBienvenuePage(nomProjet: string): string {
             <input id="inp-adresse" type="text" maxlength="255"
               class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200 focus:border-red-400 placeholder-gray-400"
               placeholder="Rue, quartier, ville...">
+
+            <!-- Géolocalisation (§ localisation carte) -->
+            <input type="hidden" id="inp-latitude" value="">
+            <input type="hidden" id="inp-longitude" value="">
+            <button type="button" onclick="localiserRestaurant()" id="btn-localiser"
+              class="mt-2 inline-flex items-center gap-2 text-xs font-semibold text-red-600 hover:text-red-700 transition-colors">
+              <i class="fa-solid fa-location-crosshairs"></i>
+              <span id="btn-localiser-label">Localiser mon restaurant sur la carte</span>
+            </button>
+            <p id="localisation-status" class="hidden text-xs text-green-600 mt-1">
+              <i class="fa-solid fa-circle-check mr-1"></i>Position enregistrée
+            </p>
           </div>
           <div>
             <label class="block text-sm font-semibold text-gray-700 mb-1.5">
@@ -315,6 +327,40 @@ export function renderBienvenuePage(nomProjet: string): string {
     }
 
     // ═══════════════════════════════════════════
+    // Géolocalisation du restaurant (étape 1)
+    // Demande le consentement navigateur, comme le flux de géolocalisation
+    // déjà en place ailleurs dans l'application.
+    // ═══════════════════════════════════════════
+    function localiserRestaurant() {
+      const btn = document.getElementById('btn-localiser');
+      const label = document.getElementById('btn-localiser-label');
+      const status = document.getElementById('localisation-status');
+
+      if (!navigator.geolocation) {
+        label.textContent = 'Géolocalisation non disponible sur cet appareil';
+        return;
+      }
+
+      label.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-1"></i>Localisation en cours...';
+      btn.disabled = true;
+
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          document.getElementById('inp-latitude').value = position.coords.latitude;
+          document.getElementById('inp-longitude').value = position.coords.longitude;
+          label.textContent = 'Localiser mon restaurant sur la carte';
+          status.classList.remove('hidden');
+          btn.disabled = false;
+        },
+        (err) => {
+          label.textContent = 'Localisation refusée ou indisponible. Réessayer';
+          btn.disabled = false;
+        },
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+      );
+    }
+
+    // ═══════════════════════════════════════════
     // Génération du formulaire horaires (étape 2)
     // ═══════════════════════════════════════════
     function initHoraires(horairesExistants) {
@@ -409,6 +455,13 @@ export function renderBienvenuePage(nomProjet: string): string {
         if (data.whatsapp_number) document.getElementById('inp-telephone').value = data.whatsapp_number;
         if (data.pdv_adresse) document.getElementById('inp-adresse').value = data.pdv_adresse;
 
+        if (data.pdv_latitude !== null && data.pdv_latitude !== undefined &&
+            data.pdv_longitude !== null && data.pdv_longitude !== undefined) {
+          document.getElementById('inp-latitude').value = data.pdv_latitude;
+          document.getElementById('inp-longitude').value = data.pdv_longitude;
+          document.getElementById('localisation-status').classList.remove('hidden');
+        }
+
         if (data.couleur_primaire) {
           document.getElementById('inp-couleur-primaire').value = data.couleur_primaire;
           document.getElementById('color-primary-preview').style.backgroundColor = data.couleur_primaire;
@@ -483,6 +536,12 @@ export function renderBienvenuePage(nomProjet: string): string {
 
         // Horaires (étape 2)
         formData.append('horaires', JSON.stringify(collecterHoraires()));
+
+        // Localisation (étape 1)
+        const lat = document.getElementById('inp-latitude').value;
+        const lng = document.getElementById('inp-longitude').value;
+        if (lat) formData.append('latitude', lat);
+        if (lng) formData.append('longitude', lng);
 
         // Visuels (étape 3)
         if (logoFile) formData.append('logo', logoFile);
