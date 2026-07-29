@@ -1394,6 +1394,15 @@ dashboardRouter.get('/stats-journalieres', async (c) => {
 })
 
 // ---- POST /api/v1/dashboard/setup-restaurant — Onboarding bienvenue ----
+// FIX (cache + localisation) — Deux bugs corrigés :
+//  1. Le cache KV `tenant:${slug}` n'était jamais invalidé après cette
+//     route, contrairement à /apparence, /pdv et /parametres. La boutique
+//     publique et le dashboard continuaient donc d'afficher les anciennes
+//     données (vides) tant que le cache n'expirait pas naturellement,
+//     donnant l'impression qu'il fallait "ressaisir" dans le dashboard.
+//  2. latitude/longitude n'étaient jamais reçus ni enregistrés ici, alors
+//     que /pdv (dashboard) les gère. La page bienvenue capture désormais
+//     la géolocalisation (avec consentement navigateur) et l'envoie.
 dashboardRouter.post('/setup-restaurant', async (c) => {
   setSecurityHeaders(c)
   const auth = await verifyAuth(c)
@@ -1415,6 +1424,22 @@ dashboardRouter.post('/setup-restaurant', async (c) => {
   const couleurPrim  = (formData.get('couleur_primaire') as string | null)?.trim() || '#DC2626'
   const couleurSec   = (formData.get('couleur_secondaire') as string | null)?.trim() || '#1D4ED8'
   const horairesRaw  = (formData.get('horaires') as string | null) || null
+
+  // FIX (localisation) — latitude/longitude optionnels, envoyés par le
+  // bouton "Localiser mon restaurant" de la page bienvenue (géolocalisation
+  // navigateur). Validés dans la même plage que /pdv.
+  let latitude: number | null = null
+  let longitude: number | null = null
+  const latRaw = (formData.get('latitude') as string | null)?.trim()
+  const lngRaw = (formData.get('longitude') as string | null)?.trim()
+  if (latRaw) {
+    const parsed = parseFloat(latRaw)
+    if (!Number.isNaN(parsed) && parsed >= -90 && parsed <= 90) latitude = parsed
+  }
+  if (lngRaw) {
+    const parsed = parseFloat(lngRaw)
+    if (!Number.isNaN(parsed) && parsed >= -180 && parsed <= 180) longitude = parsed
+  }
 
   let horairesJson: Record<string, unknown> | null = null
   if (horairesRaw) {
@@ -1454,6 +1479,16 @@ dashboardRouter.post('/setup-restaurant', async (c) => {
   if (nom) tenantUpdate.nom = nom
   if (logoUrl) tenantUpdate.logo_url = logoUrl
   if (banniereUrl) tenantUpdate.banniere_url = banniereUrl
+  // FIX (bug critique adresse/horaires non enregistrés) — le téléphone doit
+  // être écrit dans tenants.whatsapp_number, PAS dans points_de_vente. La
+  // table points_de_vente n'a pas de colonne "telephone" (voir GET/PATCH
+  // /pdv ci-dessus qui ne l'exposent jamais). L'ancien code tentait
+  // d'écrire pdvUpdate.telephone dans la MÊME requête .update() que adresse
+  // et horaires : Supabase rejette alors la requête entière (colonne
+  // inexistante), donc adresse et horaires n'étaient JAMAIS enregistrés,
+  // silencieusement (l'erreur n'était que loguée, jamais renvoyée au client
+  // qui recevait quand même success:true).
+  if (telephone) tenantUpdate.whatsapp_number = telephone
 
   const { error: errTenant } = await supabase
     .from('tenants')
@@ -1468,8 +1503,10 @@ dashboardRouter.post('/setup-restaurant', async (c) => {
   if (nom) pdvUpdate.nom = nom
   if (adresse) pdvUpdate.adresse = adresse
   if (horairesJson) pdvUpdate.horaires = horairesJson
-  if (telephone) pdvUpdate.telephone = telephone
+  if (latitude !== null) pdvUpdate.latitude = latitude
+  if (longitude !== null) pdvUpdate.longitude = longitude
 
+  let pdvWarning: string | null = null
   if (Object.keys(pdvUpdate).length > 0) {
     const { error: errPdv } = await supabase
       .from('points_de_vente')
@@ -1478,14 +1515,27 @@ dashboardRouter.post('/setup-restaurant', async (c) => {
       .eq('actif', true)
 
     if (errPdv) {
+      // FIX (visibilité erreurs) — l'erreur n'est plus seulement loguée
+      // côté serveur : elle est remontée dans la réponse pour que ce genre
+      // de bug (adresse/horaires silencieusement non enregistrés) soit
+      // visible immédiatement au lieu de passer inaperçu.
       console.error('Erreur mise à jour PDV:', errPdv.message)
+      pdvWarning = 'Adresse et/ou horaires non enregistrés : ' + errPdv.message
     }
   }
+
+  // FIX (cache) — invalidation du cache tenant, comme le font déjà
+  // /apparence, /pdv et /parametres. Sans ça, la boutique publique et le
+  // dashboard pouvaient continuer d'afficher des données obsolètes après
+  // l'onboarding, ce qui donnait l'impression qu'il fallait tout ressaisir
+  // manuellement dans le dashboard pour que ça s'affiche dans la boutique.
+  try { if (c.env.KV_CACHE) await c.env.KV_CACHE.delete(`tenant:${auth.tenant_slug}`) } catch {}
 
   return c.json({
     success: true,
     message: 'Restaurant configuré avec succès.',
-    redirect: '/dashboard/home'
+    redirect: '/dashboard/home',
+    ...(pdvWarning ? { warning: pdvWarning } : {})
   })
 })
 
