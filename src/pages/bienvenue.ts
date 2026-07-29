@@ -1,6 +1,16 @@
 // src/pages/bienvenue.ts — Page d'onboarding post-inscription
 // ⚠️ PAGE PRIVÉE — PAS de traduction (FR uniquement, pas d'i18n)
 // Accessible après inscription réussie, protégée par auth JWT
+//
+// FIX (CSRF) — soumettreBienvenue() ajoute désormais le header
+// X-Requested-With: XMLHttpRequest, requis par le middleware CSRF de
+// api-dashboard.ts sur toutes les routes d'écriture (POST/PATCH/PUT/DELETE).
+// Sans ce header, la requête était refusée avec un 403 CSRF_PROTECTION.
+//
+// FIX (pré-remplissage) — Au chargement, la page appelle désormais
+// GET /api/v1/dashboard/profil pour pré-remplir les champs déjà saisis
+// à l'inscription (nom, téléphone, adresse, couleurs, logo/bannière),
+// afin que l'utilisateur n'ait pas à ressaisir des informations connues.
 import { renderHead } from '../components/head'
 
 export function renderBienvenuePage(nomProjet: string): string {
@@ -148,6 +158,9 @@ export function renderBienvenuePage(nomProjet: string): string {
               </label>
               <input id="inp-logo" type="file" accept="image/*" class="hidden" onchange="previewImage(this,'logo')">
             </div>
+            <p id="logo-existant-note" class="hidden text-xs text-gray-400 mt-2">
+              <i class="fa-solid fa-circle-info mr-1"></i>Logo déjà enregistré. Choisissez un fichier pour le remplacer.
+            </p>
           </div>
 
           <!-- Bannière -->
@@ -167,6 +180,9 @@ export function renderBienvenuePage(nomProjet: string): string {
               </label>
               <input id="inp-banniere" type="file" accept="image/*" class="hidden" onchange="previewImage(this,'banniere')">
             </div>
+            <p id="banniere-existant-note" class="hidden text-xs text-gray-400 mt-2">
+              <i class="fa-solid fa-circle-info mr-1"></i>Bannière déjà enregistrée. Choisissez un fichier pour la remplacer.
+            </p>
           </div>
         </div>
         <div class="flex justify-between mt-8">
@@ -301,7 +317,7 @@ export function renderBienvenuePage(nomProjet: string): string {
     // ═══════════════════════════════════════════
     // Génération du formulaire horaires (étape 2)
     // ═══════════════════════════════════════════
-    function initHoraires() {
+    function initHoraires(horairesExistants) {
       const container = document.getElementById('horaires-container');
       container.innerHTML = jours.map(jour => \`
         <div class="flex items-center gap-3 py-3 border-b border-gray-50 last:border-0">
@@ -321,6 +337,22 @@ export function renderBienvenuePage(nomProjet: string): string {
           <span id="h-\${jour}-closed" class="hidden text-xs text-gray-400 italic">Fermé ce jour</span>
         </div>
       \`).join('');
+
+      // Applique les horaires existants (venant du profil) si fournis
+      if (horairesExistants) {
+        jours.forEach(jour => {
+          const h = horairesExistants[jour];
+          if (!h) return;
+          const checkbox = document.getElementById('h-' + jour + '-ouvert');
+          if (h.ouvert === false) {
+            checkbox.checked = false;
+            toggleHoraire(jour);
+          } else {
+            if (h.debut) document.getElementById('h-' + jour + '-debut').value = h.debut;
+            if (h.fin) document.getElementById('h-' + jour + '-fin').value = h.fin;
+          }
+        });
+      }
     }
 
     function toggleHoraire(jour) {
@@ -364,11 +396,58 @@ export function renderBienvenuePage(nomProjet: string): string {
     }
 
     // ═══════════════════════════════════════════
-    // Aperçu couleurs en temps réel
+    // Pré-remplissage avec les données déjà saisies à l'inscription
+    // (ou lors d'une session de configuration précédente)
     // ═══════════════════════════════════════════
-    document.addEventListener('DOMContentLoaded', () => {
-      initHoraires();
+    async function preremplirFormulaire() {
+      try {
+        const res = await fetch('/api/v1/dashboard/profil');
+        if (!res.ok) return;
+        const data = await res.json();
 
+        if (data.nom) document.getElementById('inp-nom').value = data.nom;
+        if (data.whatsapp_number) document.getElementById('inp-telephone').value = data.whatsapp_number;
+        if (data.pdv_adresse) document.getElementById('inp-adresse').value = data.pdv_adresse;
+
+        if (data.couleur_primaire) {
+          document.getElementById('inp-couleur-primaire').value = data.couleur_primaire;
+          document.getElementById('color-primary-preview').style.backgroundColor = data.couleur_primaire;
+        }
+        if (data.couleur_secondaire) {
+          document.getElementById('inp-couleur-secondaire').value = data.couleur_secondaire;
+          document.getElementById('color-secondary-preview').style.backgroundColor = data.couleur_secondaire;
+        }
+
+        // Aperçu logo/bannière déjà existants (impossible d'injecter un fichier
+        // dans un <input type="file"> par sécurité navigateur : on affiche
+        // seulement l'aperçu, l'utilisateur n'a pas besoin de re-uploader
+        // sauf s'il souhaite remplacer le visuel).
+        if (data.logo_url) {
+          document.getElementById('logo-preview-img').src = data.logo_url;
+          document.getElementById('logo-preview-container').classList.remove('hidden');
+          document.getElementById('logo-placeholder').classList.add('hidden');
+          document.getElementById('logo-existant-note').classList.remove('hidden');
+        }
+        if (data.banniere_url) {
+          document.getElementById('banniere-preview-img').src = data.banniere_url;
+          document.getElementById('banniere-preview-container').classList.remove('hidden');
+          document.getElementById('banniere-placeholder').classList.add('hidden');
+          document.getElementById('banniere-existant-note').classList.remove('hidden');
+        }
+
+        // Horaires : ré-initialise le bloc horaires avec les valeurs existantes si présentes
+        initHoraires(data.horaires || null);
+      } catch (err) {
+        console.error('Erreur pré-remplissage:', err);
+        // Silencieux : l'utilisateur peut toujours remplir manuellement
+        initHoraires(null);
+      }
+    }
+
+    // ═══════════════════════════════════════════
+    // Aperçu couleurs en temps réel + init page
+    // ═══════════════════════════════════════════
+    document.addEventListener('DOMContentLoaded', async () => {
       const primary = document.getElementById('inp-couleur-primaire');
       const secondary = document.getElementById('inp-couleur-secondaire');
 
@@ -378,6 +457,8 @@ export function renderBienvenuePage(nomProjet: string): string {
       secondary.addEventListener('input', () => {
         document.getElementById('color-secondary-preview').style.backgroundColor = secondary.value;
       });
+
+      await preremplirFormulaire();
     });
 
     // ═══════════════════════════════════════════
@@ -411,8 +492,14 @@ export function renderBienvenuePage(nomProjet: string): string {
         formData.append('couleur_primaire', document.getElementById('inp-couleur-primaire').value);
         formData.append('couleur_secondaire', document.getElementById('inp-couleur-secondaire').value);
 
+        // FIX CSRF — header requis par le middleware d'écriture de
+        // api-dashboard.ts (dashboardRouter.use('*', ...)). Sans lui,
+        // la requête est refusée avec 403 CSRF_PROTECTION.
         const res = await fetch('/api/v1/dashboard/setup-restaurant', {
           method: 'POST',
+          headers: {
+            'X-Requested-With': 'XMLHttpRequest'
+          },
           body: formData
         });
 
