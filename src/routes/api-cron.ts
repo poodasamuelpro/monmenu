@@ -1,16 +1,43 @@
 // src/routes/api-cron.ts — Handler Cron Cloudflare Workers (§1.8)
-// Déclenché chaque nuit à 02h00 UTC via wrangler.jsonc "crons": ["0 2 * * *"]
-// 1. Calcule et stocke les stats journalières dans stats_journalieres.
-// 2. AJOUT — vérifie les essais expirés et passe les tenants concernés
-//    de 'essai' à 'inactif' (voir verifierEssaisExpires ci-dessous).
+//
+// AJOUT (fiabilité) — les 3 tâches nocturnes tournaient auparavant dans
+// la même invocation via ctx.waitUntil(). Séparées en 3 déclenchements
+// cron distincts (voir wrangler.jsonc "crons") pour que chacune ait son
+// propre budget de temps et ses propres logs — une tâche lente ou en
+// échec n'affecte plus les deux autres, et si Cloudflare interrompt une
+// exécution on sait immédiatement laquelle (event.cron identifie le
+// déclencheur exact qui a démarré l'invocation).
+//
+// Déclenchements (wrangler.jsonc) :
+//   "0 2 * * *"  → stats journalières
+//   "10 2 * * *" → vérification essais expirés (essai → inactif)
+//   "20 2 * * *" → capture des screenshots boutique (thum.io → R2)
 
 import type { Env } from '../types/database'
 import { createSupabaseAdminClient } from '../lib/supabase'
+import { capturerScreenshotBoutique } from '../lib/screenshot'
 
-// Point d'entrée appelé par Cloudflare Workers Cron
+// Plafond de sécurité : borne la durée max de l'exécution de capture,
+// même si le nombre de restaurants actifs grandit beaucoup. Au-delà,
+// les tenants excédentaires seront traités la nuit suivante (pas de
+// perte de données, juste un aperçu qui met un jour de plus à
+// apparaître pour les nouveaux venus les plus nombreux).
+const MAX_SCREENSHOTS_PAR_EXECUTION = 60
+
 export async function handleScheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
-  ctx.waitUntil(calculerStatsJournalieres(env, event.scheduledTime))
-  ctx.waitUntil(verifierEssaisExpires(env))
+  switch (event.cron) {
+    case '0 2 * * *':
+      ctx.waitUntil(calculerStatsJournalieres(env, event.scheduledTime))
+      break
+    case '10 2 * * *':
+      ctx.waitUntil(verifierEssaisExpires(env))
+      break
+    case '20 2 * * *':
+      ctx.waitUntil(capturerScreenshotsQuotidiens(env))
+      break
+    default:
+      console.warn(`[CRON] Déclenchement non reconnu: ${event.cron}`)
+  }
 }
 
 async function calculerStatsJournalieres(env: Env, scheduledTime: number): Promise<void> {
@@ -29,21 +56,21 @@ async function calculerStatsJournalieres(env: Env, scheduledTime: number): Promi
     .is('deleted_at', null)
 
   if (tenantError || !tenants) {
-    console.error('[CRON] Erreur récupération tenants:', tenantError?.message)
+    console.error('[CRON:stats] Erreur récupération tenants:', tenantError?.message)
     return
   }
 
-  console.log(`[CRON] Calcul stats pour ${tenants.length} tenants — date: ${dateStr}`)
+  console.log(`[CRON:stats] Calcul stats pour ${tenants.length} tenants — date: ${dateStr}`)
 
   for (const tenant of tenants) {
     try {
       await calculerStatsUnTenant(adminClient, tenant.id, dateStr, debutJour, finJour)
     } catch (err) {
-      console.error(`[CRON] Erreur tenant ${tenant.id}:`, err)
+      console.error(`[CRON:stats] Erreur tenant ${tenant.id}:`, err)
     }
   }
 
-  console.log(`[CRON] Stats journalières ${dateStr} terminées.`)
+  console.log(`[CRON:stats] Stats journalières ${dateStr} terminées.`)
 }
 
 async function calculerStatsUnTenant(
@@ -117,14 +144,7 @@ async function calculerStatsUnTenant(
   if (upsertError) throw new Error(`upsert stats: ${upsertError.message}`)
 }
 
-// =====================================================================
-// AJOUT — §5 : passage automatique essai → inactif
-// Pour chaque tenant en essai dont essai_expire_le est dépassée :
-//   - si un abonnement 'actif' existe déjà (paiement confirmé mais le
-//     statut tenant n'a pas encore été mis à jour) → on log un warning
-//     et on ne touche à rien (filet de sécurité, cas censé être rare).
-//   - sinon → passage à 'inactif' + invalidation du cache KV.
-// =====================================================================
+// §5 — passage automatique essai → inactif
 async function verifierEssaisExpires(env: Env): Promise<void> {
   const adminClient = createSupabaseAdminClient(env)
   const nowIso = new Date().toISOString()
@@ -137,16 +157,16 @@ async function verifierEssaisExpires(env: Env): Promise<void> {
     .is('deleted_at', null)
 
   if (error) {
-    console.error('[CRON] Erreur récupération essais expirés:', error.message)
+    console.error('[CRON:essais] Erreur récupération essais expirés:', error.message)
     return
   }
 
   if (!essaisExpires || essaisExpires.length === 0) {
-    console.log('[CRON] Aucun essai expiré à traiter.')
+    console.log('[CRON:essais] Aucun essai expiré à traiter.')
     return
   }
 
-  console.log(`[CRON] ${essaisExpires.length} essai(s) expiré(s) à traiter.`)
+  console.log(`[CRON:essais] ${essaisExpires.length} essai(s) expiré(s) à traiter.`)
 
   for (const tenant of essaisExpires) {
     try {
@@ -159,7 +179,7 @@ async function verifierEssaisExpires(env: Env): Promise<void> {
         .maybeSingle()
 
       if (abonnementActif) {
-        console.warn(`[CRON] Tenant ${tenant.id} a un abonnement actif mais statut=essai expiré. Update manquant côté paiement ?`)
+        console.warn(`[CRON:essais] Tenant ${tenant.id} a un abonnement actif mais statut=essai expiré. Update manquant côté paiement ?`)
         continue
       }
 
@@ -167,18 +187,72 @@ async function verifierEssaisExpires(env: Env): Promise<void> {
         .from('tenants')
         .update({ statut: 'inactif', updated_at: nowIso })
         .eq('id', tenant.id)
-        .eq('statut', 'essai') // ne pas écraser si changé entre-temps
+        .eq('statut', 'essai')
 
       if (updateError) {
-        console.error(`[CRON] Erreur passage inactif tenant ${tenant.id}:`, updateError.message)
+        console.error(`[CRON:essais] Erreur passage inactif tenant ${tenant.id}:`, updateError.message)
         continue
       }
 
       try { if (env.KV_CACHE) await env.KV_CACHE.delete(`tenant:${tenant.slug}`) } catch {}
 
-      console.log(`[CRON] Tenant ${tenant.id} (${tenant.slug}) passé essai → inactif.`)
+      console.log(`[CRON:essais] Tenant ${tenant.id} (${tenant.slug}) passé essai → inactif.`)
     } catch (err) {
-      console.error(`[CRON] Erreur traitement tenant ${tenant.id}:`, err)
+      console.error(`[CRON:essais] Erreur traitement tenant ${tenant.id}:`, err)
     }
   }
+}
+
+// =====================================================================
+// AJOUT — Capture nocturne des screenshots boutique (format mobile),
+// via thum.io (lib/screenshot.ts). Un screenshot par tenant actif/essai
+// avec logo, stocké dans R2 sous screenshots/{slug}.jpg. Consommé par
+// GET /api/v1/screenshots/:slug (api-screenshots.ts) et affiché dans le
+// carrousel iPhone de la page d'accueil (home.ts).
+// Plafonné à MAX_SCREENSHOTS_PAR_EXECUTION pour borner la durée.
+// =====================================================================
+async function capturerScreenshotsQuotidiens(env: Env): Promise<void> {
+  if (!env.R2_MEDIA) {
+    console.warn('[CRON:screenshots] R2_MEDIA non configuré — capture ignorée.')
+    return
+  }
+
+  const adminClient = createSupabaseAdminClient(env)
+  const { data: tenants, error } = await adminClient
+    .from('tenants')
+    .select('slug')
+    .in('statut', ['actif', 'essai'])
+    .is('deleted_at', null)
+    .not('logo_url', 'is', null)
+    .order('updated_at', { ascending: false })
+    .limit(MAX_SCREENSHOTS_PAR_EXECUTION)
+
+  if (error || !tenants) {
+    console.error('[CRON:screenshots] Erreur récupération tenants:', error?.message)
+    return
+  }
+
+  const baseUrl = env.PUBLIC_BASE_URL ?? 'https://monmenu.app'
+  console.log(`[CRON:screenshots] Capture de ${tenants.length} screenshot(s) boutique...`)
+
+  let reussies = 0
+  for (const tenant of tenants) {
+    try {
+      const image = await capturerScreenshotBoutique(env, tenant.slug, baseUrl)
+      if (!image) {
+        console.warn(`[CRON:screenshots] Screenshot vide pour ${tenant.slug}, ignoré.`)
+        continue
+      }
+
+      await env.R2_MEDIA.put(`screenshots/${tenant.slug}.jpg`, image, {
+        httpMetadata: { contentType: 'image/jpeg' },
+        customMetadata: { captured_at: new Date().toISOString() }
+      })
+      reussies++
+    } catch (err) {
+      console.error(`[CRON:screenshots] Erreur capture ${tenant.slug}:`, err)
+    }
+  }
+
+  console.log(`[CRON:screenshots] Terminé : ${reussies}/${tenants.length} capture(s) réussie(s).`)
 }
