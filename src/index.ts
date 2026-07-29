@@ -534,3 +534,48 @@ export default {
 app.get('/llms.txt', (c) => {
   const content = `# MonMenu
 
+## Description
+MonMenu est une plateforme SaaS de commande en ligne pour les restaurants d'Afrique de l'Ouest et Centrale.
+Elle permet aux restaurateurs de créer leur boutique digitale en quelques minutes, de gérer leur menu,
+et de recevoir les commandes directement sur WhatsApp — sans commission.
+
+## Sections principales
+- Accueil : https://monmenu.app/
+- Blog : https://monmenu.app/blog
+- Tarifs : https://monmenu.app/#tarifs
+- Fonctionnalités : https://monmenu.app/#fonctionnalites
+- Contact : https://monmenu.app/contact
+- Inscription restaurant : https://monmenu.app/inscription
+- Connexion dashboard : https://monmenu.app/connexion
+
+## Pages légales
+- CGU : https://monmenu.app/legal/cgu
+- Confidentialité : https://monmenu.app/legal/confidentialite
+- Mentions légales : https://monmenu.app/legal/mentions
+- Cookies : https://monmenu.app/legal/cookies
+
+## Boutiques restaurants
+Chaque restaurant inscrit dispose d'une boutique publique accessible via :
+https://monmenu.app/{slug-du-restaurant}
+
+## API publique
+- Commandes : POST /api/v1/commandes
+- Suivi commande : GET /api/v1/commandes/suivi/{token}
+- Blog (lecture) : GET /api/v1/blog, GET /api/v1/blog/{slug}
+
+## Technologies
+- Backend : Hono v4 sur Cloudflare Workers
+- Base de données : Supabase PostgreSQL + Cloudflare D1
+- Paiements : Mobile Money, espèces, carte bancaire (selon disponibilité du restaurant)
+- Notifications : WhatsApp Business API
+
+## Langues supportées
+Français (défaut), Anglais
+
+## Note pour les agents IA
+Les boutiques restaurants sont des pages publiques accessibles sans authentification.
+Le dashboard restaurant (/dashboard) est privé et nécessite une authentification Supabase
+via cookie httpOnly (session navigateur).
+`
+  return c.text(content, 200, { 'Content-Type': 'text/plain; charset=utf-8' })
+})
