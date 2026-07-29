@@ -1,37 +1,30 @@
+```ts
 // API Tenants (Restaurants) — gestion publique + dashboard
 // ARCHITECTURE :
 //   • D1 (Cloudflare) → SITE WEB uniquement : config_globale, pays, plans
 //   • Supabase (PostgreSQL) → APPLICATION : tenants, menu, points_de_vente, etc.
 //
-// FIX URGENT (statut Ouvert/Fermé incohérent entre le bandeau et les
-// produits) — GET /:slug ne sélectionnait pas et ne renvoyait pas le champ
-// "horaires" du point de vente. boutique.js recharge les infos tenant côté
-// CLIENT via cet endpoint pour recalculer le statut sur chaque carte produit
-// (estOuvertMaintenant, rappelé toutes les 60s) — comme pdv_horaires n'était
-// jamais transmis ici, ce calcul recevait toujours "undefined" et affichait
-// "Fermé" sur tous les produits, même quand le bandeau du haut (calculé côté
-// serveur au premier rendu, avec les bonnes données) affichait "Ouvert".
-// Deux lignes changées : le select() du join points_de_vente, et l'objet
-// "result" renvoyé en JSON — voir les commentaires "FIX" ci-dessous.
+// AJOUT (statut essai/actif) — GET / renvoie maintenant les tenants 'actif'
+// ET 'essai' (non expiré), triés avec 'actif' en priorité. POST / calcule
+// désormais essai_expire_le à la création (durée fixée par la constante
+// ESSAI_DUREE_JOURS, voir lib/constants.ts — pas de config en base pour
+// cette valeur, elle change rarement et un redéploiement suffit).
 
 import { Hono } from 'hono'
 import type { Env } from '../types/database'
 import { setSecurityHeaders } from '../lib/security'
 import { createSupabaseAdminClient } from '../lib/supabase'
+import { ESSAI_DUREE_JOURS } from '../lib/constants'
 
 const tenantsRouter = new Hono<{ Bindings: Env }>()
 
 // =============================================================
-// GET /api/v1/tenants — Liste publique des restaurants actifs
-// AJOUT : cet endpoint n'existait pas. Il est nécessaire pour la
-// section "Restaurants partenaires" de la page d'accueil (home.ts),
-// qui affiche les vrais logos des restaurants actifs — jamais de
-// données inventées (cahier des charges, section 1.1/13). Tant
-// qu'aucun restaurant n'est actif, elle renvoie un tableau vide et
-// le frontend affiche un état vide honnête plutôt que des données
-// fictives.
-// Ne renvoie QUE des champs publics (pas de whatsapp_number, pas de
-// metadata interne) : ce endpoint n'est pas authentifié.
+// GET /api/v1/tenants — Liste publique des restaurants partenaires
+// Inclut désormais 'actif' ET 'essai' non expiré, triés avec
+// 'actif' en priorité (carrousel page d'accueil). Un essai expiré
+// n'apparaît jamais, même si le cron nocturne (api-cron.ts) a du
+// retard — la condition essai_expire_le est vérifiée à chaque
+// requête, indépendamment du cron.
 // =============================================================
 tenantsRouter.get('/', async (c) => {
   setSecurityHeaders(c)
@@ -50,17 +43,19 @@ tenantsRouter.get('/', async (c) => {
     }
   } catch { /* KV non disponible en local dev */ }
 
-  // SUPABASE — restaurants actifs uniquement (APPLICATION DATA)
-  // "essai" est volontairement exclu de cette liste publique : un
-  // restaurant en période d'essai ne doit pas être présenté comme
-  // preuve sociale tant qu'il n'a pas confirmé son abonnement.
+  const nowIso = new Date().toISOString()
   const adminClient = createSupabaseAdminClient(c.env)
+
   const { data: tenants, error } = await adminClient
     .from('tenants')
-    .select('nom, slug, logo_url')
-    .eq('statut', 'actif')
+    .select('nom, slug, logo_url, statut')
+    .in('statut', ['actif', 'essai'])
     .is('deleted_at', null)
     .not('logo_url', 'is', null)
+    // Filet de sécurité côté requête : un essai expiré n'apparaît
+    // jamais, même si le cron n'est pas encore passé.
+    .or(`statut.eq.actif,essai_expire_le.gt.${nowIso}`)
+    .order('statut', { ascending: true }) // 'actif' avant 'essai' (alphabétique)
     .order('updated_at', { ascending: false })
     .limit(limit)
 
@@ -71,7 +66,6 @@ tenantsRouter.get('/', async (c) => {
 
   const result = { tenants: tenants ?? [] }
 
-  // Cache 5 minutes — cohérent avec le cache déjà utilisé sur GET /:slug
   try { if (c.env.KV_CACHE) await c.env.KV_CACHE.put(cacheKey, JSON.stringify(result), { expirationTtl: 300 }) } catch {}
 
   return c.json(result)
@@ -82,7 +76,6 @@ tenantsRouter.get('/:slug', async (c) => {
   setSecurityHeaders(c)
   const slug = c.req.param('slug')
 
-  // Essayer le cache KV (graceful fallback si KV non configuré)
   const cacheKey = `tenant:${slug}`
   try {
     if (c.env.KV_CACHE) {
@@ -94,11 +87,8 @@ tenantsRouter.get('/:slug', async (c) => {
     }
   } catch { /* KV non disponible en local dev */ }
 
-  // SUPABASE — tenant info (APPLICATION DATA)
   const adminClient = createSupabaseAdminClient(c.env)
 
-  // FIX : "horaires" ajouté au select du join points_de_vente — c'est ce
-  // champ précis qui manquait et cassait le calcul d'ouverture côté client.
   const { data: tenant, error } = await adminClient
     .from('tenants')
     .select(`
@@ -117,7 +107,6 @@ tenantsRouter.get('/:slug', async (c) => {
     return c.json({ error: 'Restaurant introuvable.' }, 404)
   }
 
-  // D1 — info pays (SITE WEB DATA — pays table)
   let paysInfo: any = null
   if (tenant.pays_id) {
     try {
@@ -151,14 +140,9 @@ tenantsRouter.get('/:slug', async (c) => {
     pdv_adresse: pdv?.adresse ?? null,
     pdv_latitude: pdv?.latitude ?? null,
     pdv_longitude: pdv?.longitude ?? null,
-    // FIX : champ manquant — boutique.js s'en sert pour recalculer
-    // dynamiquement le statut Ouvert/Fermé côté client (estOuvertMaintenant),
-    // rappelé toutes les 60 secondes. Sans lui, undefined => toujours "Fermé"
-    // sur les cartes produits, quel que soit le vrai statut du restaurant.
     pdv_horaires: pdv?.horaires ?? null
   }
 
-  // Mettre en cache 5 minutes
   try { if (c.env.KV_CACHE) await c.env.KV_CACHE.put(cacheKey, JSON.stringify(result), { expirationTtl: 300 }) } catch {}
 
   return c.json(result)
@@ -177,7 +161,6 @@ tenantsRouter.get('/:slug/menu', async (c) => {
     }
   } catch {}
 
-  // SUPABASE — lookup tenant_id depuis le slug (APPLICATION DATA)
   const adminClient = createSupabaseAdminClient(c.env)
 
   const { data: tenantRow, error: tenantError } = await adminClient
@@ -192,7 +175,6 @@ tenantsRouter.get('/:slug/menu', async (c) => {
     return c.json({ error: 'Restaurant introuvable.' }, 404)
   }
 
-  // SUPABASE — catégories + produits (APPLICATION DATA)
   const [{ data: categories, error: catError }, { data: produits, error: prodError }] = await Promise.all([
     adminClient
       .from('categories_menu')
@@ -211,7 +193,6 @@ tenantsRouter.get('/:slug/menu', async (c) => {
 
   if (catError) return c.json({ error: 'Erreur récupération menu.', detail: catError.message }, 500)
 
-  // Regrouper produits par catégorie
   const produitsByCategorie = new Map<string, any[]>()
   for (const produit of (produits ?? [])) {
     const list = produitsByCategorie.get(produit.categorie_id) ?? []
@@ -226,7 +207,6 @@ tenantsRouter.get('/:slug/menu', async (c) => {
 
   const result = { categories: menu }
 
-  // Cache 2 minutes
   try { if (c.env.KV_CACHE) await c.env.KV_CACHE.put(cacheKey, JSON.stringify(result), { expirationTtl: 120 }) } catch {}
 
   return c.json(result)
@@ -237,7 +217,6 @@ tenantsRouter.get('/:slug/qrcode', async (c) => {
   setSecurityHeaders(c)
   const slug = c.req.param('slug')
 
-  // SUPABASE — tenant info (APPLICATION DATA)
   const adminClient = createSupabaseAdminClient(c.env)
 
   const { data: tenant, error } = await adminClient
@@ -251,7 +230,6 @@ tenantsRouter.get('/:slug/qrcode', async (c) => {
     return c.json({ error: 'Restaurant introuvable.' }, 404)
   }
 
-  // §4 — URL dynamique via l'origine du Worker
   const url = `${new URL(c.req.url).origin}/${slug}`
   const color = (tenant.couleur_primaire ?? '#DC2626').replace('#', '')
 
@@ -291,7 +269,6 @@ tenantsRouter.post('/', async (c) => {
   const data = parseResult.data
   const adminClient = createSupabaseAdminClient(c.env)
 
-  // SUPABASE — Vérifier unicité du slug (APPLICATION DATA)
   const { data: existingSlug } = await adminClient
     .from('tenants')
     .select('id')
@@ -302,7 +279,6 @@ tenantsRouter.post('/', async (c) => {
     return c.json({ error: 'Ce nom de boutique est déjà utilisé.' }, 409)
   }
 
-  // D1 — Plan gratuit par défaut (SITE WEB DATA — plans table)
   let planId: string | null = null
   let paysId: string | null = null
   try {
@@ -312,7 +288,6 @@ tenantsRouter.post('/', async (c) => {
     planId = planGratuit?.id ?? null
   } catch { /* plans table may not exist yet */ }
 
-  // D1 — Pays Burkina Faso par défaut (SITE WEB DATA — pays table)
   try {
     const pays = await c.env.DB
       .prepare("SELECT id FROM pays WHERE code_iso = 'BF' LIMIT 1")
@@ -323,7 +298,10 @@ tenantsRouter.post('/', async (c) => {
   const tenantId = crypto.randomUUID()
   const now = new Date().toISOString()
 
-  // SUPABASE — Créer le tenant (APPLICATION DATA)
+  // AJOUT — date de fin d'essai calculée à la création, durée fixe
+  // (ESSAI_DUREE_JOURS, voir lib/constants.ts).
+  const essaiExpireLe = new Date(Date.now() + ESSAI_DUREE_JOURS * 86400000).toISOString()
+
   const { error: insertError } = await adminClient
     .from('tenants')
     .insert({
@@ -335,6 +313,7 @@ tenantsRouter.post('/', async (c) => {
       couleur_primaire: data.couleur_primaire,
       couleur_secondaire: data.couleur_secondaire,
       statut: 'essai',
+      essai_expire_le: essaiExpireLe,
       plan_id: planId,
       metadata: '{}',
       created_at: now,
@@ -345,7 +324,6 @@ tenantsRouter.post('/', async (c) => {
     return c.json({ error: 'Erreur création restaurant.', detail: insertError.message }, 500)
   }
 
-  // Invalider cache
   try { if (c.env.KV_CACHE) await c.env.KV_CACHE.delete(`tenant:${data.slug}`) } catch {}
 
   return c.json({ success: true, tenant_id: tenantId, slug: data.slug }, 201)
