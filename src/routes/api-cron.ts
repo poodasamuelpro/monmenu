@@ -8,7 +8,7 @@
 // exécution on sait immédiatement laquelle (event.cron identifie le
 // déclencheur exact qui a démarré l'invocation).
 //
-// Déclenchements (wrangler.jsonc) :
+// Déclenchements (wrangler.jsonc, heures UTC) :
 //   "0 2 * * *"  → stats journalières
 //   "10 2 * * *" → vérification essais expirés (essai → inactif)
 //   "20 2 * * *" → capture des screenshots boutique (thum.io → R2)
@@ -17,12 +17,12 @@ import type { Env } from '../types/database'
 import { createSupabaseAdminClient } from '../lib/supabase'
 import { capturerScreenshotBoutique } from '../lib/screenshot'
 
-// Plafond de sécurité : borne la durée max de l'exécution de capture,
-// même si le nombre de restaurants actifs grandit beaucoup. Au-delà,
-// les tenants excédentaires seront traités la nuit suivante (pas de
-// perte de données, juste un aperçu qui met un jour de plus à
-// apparaître pour les nouveaux venus les plus nombreux).
-const MAX_SCREENSHOTS_PAR_EXECUTION = 60
+// Plafond de sécurité : borne la durée max de l'exécution de capture
+// ET protège le quota de l'API de capture (thum.io), même si le nombre
+// de restaurants actifs grandit beaucoup. Au-delà de ce nombre, les
+// tenants excédentaires ne sont pas ignorés définitivement : voir la
+// rotation par paquets plus bas (capturerScreenshotsQuotidiens).
+const MAX_SCREENSHOTS_PAR_EXECUTION = 30
 
 export async function handleScheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
   switch (event.cron) {
@@ -209,7 +209,15 @@ async function verifierEssaisExpires(env: Env): Promise<void> {
 // avec logo, stocké dans R2 sous screenshots/{slug}.jpg. Consommé par
 // GET /api/v1/screenshots/:slug (api-screenshots.ts) et affiché dans le
 // carrousel iPhone de la page d'accueil (home.ts).
-// Plafonné à MAX_SCREENSHOTS_PAR_EXECUTION pour borner la durée.
+//
+// AJOUT (rotation) — plafonné à MAX_SCREENSHOTS_PAR_EXECUTION (30) pour
+// borner la durée ET préserver le quota de l'API de capture. Si le
+// nombre de restaurants éligibles dépasse ce plafond, on ne prend plus
+// toujours les mêmes : la liste complète est découpée en paquets de 30
+// (ordre stable par "id"), et chaque nuit on avance d'un paquet, en
+// bouclant automatiquement une fois le dernier atteint. Aucun état à
+// stocker : le numéro du jour (depuis l'epoch) modulo le nombre de
+// paquets détermine seul quel paquet est traité ce soir.
 // =====================================================================
 async function capturerScreenshotsQuotidiens(env: Env): Promise<void> {
   if (!env.R2_MEDIA) {
@@ -218,22 +226,36 @@ async function capturerScreenshotsQuotidiens(env: Env): Promise<void> {
   }
 
   const adminClient = createSupabaseAdminClient(env)
-  const { data: tenants, error } = await adminClient
+
+  // Requête légère (id + slug seulement) sur TOUS les tenants éligibles,
+  // pas seulement les 30 premiers : la rotation a besoin du total pour
+  // savoir sur combien de paquets répartir.
+  const { data: tousTenants, error } = await adminClient
     .from('tenants')
-    .select('slug')
+    .select('id, slug')
     .in('statut', ['actif', 'essai'])
     .is('deleted_at', null)
     .not('logo_url', 'is', null)
-    .order('updated_at', { ascending: false })
-    .limit(MAX_SCREENSHOTS_PAR_EXECUTION)
+    .order('id', { ascending: true }) // ordre stable, indispensable pour une rotation cohérente d'une nuit à l'autre
 
-  if (error || !tenants) {
+  if (error || !tousTenants) {
     console.error('[CRON:screenshots] Erreur récupération tenants:', error?.message)
     return
   }
 
+  if (tousTenants.length === 0) {
+    console.log('[CRON:screenshots] Aucun tenant éligible.')
+    return
+  }
+
+  const nbPaquets = Math.ceil(tousTenants.length / MAX_SCREENSHOTS_PAR_EXECUTION)
+  const jourEpoch = Math.floor(Date.now() / 86_400_000) // jour absolu, stable pour toute la journée
+  const paquetIndex = jourEpoch % nbPaquets
+  const debut = paquetIndex * MAX_SCREENSHOTS_PAR_EXECUTION
+  const tenants = tousTenants.slice(debut, debut + MAX_SCREENSHOTS_PAR_EXECUTION)
+
   const baseUrl = env.PUBLIC_BASE_URL ?? 'https://monmenu.app'
-  console.log(`[CRON:screenshots] Capture de ${tenants.length} screenshot(s) boutique...`)
+  console.log(`[CRON:screenshots] Rotation jour ${jourEpoch} — paquet ${paquetIndex + 1}/${nbPaquets} — ${tenants.length}/${tousTenants.length} tenant(s).`)
 
   let reussies = 0
   for (const tenant of tenants) {
