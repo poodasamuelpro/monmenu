@@ -82,3 +82,56 @@ npx wrangler pages deploy dist --project-name monmenu
 - **Phase 1** (Audit) : `AUDIT_MONMENU.md` — juillet 2025
 - **Phase 2** (Corrections) : `RAPPORT_CORRECTIONS_MONMENU.md` — juillet 2026
 - **Phase 3** (Sécurité + Performance + i18n + SEO) : juillet 2026 — voir `RAPPORT_PHASE3.md`
+
+---
+
+## Module Paiement Manuel (v2.0 — 2026-07-29)
+
+### Flux global
+Restaurant → soumet preuve (JPG/PNG) → Admin vérifie → Confirme ou Rejette
+
+### Fenêtres temporelles
+| Événement | Délai |
+|-----------|-------|
+| Soumission → Confirmation admin (engagé) | ≤ 38h |
+| Tolérance accès (fenêtre cron blocage) | 72h |
+| Cron blocage automatique | toutes les 6h (`30 */6 * * *`) |
+
+### Routes API paiement
+| Méthode | Route | Description |
+|---------|-------|-------------|
+| `GET` | `/api/v1/paiement/statut` | Statut abonnement + référence + délai |
+| `GET` | `/api/v1/paiement/reference` | Référence de paiement active |
+| `POST` | `/api/v1/paiement/soumettre` | Upload preuve + abonnement en_attente_confirmation |
+| `GET` | `/api/v1/paiement/historique` | Historique abonnements du tenant |
+| `GET` | `/api/v1/paiement/notifications` | Notifications paiement in-app |
+| `GET` | `/api/v1/dashboard/notifications` | Bandeau notifications (alias) |
+
+### Statuts abonnement
+`actif` | `essai` | `en_attente_confirmation` *(nouveau)* | `expire` | `annule` | `en_retard`
+
+### Sécurité appliquée
+- **SEC-01** : statut jamais fourni par le client
+- **SEC-02** : validation MIME 4 couches (ext + Content-Type + magic bytes + taille 5Mo max)
+- **SEC-03** : IDOR impossible — filtrage systématique par `tenant_id` du JWT
+- **SEC-05** : CSRF — `X-Requested-With: XMLHttpRequest` requis sur toutes routes d'écriture
+- **SEC-06** : clé R2 en DB, jamais l'URL publique (URL signée 15min pour admin seulement)
+- **SEC-07** : rate-limit 3 soumissions/heure par tenant
+- **SEC-08** : idempotence — un seul `en_attente_confirmation` par tenant
+- **SEC-09** : aucun nom de fichier ni token dans les logs
+
+### Plans D1 (source de vérité)
+| plan_faso | plan_baraka | plan_naaba | plan_mogho |
+|-----------|-------------|------------|------------|
+| 0 FCFA | 8 000/80 000 FCFA | 18 000/180 000 FCFA | 35 000/350 000 FCFA |
+
+### Migrations Supabase
+- `007_abonnement_paiement_manuel.sql` — 10 colonnes abonnements + 2 tenants + CHECK
+- `008_notifications_paiement.sql` — tables notifications_restaurant + notifications_admin
+- `009_sync_plans_depuis_d1.sql` — synchronisation plans Supabase → D1
+
+### Pages frontend modifiées
+- `/dashboard` — nav Abonnement + bandeau notifications
+- `/bienvenue` — étape 5 (plan + référence)
+- `/dashboard/compte-inactif` — CTA "Déclarer mon paiement"
+- `/dashboard/abonnement` — section complète (statut + upload + historique)
