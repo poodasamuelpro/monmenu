@@ -1,6 +1,9 @@
+```ts
 // src/routes/api-cron.ts — Handler Cron Cloudflare Workers (§1.8)
 // Déclenché chaque nuit à 02h00 UTC via wrangler.jsonc "crons": ["0 2 * * *"]
-// Calcule et stocke les stats journalières dans la table stats_journalieres (Supabase).
+// 1. Calcule et stocke les stats journalières dans stats_journalieres.
+// 2. AJOUT — vérifie les essais expirés et passe les tenants concernés
+//    de 'essai' à 'inactif' (voir verifierEssaisExpires ci-dessous).
 
 import type { Env } from '../types/database'
 import { createSupabaseAdminClient } from '../lib/supabase'
@@ -8,19 +11,18 @@ import { createSupabaseAdminClient } from '../lib/supabase'
 // Point d'entrée appelé par Cloudflare Workers Cron
 export async function handleScheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
   ctx.waitUntil(calculerStatsJournalieres(env, event.scheduledTime))
+  ctx.waitUntil(verifierEssaisExpires(env))
 }
 
 async function calculerStatsJournalieres(env: Env, scheduledTime: number): Promise<void> {
   const adminClient = createSupabaseAdminClient(env)
 
-  // Date d'hier (le cron tourne à 02h UTC, donc "hier" = jour J-1)
   const date = new Date(scheduledTime)
   date.setUTCDate(date.getUTCDate() - 1)
-  const dateStr = date.toISOString().split('T')[0] // YYYY-MM-DD
+  const dateStr = date.toISOString().split('T')[0]
   const debutJour = `${dateStr}T00:00:00.000Z`
   const finJour = `${dateStr}T23:59:59.999Z`
 
-  // Récupérer tous les tenants actifs
   const { data: tenants, error: tenantError } = await adminClient
     .from('tenants')
     .select('id')
@@ -34,7 +36,6 @@ async function calculerStatsJournalieres(env: Env, scheduledTime: number): Promi
 
   console.log(`[CRON] Calcul stats pour ${tenants.length} tenants — date: ${dateStr}`)
 
-  // Pour chaque tenant, calculer ses stats du jour
   for (const tenant of tenants) {
     try {
       await calculerStatsUnTenant(adminClient, tenant.id, dateStr, debutJour, finJour)
@@ -53,7 +54,6 @@ async function calculerStatsUnTenant(
   debutJour: string,
   finJour: string
 ): Promise<void> {
-  // Commandes du jour
   const { data: commandes, error: cmdError } = await adminClient
     .from('commandes')
     .select('id, montant_total, frais_livraison, statut')
@@ -75,7 +75,6 @@ async function calculerStatsUnTenant(
     .filter((c: any) => c.statut !== 'annulee')
     .reduce((sum: number, c: any) => sum + (c.frais_livraison ?? 0), 0)
 
-  // Produits les plus commandés
   const { data: itemsData } = await adminClient
     .from('commandes')
     .select('items_json')
@@ -112,10 +111,76 @@ async function calculerStatsUnTenant(
     updated_at: new Date().toISOString()
   }
 
-  // Upsert : écrase si déjà calculé (en cas de relance)
   const { error: upsertError } = await adminClient
     .from('stats_journalieres')
     .upsert(statsData, { onConflict: 'tenant_id,date' })
 
   if (upsertError) throw new Error(`upsert stats: ${upsertError.message}`)
 }
+
+// =====================================================================
+// AJOUT — §5 : passage automatique essai → inactif
+// Pour chaque tenant en essai dont essai_expire_le est dépassée :
+//   - si un abonnement 'actif' existe déjà (paiement confirmé mais le
+//     statut tenant n'a pas encore été mis à jour) → on log un warning
+//     et on ne touche à rien (filet de sécurité, cas censé être rare).
+//   - sinon → passage à 'inactif' + invalidation du cache KV.
+// =====================================================================
+async function verifierEssaisExpires(env: Env): Promise<void> {
+  const adminClient = createSupabaseAdminClient(env)
+  const nowIso = new Date().toISOString()
+
+  const { data: essaisExpires, error } = await adminClient
+    .from('tenants')
+    .select('id, slug')
+    .eq('statut', 'essai')
+    .lt('essai_expire_le', nowIso)
+    .is('deleted_at', null)
+
+  if (error) {
+    console.error('[CRON] Erreur récupération essais expirés:', error.message)
+    return
+  }
+
+  if (!essaisExpires || essaisExpires.length === 0) {
+    console.log('[CRON] Aucun essai expiré à traiter.')
+    return
+  }
+
+  console.log(`[CRON] ${essaisExpires.length} essai(s) expiré(s) à traiter.`)
+
+  for (const tenant of essaisExpires) {
+    try {
+      const { data: abonnementActif } = await adminClient
+        .from('abonnements')
+        .select('id')
+        .eq('tenant_id', tenant.id)
+        .eq('statut', 'actif')
+        .or(`date_fin.is.null,date_fin.gt.${nowIso}`)
+        .maybeSingle()
+
+      if (abonnementActif) {
+        console.warn(`[CRON] Tenant ${tenant.id} a un abonnement actif mais statut=essai expiré. Update manquant côté paiement ?`)
+        continue
+      }
+
+      const { error: updateError } = await adminClient
+        .from('tenants')
+        .update({ statut: 'inactif', updated_at: nowIso })
+        .eq('id', tenant.id)
+        .eq('statut', 'essai') // ne pas écraser si changé entre-temps
+
+      if (updateError) {
+        console.error(`[CRON] Erreur passage inactif tenant ${tenant.id}:`, updateError.message)
+        continue
+      }
+
+      try { if (env.KV_CACHE) await env.KV_CACHE.delete(`tenant:${tenant.slug}`) } catch {}
+
+      console.log(`[CRON] Tenant ${tenant.id} (${tenant.slug}) passé essai → inactif.`)
+    } catch (err) {
+      console.error(`[CRON] Erreur traitement tenant ${tenant.id}:`, err)
+    }
+  }
+}
+```
