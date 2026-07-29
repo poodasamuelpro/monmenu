@@ -1,3 +1,4 @@
+
 // API Dashboard — Routes protégées pour le tableau de bord restaurant
 // ARCHITECTURE :
 //   • D1 (Cloudflare) → SITE WEB uniquement : config_globale, pays, plans
@@ -6,32 +7,15 @@
 //      "sb-access-token" (flux navigateur) OU header Authorization: Bearer
 //      (clients API/mobile), avec le cookie prioritaire.
 // §2.CSRF — Protection CSRF sur les routes d'écriture (POST/PATCH/DELETE).
-//   Stratégie : vérification du header "X-Requested-With: XMLHttpRequest".
-//   Ce header est ajouté par le dashboard JS (fetch() côté client) mais ne peut
-//   PAS être ajouté automatiquement par un formulaire HTML cross-origin (CSRF).
-//   Les clients API/mobile qui utilisent Authorization: Bearer sont exemptés
-//   (les Bearer tokens ne sont jamais envoyés automatiquement par le navigateur,
-//   donc ils ne sont pas exposés aux attaques CSRF).
 //
-// FIX (2026-07-28) — 3 occurrences du bug d'URL media corrigées :
-//   Toutes les routes de ce fichier sont montées par le parent app sous le
-//   préfixe /api/v1/dashboard (voir dashboardRouter.get('/media/:key{.+}', ...)
-//   qui répond donc sur /api/v1/dashboard/media/:key et NON /api/v1/media/:key).
-//   Les 3 endroits qui construisaient l'URL publique pointaient vers le mauvais
-//   préfixe (/api/v1/media/...), causant un 404 malgré un fichier R2 valide :
-//     1. POST /upload-image
-//     2. POST /setup-restaurant (upload logo)
-//     3. POST /setup-restaurant (upload bannière)
+// FIX (statut essai/actif) — verifyAuth() bloquait uniquement 'suspendu'
+// (.neq). Un tenant 'inactif' (essai expiré sans paiement) pouvait encore
+// appeler l'API dashboard. Remplacé par une liste blanche .in(['actif',
+// 'essai']) : plus sûr, un nouveau statut futur sera bloqué par défaut.
 //
-// FIX (correctif QR code) — GET /qrcode renvoyait des champs (qr_color,
-//   qr_download_png...) générés avec la couleur du restaurant (pas neutre) et
-//   l'image ne s'affichait pas dans le dashboard car api.qrserver.com n'était
-//   pas autorisé par la CSP (corrigé dans security.ts). Le QR est maintenant
-//   TOUJOURS noir sur blanc (rendu neutre, professionnel), avec une marge
-//   suffisante pour rester scannable à l'impression.
-//
-// FIX (codes promo) — Ajout de GET /codes-promo/export-csv pour permettre
-//   l'export/téléchargement de tous les codes promo du restaurant.
+// FIX (2026-07-28) — 3 occurrences du bug d'URL media corrigées.
+// FIX (correctif QR code) — QR toujours noir sur blanc.
+// FIX (codes promo) — export CSV codes promo.
 
 import { Hono } from 'hono'
 import { getCookie } from 'hono/cookie'
@@ -41,26 +25,16 @@ import { setSecurityHeaders, checkRateLimit } from '../lib/security'
 
 const dashboardRouter = new Hono<{ Bindings: Env }>()
 
-// Doit être strictement identique au nom de cookie posé dans api-auth.ts
-// et utilisé dans src/middleware/auth.ts.
 const ACCESS_TOKEN_COOKIE = 'sb-access-token'
 
-// §2.CSRF — Middleware CSRF appliqué sur toutes les requêtes d'écriture
-// (POST, PATCH, DELETE, PUT) de ce router.
-// Logique : si le client s'authentifie via cookie httpOnly (comportement navigateur
-// automatique), il DOIT aussi envoyer "X-Requested-With: XMLHttpRequest" pour prouver
-// qu'il s'agit d'un appel JS légitime et non d'une soumission de formulaire cross-origin.
-// Les clients API/mobile avec Authorization: Bearer sont exemptés (pas de risque CSRF).
 dashboardRouter.use('*', async (c, next) => {
   const method = c.req.method.toUpperCase()
   if (!['POST', 'PATCH', 'PUT', 'DELETE'].includes(method)) {
     return next()
   }
-  // Clients API/mobile avec Bearer token : exemptés (Bearer n'est jamais envoyé auto par le navigateur)
   const hasBearerToken = c.req.header('Authorization')?.startsWith('Bearer ')
   if (hasBearerToken) return next()
 
-  // Clients navigateur (cookie) : vérifier X-Requested-With
   const xRequestedWith = c.req.header('X-Requested-With')
   if (xRequestedWith !== 'XMLHttpRequest') {
     return c.json({
@@ -84,17 +58,9 @@ function extractToken(c: any): string | null {
   return null
 }
 
-/**
- * §2.CSRF — Vérifie la protection CSRF sur les routes d'écriture.
- * Retourne true (protection OK) si :
- *   a) Le client utilise Authorization: Bearer (clients API/mobile — pas de risque CSRF)
- *   b) Le header "X-Requested-With: XMLHttpRequest" est présent (client navigateur légitime)
- * Retourne false (requête CSRF potentielle) si :
- *   - Authentification par cookie ET header X-Requested-With absent.
- */
 function checkCsrfProtection(c: any): boolean {
   const hasBearerToken = c.req.header('Authorization')?.startsWith('Bearer ')
-  if (hasBearerToken) return true // Bearer token = client API, pas de risque CSRF
+  if (hasBearerToken) return true
 
   const xRequestedWith = c.req.header('X-Requested-With')
   return xRequestedWith === 'XMLHttpRequest'
@@ -110,14 +76,15 @@ async function verifyAuth(c: any): Promise<{ user_id: string; tenant_id: string;
     const { data: { user }, error } = await supabase.auth.getUser(token)
     if (error || !user) return null
 
-    // SUPABASE — lookup tenant via utilisateurs_tenant (APPLICATION DATA)
     const supabaseToken = createSupabaseClientWithToken(c.env, token)
     const { data: utData, error: utError } = await supabaseToken
       .from('utilisateurs_tenant')
       .select('tenant_id, tenants!inner(id, slug, statut, deleted_at)')
       .eq('auth_user_id', user.id)
       .is('tenants.deleted_at', null)
-      .neq('tenants.statut', 'suspendu')
+      // FIX — liste blanche au lieu de liste noire : bloque explicitement
+      // 'inactif' ET 'suspendu', autorise seulement 'actif' et 'essai'.
+      .in('tenants.statut', ['actif', 'essai'])
       .single()
 
     if (utError || !utData) return null
@@ -138,7 +105,6 @@ dashboardRouter.get('/commandes', async (c) => {
   const limit = 50
   const offset = (page - 1) * limit
 
-  // SUPABASE — commandes (APPLICATION DATA)
   const supabase = createSupabaseClientWithToken(c.env, auth.token)
 
   let query = supabase
@@ -180,7 +146,6 @@ dashboardRouter.patch('/commandes/:id/statut', async (c) => {
 
   const supabase = createSupabaseClientWithToken(c.env, auth.token)
 
-  // Vérifier que la commande appartient au tenant
   const { data: commande, error: fetchError } = await supabase
     .from('commandes')
     .select('id, statut')
@@ -193,7 +158,6 @@ dashboardRouter.patch('/commandes/:id/statut', async (c) => {
 
   const now = new Date().toISOString()
 
-  // Mettre à jour le statut
   const updateData: any = { statut: body.statut, updated_at: now }
   if (body.livreur_id) updateData.livreur_id = body.livreur_id
 
@@ -205,7 +169,6 @@ dashboardRouter.patch('/commandes/:id/statut', async (c) => {
 
   if (updateError) return c.json({ error: 'Erreur mise à jour statut.', detail: updateError.message }, 500)
 
-  // Insérer dans historique (avec admin client pour bypasser RLS si besoin)
   const adminClient = createSupabaseAdminClient(c.env)
   await adminClient
     .from('commandes_historique')
@@ -292,7 +255,6 @@ dashboardRouter.get('/stats', async (c) => {
   const monthStart = today.substring(0, 7) + '-01'
   const thirtyDaysAgo = new Date(Date.now() - 29 * 86400000).toISOString().split('T')[0]
 
-  // SUPABASE — toutes les stats sur commandes (APPLICATION DATA)
   const [
     { data: allCommandes },
     { data: todayCommandes },
@@ -336,7 +298,6 @@ dashboardRouter.get('/stats', async (c) => {
       .is('deleted_at', null)
   ])
 
-  // Calculs stats
   const caToday = (todayCommandes ?? []).reduce((s, c) => s + (c.montant_total ?? 0), 0)
   const caMonth = (monthCommandes ?? []).reduce((s, c) => s + (c.montant_total ?? 0), 0)
 
@@ -348,7 +309,6 @@ dashboardRouter.get('/stats', async (c) => {
     statutsMap[c.statut] = (statutsMap[c.statut] ?? 0) + 1
   }
 
-  // Série 30 jours
   const labels: string[] = []
   const values: number[] = []
   const caValues: number[] = []
@@ -391,7 +351,6 @@ dashboardRouter.get('/menu', async (c) => {
 
   const supabase = createSupabaseClientWithToken(c.env, auth.token)
 
-  // SUPABASE — catégories + produits (APPLICATION DATA)
   const [{ data: categories, error: catError }, { data: produits, error: prodError }] = await Promise.all([
     supabase
       .from('categories_menu')
@@ -448,7 +407,6 @@ dashboardRouter.post('/categories', async (c) => {
 
   const supabase = createSupabaseClientWithToken(c.env, auth.token)
 
-  // Compter les catégories existantes pour l'ordre
   const { count } = await supabase
     .from('categories_menu')
     .select('id', { count: 'exact', head: true })
@@ -526,7 +484,6 @@ dashboardRouter.delete('/categories/:id', async (c) => {
   const catId = c.req.param('id')
   const supabase = createSupabaseClientWithToken(c.env, auth.token)
 
-  // Vérifier si des produits existent dans cette catégorie
   const { count: prodCount } = await supabase
     .from('produits')
     .select('id', { count: 'exact', head: true })
@@ -569,7 +526,6 @@ dashboardRouter.post('/produits', async (c) => {
 
   const supabase = createSupabaseClientWithToken(c.env, auth.token)
 
-  // Vérifier que la catégorie appartient bien au tenant
   const { data: cat } = await supabase
     .from('categories_menu')
     .select('id')
@@ -579,7 +535,6 @@ dashboardRouter.post('/produits', async (c) => {
 
   if (!cat) return c.json({ error: 'Catégorie introuvable.' }, 404)
 
-  // Compter les produits de cette catégorie pour l'ordre
   const { count } = await supabase
     .from('produits')
     .select('id', { count: 'exact', head: true })
@@ -669,7 +624,6 @@ dashboardRouter.delete('/produits/:id', async (c) => {
   const prodId = c.req.param('id')
   const supabase = createSupabaseClientWithToken(c.env, auth.token)
 
-  // Soft delete
   const { error, data } = await supabase
     .from('produits')
     .update({ deleted_at: new Date().toISOString(), updated_at: new Date().toISOString() })
@@ -774,12 +728,10 @@ dashboardRouter.patch('/livreurs/:id', async (c) => {
     return c.json({ error: 'Champ actif requis (0/1 ou true/false).' }, 422)
   }
 
-  // Normaliser actif en boolean
   const actifBool = body.actif === 1 || body.actif === true
 
   const supabase = createSupabaseClientWithToken(c.env, auth.token)
 
-  // Vérifier appartenance au tenant
   const { data: livreur } = await supabase
     .from('livreurs')
     .select('id')
@@ -850,7 +802,6 @@ dashboardRouter.patch('/pdv', async (c) => {
   const supabase = createSupabaseClientWithToken(c.env, auth.token)
   const now = new Date().toISOString()
 
-  // Vérifier si PDV existe
   const { data: existingPdv } = await supabase
     .from('points_de_vente')
     .select('id')
@@ -859,7 +810,6 @@ dashboardRouter.patch('/pdv', async (c) => {
     .maybeSingle()
 
   if (!existingPdv) {
-    // Créer un nouveau PDV
     const pdvId = crypto.randomUUID()
     const { error } = await supabase
       .from('points_de_vente')
@@ -929,7 +879,6 @@ dashboardRouter.patch('/apparence', async (c) => {
   if (body.logo_url !== undefined) updateData.logo_url = body.logo_url
   if (body.banniere_url !== undefined) updateData.banniere_url = body.banniere_url
 
-  // SUPABASE — mise à jour tenants (APPLICATION DATA)
   const { error } = await supabase
     .from('tenants')
     .update(updateData)
@@ -958,7 +907,6 @@ dashboardRouter.patch('/parametres', async (c) => {
 
   const supabase = createSupabaseClientWithToken(c.env, auth.token)
 
-  // §1.11 — Restriction domaine_perso au plan "Mogho" uniquement
   if (body.domaine_perso !== undefined && body.domaine_perso !== null && body.domaine_perso !== '') {
     const { data: tenantInfo } = await supabase
       .from('tenants')
@@ -986,7 +934,6 @@ dashboardRouter.patch('/parametres', async (c) => {
   if (body.whatsapp_number !== undefined) updateData.whatsapp_number = body.whatsapp_number
   if (body.domaine_perso !== undefined) updateData.domaine_perso = body.domaine_perso
 
-  // SUPABASE — mise à jour tenants (APPLICATION DATA)
   const { error } = await supabase
     .from('tenants')
     .update(updateData)
@@ -1007,7 +954,6 @@ dashboardRouter.get('/profil', async (c) => {
 
   const supabase = createSupabaseClientWithToken(c.env, auth.token)
 
-  // SUPABASE — tenant info (APPLICATION DATA)
   const { data: tenant, error: tenantError } = await supabase
     .from('tenants')
     .select('id, nom, slug, logo_url, banniere_url, couleur_primaire, couleur_secondaire, whatsapp_number, domaine_perso, statut, created_at, plan_id')
@@ -1016,7 +962,6 @@ dashboardRouter.get('/profil', async (c) => {
 
   if (tenantError || !tenant) return c.json({ error: 'Restaurant introuvable.' }, 404)
 
-  // D1 — plan info (SITE WEB DATA — plans table)
   let planInfo: any = null
   if (tenant.plan_id) {
     try {
@@ -1027,7 +972,6 @@ dashboardRouter.get('/profil', async (c) => {
     } catch { /* plans table may not exist yet */ }
   }
 
-  // SUPABASE — PDV info (APPLICATION DATA)
   const { data: pdv } = await supabase
     .from('points_de_vente')
     .select('id, nom, adresse, latitude, longitude')
@@ -1036,7 +980,6 @@ dashboardRouter.get('/profil', async (c) => {
     .limit(1)
     .maybeSingle()
 
-  // SUPABASE — stats commandes (APPLICATION DATA)
   const { count: totalCommandes } = await supabase
     .from('commandes')
     .select('id', { count: 'exact', head: true })
@@ -1078,12 +1021,10 @@ dashboardRouter.post('/profil/change-password', async (c) => {
     return c.json({ error: 'Le nouveau mot de passe doit être différent de l\'ancien.' }, 422)
   }
 
-  // Récupérer l'email de l'utilisateur connecté
   const supabaseToken = createSupabaseClientWithToken(c.env, auth.token)
   const { data: { user: currentUser } } = await supabaseToken.auth.getUser()
   if (!currentUser?.email) return c.json({ error: 'Utilisateur introuvable.' }, 404)
 
-  // Vérifier l'ancien mot de passe via re-signin
   const supabaseAnon = createSupabaseClient(c.env)
   const { error: signInError } = await supabaseAnon.auth.signInWithPassword({
     email: currentUser.email,
@@ -1091,7 +1032,6 @@ dashboardRouter.post('/profil/change-password', async (c) => {
   })
   if (signInError) return c.json({ error: 'Mot de passe actuel incorrect.' }, 401)
 
-  // Mettre à jour le mot de passe
   const supabase = createSupabaseClientWithToken(c.env, auth.token)
   const { error: updateError } = await supabase.auth.updateUser({ password: body.new_password })
   if (updateError) return c.json({ error: 'Erreur lors du changement de mot de passe.', detail: updateError.message }, 500)
@@ -1119,10 +1059,6 @@ dashboardRouter.get('/codes-promo', async (c) => {
 })
 
 // ---- GET /api/v1/dashboard/codes-promo/export-csv ----
-// FIX (codes promo) — permet de télécharger/exporter la totalité des codes
-// promo du restaurant. Doit être déclarée AVANT DELETE /codes-promo/:id pour
-// éviter que Hono ne confonde "export-csv" avec un paramètre :id (non
-// applicable ici car méthodes différentes, mais conservé par convention).
 dashboardRouter.get('/codes-promo/export-csv', async (c) => {
   setSecurityHeaders(c)
   const auth = await verifyAuth(c)
@@ -1190,7 +1126,6 @@ dashboardRouter.post('/codes-promo', async (c) => {
 
   const supabase = createSupabaseClientWithToken(c.env, auth.token)
 
-  // Vérifier unicité du code
   const { data: existing } = await supabase
     .from('codes_promo')
     .select('id')
@@ -1240,7 +1175,6 @@ dashboardRouter.post('/codes-promo/generate', async (c) => {
     return c.json({ error: 'Valeur invalide.' }, 422)
   }
 
-  // Générer un code unique : préfixe + 6 chars alphanumériques
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
   const randomPart = Array.from(crypto.getRandomValues(new Uint8Array(6)))
     .map(b => chars[b % chars.length]).join('')
@@ -1298,7 +1232,6 @@ dashboardRouter.post('/upload-image', async (c) => {
     return c.json({ error: 'Stockage médias non configuré.' }, 503)
   }
 
-  // §1.10 — Limite portée à 25 uploads/heure/tenant
   const rateLimit = await checkRateLimit(`upload:${auth.tenant_id}`, 25, 3600000)
   if (!rateLimit.allowed) {
     const secsRemaining = Math.ceil((rateLimit.resetAt - Date.now()) / 1000)
@@ -1339,12 +1272,6 @@ dashboardRouter.post('/upload-image', async (c) => {
     customMetadata: { tenant_id: auth.tenant_id, uploaded_at: new Date().toISOString() }
   })
 
-  // §4 — URL dynamique via le Worker (pas de domaine statique codé en dur)
-  // Utilise l'origine de la requête pour construire une URL portable :
-  // sur *.workers.dev → https://monmenu.<account>.workers.dev/api/v1/dashboard/media/<key>
-  // sur un domaine personnalisé → https://monmenu.com/api/v1/dashboard/media/<key> (le jour J)
-  // FIX : ce router est monté sous /api/v1/dashboard — la route media vit donc
-  // à /api/v1/dashboard/media/:key, pas /api/v1/media/:key (bug corrigé ici).
   const origin = new URL(c.req.url).origin
   const publicUrl = `${origin}/api/v1/dashboard/media/${encodeURIComponent(key)}`
 
@@ -1352,16 +1279,10 @@ dashboardRouter.post('/upload-image', async (c) => {
 })
 
 // ---- GET /api/v1/dashboard/media/:key — Serve une image depuis R2 ----
-// §4 — Route publique qui lit le fichier dans le bucket R2_MEDIA et le retourne
-// avec le bon Content-Type. Remplace l'ancien domaine statique media.monmenu.app
-// (inexistant). Le key est URL-encodé côté client (encodeURIComponent).
-// Sécurité : pas d'auth requise (les images de menu sont publiques par design),
-// mais on valide le format du key pour éviter les traversals.
 dashboardRouter.get('/media/:key{.+}', async (c) => {
   const rawKey = c.req.param('key')
   if (!rawKey) return c.json({ error: 'Clé manquante.' }, 400)
 
-  // Décoder le key URL-encodé
   let key: string
   try {
     key = decodeURIComponent(rawKey)
@@ -1369,7 +1290,6 @@ dashboardRouter.get('/media/:key{.+}', async (c) => {
     return c.json({ error: 'Clé invalide.' }, 400)
   }
 
-  // Bloquer les tentatives de traversal de chemin
   if (key.includes('..') || key.startsWith('/')) {
     return c.json({ error: 'Clé non autorisée.' }, 403)
   }
@@ -1387,7 +1307,6 @@ dashboardRouter.get('/media/:key{.+}', async (c) => {
   const contentType = object.httpMetadata?.contentType ?? 'application/octet-stream'
   const etag = object.etag ?? ''
 
-  // Vérification ETag (cache conditionnel)
   const ifNoneMatch = c.req.header('If-None-Match')
   if (etag && ifNoneMatch === `"${etag}"`) {
     return new Response(null, { status: 304 })
@@ -1405,13 +1324,6 @@ dashboardRouter.get('/media/:key{.+}', async (c) => {
 })
 
 // ---- GET /api/v1/dashboard/qrcode ----
-// FIX QR code — Le QR est désormais TOUJOURS rendu en noir sur blanc
-// (color=000000&bgcolor=ffffff), quelle que soit couleur_primaire du
-// restaurant : rendu neutre, sobre, lisible et imprimable comme demandé.
-// Une marge (margin=10) est ajoutée pour garantir un "quiet zone" correct
-// autour du QR et une meilleure fiabilité au scan. Les URLs pointent
-// directement vers api.qrserver.com (autorisé par la CSP dans security.ts),
-// avec Content-Disposition simulé côté client via l'attribut "download".
 dashboardRouter.get('/qrcode', async (c) => {
   setSecurityHeaders(c)
   const auth = await verifyAuth(c)
@@ -1419,7 +1331,6 @@ dashboardRouter.get('/qrcode', async (c) => {
 
   const supabase = createSupabaseClientWithToken(c.env, auth.token)
 
-  // SUPABASE — tenant info (APPLICATION DATA)
   const { data: tenant, error } = await supabase
     .from('tenants')
     .select('nom, slug')
@@ -1428,7 +1339,6 @@ dashboardRouter.get('/qrcode', async (c) => {
 
   if (error || !tenant) return c.json({ error: 'Restaurant introuvable.' }, 404)
 
-  // §4 — URL boutique dynamique basée sur l'origine du Worker (pas de domaine .app statique)
   const origin = new URL(c.req.url).origin
   const boutiqueUrl = `${origin}/${tenant.slug}`
   const encodedUrl = encodeURIComponent(boutiqueUrl)
@@ -1437,9 +1347,7 @@ dashboardRouter.get('/qrcode', async (c) => {
     boutique_url: boutiqueUrl,
     slug: tenant.slug,
     nom: tenant.nom,
-    // Aperçu affiché dans le dashboard (taille moyenne, chargé directement depuis qrserver)
     qr_display: `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodedUrl}&color=000000&bgcolor=ffffff&margin=10&qzone=1&format=png`,
-    // Téléchargements haute résolution, toujours neutres noir/blanc
     qr_download_png: `https://api.qrserver.com/v1/create-qr-code/?size=1000x1000&data=${encodedUrl}&color=000000&bgcolor=ffffff&margin=10&qzone=1&format=png`,
     qr_download_svg: `https://api.qrserver.com/v1/create-qr-code/?size=1000x1000&data=${encodedUrl}&color=000000&bgcolor=ffffff&margin=10&qzone=1&format=svg`
   })
@@ -1465,7 +1373,6 @@ dashboardRouter.get('/stats-journalieres', async (c) => {
 
   const liste = stats ?? []
 
-  // Totaux sur la période
   const totaux = {
     nb_commandes: liste.reduce((s: number, r: any) => s + (r.nb_commandes ?? 0), 0),
     chiffre_affaires: liste.reduce((s: number, r: any) => s + (r.chiffre_affaires ?? 0), 0),
@@ -1506,7 +1413,6 @@ dashboardRouter.post('/setup-restaurant', async (c) => {
     try { horairesJson = JSON.parse(horairesRaw) } catch { /* ignore */ }
   }
 
-  // Upload logo si fourni
   let logoUrl: string | null = null
   const logoFile = formData.get('logo') as File | null
   if (logoFile && logoFile.size > 0 && c.env.R2_MEDIA) {
@@ -1517,11 +1423,9 @@ dashboardRouter.post('/setup-restaurant', async (c) => {
       httpMetadata: { contentType: logoFile.type },
       customMetadata: { tenant_id: auth.tenant_id }
     })
-    // FIX : préfixe /dashboard/ ajouté (voir note en tête de fichier)
     logoUrl = `${origin}/api/v1/dashboard/media/${encodeURIComponent(key)}`
   }
 
-  // Upload bannière si fournie
   let banniereUrl: string | null = null
   const banniereFile = formData.get('banniere') as File | null
   if (banniereFile && banniereFile.size > 0 && c.env.R2_MEDIA) {
@@ -1532,11 +1436,9 @@ dashboardRouter.post('/setup-restaurant', async (c) => {
       httpMetadata: { contentType: banniereFile.type },
       customMetadata: { tenant_id: auth.tenant_id }
     })
-    // FIX : préfixe /dashboard/ ajouté (voir note en tête de fichier)
     banniereUrl = `${origin}/api/v1/dashboard/media/${encodeURIComponent(key)}`
   }
 
-  // Mise à jour du tenant (nom, logo, bannière, couleurs)
   const tenantUpdate: Record<string, unknown> = {
     couleur_primaire: couleurPrim,
     couleur_secondaire: couleurSec
@@ -1554,7 +1456,6 @@ dashboardRouter.post('/setup-restaurant', async (c) => {
     return c.json({ error: 'Erreur mise à jour tenant.', detail: errTenant.message }, 500)
   }
 
-  // Mise à jour du point de vente principal (adresse, horaires)
   const pdvUpdate: Record<string, unknown> = {}
   if (nom) pdvUpdate.nom = nom
   if (adresse) pdvUpdate.adresse = adresse
@@ -1570,7 +1471,6 @@ dashboardRouter.post('/setup-restaurant', async (c) => {
 
     if (errPdv) {
       console.error('Erreur mise à jour PDV:', errPdv.message)
-      // Non bloquant — on continue
     }
   }
 
@@ -1582,3 +1482,7 @@ dashboardRouter.post('/setup-restaurant', async (c) => {
 })
 
 export { dashboardRouter }
+
+---
+
+### 7. NOUVEAU — `src/pages/compte-inactif.ts`
