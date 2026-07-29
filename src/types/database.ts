@@ -41,11 +41,25 @@ export interface Tenant {
   whatsapp_number: string
   domaine_perso: string | null
   statut: 'actif' | 'inactif' | 'suspendu' | 'essai'
+  essai_expire_le: string | null
   plan_id: string
   metadata: Record<string, unknown>
   created_at: string
   updated_at: string
   deleted_at: string | null
+}
+
+// Historique de paiement / abonnement — utilisé par le cron (api-cron.ts)
+// pour vérifier qu'un tenant en essai expiré n'a pas déjà un abonnement
+// payé avant de le faire passer à 'inactif'.
+export interface Abonnement {
+  id: string
+  tenant_id: string
+  plan_id: string
+  statut: 'actif' | 'expire' | 'annule'
+  date_debut: string
+  date_fin: string | null
+  created_at: string
 }
 
 export interface UtilisateurTenant {
@@ -125,12 +139,12 @@ export interface ItemCommandeJson {
   sous_total: number
 }
 
-export type StatutCommande = 
-  | 'en_attente' 
-  | 'confirmee' 
-  | 'en_preparation' 
-  | 'en_livraison' 
-  | 'livree' 
+export type StatutCommande =
+  | 'en_attente'
+  | 'confirmee'
+  | 'en_preparation'
+  | 'en_livraison'
+  | 'livree'
   | 'annulee'
   | 'remboursee'
 
@@ -191,7 +205,6 @@ export interface CodePromo {
   usage_actuel: number
   actif: boolean
   created_at: string
-  // Ajoutée par la migration 004 (utilisée par increment_promo_usage)
   updated_at: string
 }
 
@@ -200,9 +213,6 @@ export interface ConfigGlobale {
   valeur: string
 }
 
-// Schéma aligné sur audit_log après le patch 001b + migration 004
-// (fn_audit_log() peuple : id, tenant_id, table_name, record_id,
-//  action, changes, created_at)
 export interface AuditLog {
   id: string
   tenant_id: string | null
@@ -217,7 +227,6 @@ export interface AuditLog {
   created_at: string
 }
 
-// Migration 005 — Blog (dashboard admin, écrit/lu via service_role)
 export interface Article {
   id: string
   slug: string
@@ -234,7 +243,6 @@ export interface Article {
   updated_at: string
 }
 
-// Migration 005 — Newsletter (inscription publique, lecture service_role)
 export interface NewsletterSubscriber {
   id: string
   email: string
@@ -244,20 +252,14 @@ export interface NewsletterSubscriber {
 }
 
 // Contexte Cloudflare Workers
-// ARCHITECTURE BASE DE DONNÉES :
-//   DB (D1)    → SITE WEB UNIQUEMENT : config_globale, pays, plans
-//   Supabase   → APPLICATION : tenants, commandes, menu, livreurs, codes_promo, etc.
 export type Env = {
-  // ---- D1 Cloudflare : SITE WEB uniquement ----
-  DB: D1Database                // Tables: config_globale, pays, plans UNIQUEMENT
-  KV_CACHE?: KVNamespace        // Cache optionnel
-  R2_MEDIA?: R2Bucket           // Stockage médias (logos, photos plats)
-  ASSETS?: Fetcher              // Assets statiques (Workers assets binding)
-  // ---- Supabase : APPLICATION (tenants, commandes, menu...) ----
+  DB: D1Database
+  KV_CACHE?: KVNamespace
+  R2_MEDIA?: R2Bucket
+  ASSETS?: Fetcher
   SUPABASE_URL: string
   SUPABASE_ANON_KEY: string
-  SUPABASE_SERVICE_ROLE_KEY?: string  // Pour opérations admin côté serveur
-  // ---- Services tiers ----
+  SUPABASE_SERVICE_ROLE_KEY?: string
   WHATSAPP_API_TOKEN?: string
   WHATSAPP_PHONE_ID?: string
   BREVO_API_KEY_1?: string
@@ -268,7 +270,6 @@ export type Env = {
   ENVIRONMENT?: 'development' | 'production'
 }
 
-// Panier côté client (stocké en localStorage)
 export interface CartItem {
   produit_id: string
   nom: string
