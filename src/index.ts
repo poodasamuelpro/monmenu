@@ -12,6 +12,7 @@ import { authRouter } from './routes/api-auth'
 import { dashboardRouter } from './routes/api-dashboard'
 import { blogRouter } from './routes/api-blog'
 import { newsletterRouter } from './routes/api-newsletter'
+import { screenshotsRouter } from './routes/api-screenshots'
 import { setSecurityHeaders } from './lib/security'
 import { getNomProjet, getWhatsAppSupport, createSupabaseAdminClient, createSupabaseClient } from './lib/supabase'
 import { detectLocale, getTranslations } from './i18n'
@@ -30,7 +31,6 @@ import { renderSuiviPage } from './pages/suivi'
 import { renderBoutiquePage, type TenantBoutique } from './pages/boutique'
 import { render404Page } from './pages/not-found'
 import { renderBienvenuePage } from './pages/bienvenue'
-// AJOUT — page compte inactif (essai expiré / suspendu)
 import { renderCompteInactifPage } from './pages/compte-inactif'
 
 const app = new Hono<{ Bindings: Env }>()
@@ -145,6 +145,7 @@ app.route('/api/v1/auth', authRouter)
 app.route('/api/v1/dashboard', dashboardRouter)
 app.route('/api/v1/blog', blogRouter)
 app.route('/api/v1/newsletter', newsletterRouter)
+app.route('/api/v1/screenshots', screenshotsRouter)
 
 // ---- Sitemap dynamique ----
 app.get('/sitemap.xml', async (c) => {
@@ -426,9 +427,6 @@ app.get('/dashboard', async (c) => {
   return c.html(renderConnexionPage(nomProjet))
 })
 
-// AJOUT — page compte inactif (rendue directement, pas de vérification
-// d'auth supplémentaire ici : elle est déjà faite par /dashboard/* avant
-// la redirection vers cette route).
 app.get('/dashboard/compte-inactif', async (c) => {
   setSecurityHeaders(c)
   const nomProjet = await getNomProjet(c.env)
@@ -450,10 +448,6 @@ app.get('/dashboard/*', async (c) => {
       return c.redirect('/dashboard', 302)
     }
 
-    // AJOUT — vérification du statut tenant après l'auth Supabase.
-    // Un tenant 'inactif' (essai expiré) ou 'suspendu' est redirigé
-    // vers /dashboard/compte-inactif plutôt que de charger le dashboard.
-    // On évite la boucle de redirection quand on est déjà sur cette page.
     if (!c.req.path.startsWith('/dashboard/compte-inactif')) {
       const adminClient = createSupabaseAdminClient(c.env)
       const { data: ut } = await adminClient
