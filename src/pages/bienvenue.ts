@@ -65,6 +65,11 @@ export function renderBienvenuePage(nomProjet: string): string {
         <div class="step-dot w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold transition-all bg-gray-200 text-gray-500" data-step="4">4</div>
         <span class="text-xs font-medium text-gray-400 hidden sm:inline">Couleurs</span>
       </div>
+      <div class="h-px w-8 bg-gray-200" id="line-4-5"></div>
+      <div class="flex items-center gap-2">
+        <div class="step-dot w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold transition-all bg-gray-200 text-gray-500" data-step="5">5</div>
+        <span class="text-xs font-medium text-gray-400 hidden sm:inline">Abonnement</span>
+      </div>
     </div>
 
     <!-- Formulaire multi-étapes -->
@@ -259,8 +264,93 @@ export function renderBienvenuePage(nomProjet: string): string {
           </button>
           <button id="btn-submit-setup" onclick="soumettreBienvenue()"
             class="bg-red-600 hover:bg-red-700 text-white font-bold px-8 py-3 rounded-xl transition-colors flex items-center gap-2">
-            <i class="fa-solid fa-check"></i> Valider et accéder au tableau de bord
+            Suivant <i class="fa-solid fa-arrow-right"></i>
           </button>
+        </div>
+      </div>
+
+      <!-- ═══ ÉTAPE 5 : Abonnement & Paiement ═══ -->
+      <div id="step-5" class="step-panel p-8 hidden">
+        <h2 class="text-xl font-bold text-gray-900 mb-2">
+          <i class="fa-solid fa-credit-card mr-2 text-red-500"></i>Abonnement & Paiement
+        </h2>
+        <p class="text-sm text-gray-500 mb-6">
+          Choisissez votre plan et effectuez votre paiement par Mobile Money pour activer votre restaurant.
+          Votre période d'essai reste active pendant le traitement.
+        </p>
+
+        <!-- Chargement des plans -->
+        <div id="plans-loading" class="text-center py-8 text-gray-400">
+          <i class="fa-solid fa-circle-notch fa-spin text-2xl mb-2 block"></i>
+          <p class="text-sm">Chargement des plans...</p>
+        </div>
+
+        <!-- Grille des plans -->
+        <div id="plans-grid" class="hidden grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
+          <!-- Généré par JS -->
+        </div>
+
+        <!-- Référence de paiement -->
+        <div id="reference-paiement-block" class="hidden mt-6 bg-blue-50 border border-blue-200 rounded-2xl p-6">
+          <div class="flex items-start gap-3">
+            <div class="w-10 h-10 bg-blue-100 rounded-xl flex items-center justify-center flex-shrink-0">
+              <i class="fa-solid fa-file-invoice text-blue-600"></i>
+            </div>
+            <div class="flex-1">
+              <h3 class="font-bold text-gray-900 mb-1">Votre référence de paiement</h3>
+              <p class="text-xs text-gray-500 mb-3">
+                Mentionnez cette référence dans votre virement ou capture d'écran pour faciliter l'identification.
+              </p>
+              <div class="bg-white border border-blue-200 rounded-xl px-4 py-3 flex items-center justify-between">
+                <code id="reference-paiement-value" class="text-lg font-mono font-bold text-blue-700 tracking-wider">—</code>
+                <button onclick="copierReference()" id="btn-copier-ref"
+                  class="ml-3 text-xs text-blue-600 hover:text-blue-800 border border-blue-200 hover:border-blue-400 px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1.5">
+                  <i class="fa-solid fa-copy"></i> Copier
+                </button>
+              </div>
+              <p class="text-xs text-gray-400 mt-2">
+                <i class="fa-solid fa-circle-info mr-1"></i>
+                Plan sélectionné : <strong id="plan-selectionne-nom">—</strong> —
+                Montant : <strong id="plan-selectionne-prix">—</strong> FCFA/mois
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Instructions de paiement -->
+        <div id="instructions-paiement" class="hidden mt-4 bg-green-50 border border-green-200 rounded-2xl p-5">
+          <h4 class="font-semibold text-green-800 mb-3 text-sm">
+            <i class="fa-solid fa-mobile-screen-button mr-1.5"></i>Comment effectuer votre paiement
+          </h4>
+          <ol class="text-sm text-green-700 space-y-2">
+            <li class="flex items-start gap-2">
+              <span class="font-bold w-5 text-center flex-shrink-0">1.</span>
+              Effectuez votre paiement via Orange Money / Moov Money / Virement bancaire au numéro communiqué par notre équipe.
+            </li>
+            <li class="flex items-start gap-2">
+              <span class="font-bold w-5 text-center flex-shrink-0">2.</span>
+              Notez ou copiez votre référence de paiement ci-dessus.
+            </li>
+            <li class="flex items-start gap-2">
+              <span class="font-bold w-5 text-center flex-shrink-0">3.</span>
+              Une fois le paiement effectué, accédez à votre tableau de bord et déclarez votre paiement dans la section <strong>Abonnement</strong>.
+            </li>
+            <li class="flex items-start gap-2">
+              <span class="font-bold w-5 text-center flex-shrink-0">4.</span>
+              Notre équipe confirme votre paiement sous 38h. Vous recevrez une notification.
+            </li>
+          </ol>
+        </div>
+
+        <div class="flex justify-between mt-8">
+          <button onclick="goStep(4)"
+            class="border border-gray-200 text-gray-700 font-semibold px-6 py-3 rounded-xl hover:bg-gray-50 transition-colors flex items-center gap-2">
+            <i class="fa-solid fa-arrow-left"></i> Retour
+          </button>
+          <a href="/dashboard/commandes"
+            class="bg-red-600 hover:bg-red-700 text-white font-bold px-8 py-3 rounded-xl transition-colors flex items-center gap-2">
+            <i class="fa-solid fa-gauge-high"></i> Accéder au tableau de bord
+          </a>
         </div>
       </div>
 
@@ -566,9 +656,10 @@ export function renderBienvenuePage(nomProjet: string): string {
 
         if (res.ok) {
           msg.className = 'mt-6 p-4 rounded-xl text-sm font-medium bg-green-50 text-green-700 border border-green-200';
-          msg.textContent = '✓ Restaurant configuré ! Redirection vers votre tableau de bord...';
+          msg.textContent = '✓ Restaurant configuré ! Chargement de votre plan...';
           msg.classList.remove('hidden');
-          setTimeout(() => { window.location.href = '/dashboard/home'; }, 2000);
+          // Passer à l'étape 5 (choix de plan + référence paiement)
+          setTimeout(() => goStep(5), 1000);
         } else {
           msg.className = 'mt-6 p-4 rounded-xl text-sm font-medium bg-red-50 text-red-700 border border-red-200';
           msg.textContent = data.error || 'Une erreur est survenue. Réessayez.';
@@ -583,6 +674,151 @@ export function renderBienvenuePage(nomProjet: string): string {
         btn.disabled = false;
         btn.innerHTML = '<i class="fa-solid fa-check mr-2"></i>Valider et accéder au tableau de bord';
       }
+    }
+
+    // ═══════════════════════════════════════════
+    // ÉTAPE 5 — Choix de plan & référence paiement
+    // ═══════════════════════════════════════════
+
+    let planSelectionneId = null;
+    let planSelectionneNom = '';
+    let planSelectionnePrix = 0;
+    let referenceGeneree = null;
+
+    /**
+     * Charge et affiche les plans disponibles depuis l'API.
+     * Appelée à l'entrée de l'étape 5 via goStep(5).
+     */
+    async function chargerPlans() {
+      const loading = document.getElementById('plans-loading');
+      const grid = document.getElementById('plans-grid');
+      if (!loading || !grid) return;
+
+      loading.classList.remove('hidden');
+      grid.classList.add('hidden');
+
+      try {
+        const res = await fetch('/api/v1/plans', { credentials: 'include' });
+        if (!res.ok) throw new Error('Erreur chargement plans');
+        const data = await res.json();
+
+        const plans = (data.plans || []).filter(p => p.actif && p.prix_mensuel > 0);
+
+        if (!plans.length) {
+          loading.innerHTML = '<p class="text-sm text-gray-400">Plans non disponibles. Contactez le support.</p>';
+          return;
+        }
+
+        grid.innerHTML = plans.map(p => \`
+          <div class="plan-card border-2 border-gray-200 rounded-2xl p-5 cursor-pointer transition-all hover:border-red-300 hover:shadow-md"
+               data-plan-id="\${p.id}" data-plan-nom="\${escHtml(p.nom)}" data-plan-prix="\${p.prix_mensuel}"
+               onclick="selectionnerPlan('\${p.id}', '\${escHtml(p.nom)}', \${p.prix_mensuel})">
+            <div class="flex items-start justify-between mb-3">
+              <div>
+                <h3 class="font-bold text-gray-900 text-sm">\${escHtml(p.nom)}</h3>
+                <p class="text-xs text-gray-400 mt-0.5">\${escHtml(p.description || '')}</p>
+              </div>
+              <div class="text-right">
+                <div class="font-extrabold text-gray-900 text-lg">\${p.prix_mensuel.toLocaleString('fr-FR')}</div>
+                <div class="text-xs text-gray-400">FCFA/mois</div>
+              </div>
+            </div>
+            <div class="h-0.5 bg-gray-100 my-3"></div>
+            <div class="text-xs text-gray-500">
+              \${p.prix_annuel ? \`<span class="text-green-600 font-semibold">\${p.prix_annuel.toLocaleString('fr-FR')} FCFA/an</span> — économisez 2 mois\` : ''}
+            </div>
+            <div class="mt-3 flex items-center justify-center gap-1.5 text-xs font-semibold text-gray-400 select-indicator hidden">
+              <i class="fa-solid fa-circle-check text-red-500"></i> Sélectionné
+            </div>
+          </div>
+        \`).join('');
+
+        loading.classList.add('hidden');
+        grid.classList.remove('hidden');
+
+        // Remettre la classe grid au div (Tailwind purgé → inline)
+        grid.style.display = 'grid';
+        grid.style.gridTemplateColumns = 'repeat(auto-fill, minmax(220px, 1fr))';
+        grid.style.gap = '1rem';
+
+      } catch (e) {
+        loading.innerHTML = '<p class="text-sm text-red-400">Impossible de charger les plans. Réessayez.</p>';
+      }
+    }
+
+    function escHtml(str) {
+      return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    /**
+     * Sélectionne un plan et génère la référence de paiement via l'API.
+     * SEC-10 : la référence ne crée aucun abonnement, elle est juste un aide-mémoire.
+     */
+    async function selectionnerPlan(planId, planNom, planPrix) {
+      // Mettre en évidence la carte sélectionnée
+      document.querySelectorAll('.plan-card').forEach(card => {
+        card.classList.remove('border-red-500', 'bg-red-50/30');
+        card.querySelector('.select-indicator')?.classList.add('hidden');
+      });
+      const card = document.querySelector(\`[data-plan-id="\${planId}"]\`);
+      if (card) {
+        card.classList.add('border-red-500', 'bg-red-50/30');
+        card.querySelector('.select-indicator')?.classList.remove('hidden');
+      }
+
+      planSelectionneId = planId;
+      planSelectionneNom = planNom;
+      planSelectionnePrix = planPrix;
+
+      // Charger ou réutiliser la référence existante
+      await chargerOuGenererReference(planId);
+    }
+
+    async function chargerOuGenererReference(planId) {
+      const block = document.getElementById('reference-paiement-block');
+      const instructions = document.getElementById('instructions-paiement');
+      const refVal = document.getElementById('reference-paiement-value');
+      const nomEl = document.getElementById('plan-selectionne-nom');
+      const prixEl = document.getElementById('plan-selectionne-prix');
+
+      try {
+        const res = await fetch('/api/v1/paiement/reference', {
+          credentials: 'include',
+          headers: { 'X-Requested-With': 'XMLHttpRequest' }
+        });
+        if (!res.ok) throw new Error('Erreur référence');
+        const data = await res.json();
+
+        referenceGeneree = data.reference;
+        refVal.textContent = data.reference;
+        nomEl.textContent = planSelectionneNom;
+        prixEl.textContent = planSelectionnePrix.toLocaleString('fr-FR');
+
+        block.classList.remove('hidden');
+        instructions.classList.remove('hidden');
+      } catch (e) {
+        // Silencieux — l'utilisateur peut accéder au dashboard et déclarer depuis là
+        block.classList.add('hidden');
+      }
+    }
+
+    function copierReference() {
+      const ref = document.getElementById('reference-paiement-value')?.textContent;
+      if (!ref || ref === '—') return;
+      navigator.clipboard?.writeText(ref).then(() => {
+        const btn = document.getElementById('btn-copier-ref');
+        if (btn) {
+          btn.innerHTML = '<i class="fa-solid fa-check text-green-600"></i> Copié !';
+          setTimeout(() => { btn.innerHTML = '<i class="fa-solid fa-copy"></i> Copier'; }, 2000);
+        }
+      });
+    }
+
+    // ─── Patch goStep pour charger les plans à l'étape 5 ───
+    const _goStepOriginal = goStep;
+    function goStep(n) {
+      _goStepOriginal(n);
+      if (n === 5) chargerPlans();
     }
   </script>
 </body>

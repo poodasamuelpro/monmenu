@@ -58,6 +58,11 @@ export function renderDashboardPage(
         <a href="/dashboard/parametres" class="nav-link flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-gray-300 hover:bg-gray-800 hover:text-white transition-colors">
           <i class="fa-solid fa-gear w-4 text-center"></i> Paramètres
         </a>
+        <!-- Abonnement — ajouté (audit 04-plan-implementation.md §B) -->
+        <a href="/dashboard/abonnement" id="nav-abonnement" class="nav-link flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-gray-300 hover:bg-gray-800 hover:text-white transition-colors">
+          <i class="fa-solid fa-credit-card w-4 text-center"></i> Abonnement
+          <span id="badge-abonnement" class="hidden ml-auto bg-orange-500 text-white text-xs px-1.5 py-0.5 rounded-full">!</span>
+        </a>
       </nav>
       <div class="p-4 border-t border-gray-800">
         <button onclick="logout()"
@@ -88,6 +93,10 @@ export function renderDashboardPage(
           </div>
         </div>
       </header>
+
+      <!-- Zone bandeau notifications paiement (audit 04 §B — chargée par dashboard-paiement.js) -->
+      <!-- Affiche : alerte essai expirant, paiement en attente de confirmation, blocage imminent -->
+      <div id="notification-bandeaux" class="bg-white"></div>
 
       <main class="p-4 lg:p-6" id="dashboard-content">
         <!-- Section Commandes (chargée par dashboard.js) -->
@@ -120,6 +129,8 @@ export function renderDashboardPage(
   <!-- §2 — Supabase JS client (clé anon uniquement) pour Realtime postgres_changes -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
   <script src="/static/js/dashboard.js"></script>
+  <!-- Module paiement : bandeau + section abonnement (audit 04-plan-implementation.md §B) -->
+  <script src="/static/js/dashboard-paiement.js"></script>
   <script>
     // Afficher nom du tenant dans la sidebar
     try {
@@ -161,6 +172,8 @@ export function renderDashboardPage(
     }
 
     if (typeof initDashboard === 'function') initDashboard();
+    // Initialiser les bandeaux de notification paiement au chargement
+    if (typeof initBandeauxPaiement === 'function') initBandeauxPaiement();
   </script>
 </body>
 </html>`

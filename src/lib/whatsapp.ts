@@ -17,6 +17,12 @@
 // api-commandes.ts) provoque une erreur de compilation TypeScript
 // ("string | undefined n'est pas assignable à string"). Les deux champs sont
 // désormais optionnels ici aussi, cohérent avec Env.
+//
+// AJOUT 2026-07-29 — Fonctions de notification paiement
+// (audit 07-notifications-inapp-bdd.md §4.1) :
+//   - notifierPaiementConfirme : restaurant → abonnement activé
+//   - notifierPaiementRejete   : restaurant → preuve refusée
+//   - notifierBlocageAutomatique : restaurant → blocage J+72h (cron)
 
 import type { Commande, ItemCommandeJson, Tenant } from '../types/database'
 
@@ -152,4 +158,78 @@ export async function envoyerNotificationWhatsApp(
       error: err instanceof Error ? err.message : 'Erreur réseau WhatsApp'
     }
   }
+}
+
+// -----------------------------------------------------------------------
+// Notifications paiement (audit 07-notifications-inapp-bdd.md §4.1)
+// -----------------------------------------------------------------------
+
+/**
+ * Notifie le restaurant par WhatsApp que son abonnement a été confirmé.
+ *
+ * @param env - Variables d'environnement Cloudflare Workers
+ * @param tenant - Données du tenant (nom + numéro WhatsApp)
+ * @param plan - Plan activé (nom)
+ * @param dateFin - Date de fin d'abonnement (ISO 8601)
+ */
+export async function notifierPaiementConfirme(
+  env: { WHATSAPP_API_TOKEN?: string; WHATSAPP_PHONE_ID?: string },
+  tenant: { nom: string; whatsapp_number: string },
+  plan: { nom: string },
+  dateFin: string
+): Promise<WhatsAppMessageResult> {
+  const dateFinFormatee = new Date(dateFin).toLocaleDateString('fr-FR', {
+    day: 'numeric', month: 'long', year: 'numeric'
+  })
+  const message = [
+    `✅ *${tenant.nom}* — Votre abonnement *${plan.nom}* a été activé avec succès.`,
+    `📅 Valide jusqu'au ${dateFinFormatee}.`,
+    ``,
+    `Merci de votre confiance ! 🙏`,
+    `— Équipe MonMenu`
+  ].join('\n')
+  return envoyerNotificationWhatsApp(tenant.whatsapp_number, message, env)
+}
+
+/**
+ * Notifie le restaurant par WhatsApp que sa preuve de paiement a été rejetée.
+ *
+ * @param env - Variables d'environnement Cloudflare Workers
+ * @param tenant - Données du tenant (nom + numéro WhatsApp)
+ * @param motif - Motif de rejet (optionnel)
+ */
+export async function notifierPaiementRejete(
+  env: { WHATSAPP_API_TOKEN?: string; WHATSAPP_PHONE_ID?: string },
+  tenant: { nom: string; whatsapp_number: string },
+  motif?: string
+): Promise<WhatsAppMessageResult> {
+  const lignesMessage = [
+    `⚠️ *${tenant.nom}* — Votre preuve de paiement n'a pas pu être vérifiée.`
+  ]
+  if (motif) lignesMessage.push(`Motif : ${motif}`)
+  lignesMessage.push(``, `Veuillez soumettre une nouvelle preuve ou contacter le support.`)
+  lignesMessage.push(`— Équipe MonMenu`)
+
+  return envoyerNotificationWhatsApp(tenant.whatsapp_number, lignesMessage.join('\n'), env)
+}
+
+/**
+ * Notifie le restaurant par WhatsApp du blocage automatique après 72h
+ * sans confirmation de paiement (déclenché par le cron).
+ *
+ * @param env - Variables d'environnement Cloudflare Workers
+ * @param tenant - Données du tenant (nom + numéro WhatsApp)
+ */
+export async function notifierBlocageAutomatique(
+  env: { WHATSAPP_API_TOKEN?: string; WHATSAPP_PHONE_ID?: string },
+  tenant: { nom: string; whatsapp_number: string }
+): Promise<WhatsAppMessageResult> {
+  const message = [
+    `🔴 *${tenant.nom}* — Votre accès MonMenu a été temporairement suspendu.`,
+    ``,
+    `La confirmation de votre paiement n'a pas été reçue dans les 72 heures.`,
+    `Contactez le support pour régulariser votre situation.`,
+    `— Équipe MonMenu`
+  ].join('\n')
+  return envoyerNotificationWhatsApp(tenant.whatsapp_number, message, env)
 }

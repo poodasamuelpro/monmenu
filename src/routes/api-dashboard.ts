@@ -88,6 +88,10 @@ async function verifyAuth(c: any): Promise<{ user_id: string; tenant_id: string;
       .is('tenants.deleted_at', null)
       // FIX — liste blanche au lieu de liste noire : bloque explicitement
       // 'inactif' ET 'suspendu', autorise seulement 'actif' et 'essai'.
+      // AJOUT 2026-07-29 (audit 06-sync §8) : les tenants avec un abonnement
+      // 'en_attente_confirmation' valide restent accessibles pendant la fenêtre
+      // de 72h. Leur statut tenant reste 'essai' dans ce cas — pas de changement
+      // requis ici, mais la note documente l'invariant.
       .in('tenants.statut', ['actif', 'essai'])
       .single()
 
@@ -97,6 +101,75 @@ async function verifyAuth(c: any): Promise<{ user_id: string; tenant_id: string;
     return { user_id: user.id, tenant_id: utData.tenant_id, tenant_slug: tenant.slug, token }
   } catch { return null }
 }
+
+// ---- GET /api/v1/dashboard/notifications ----
+// Audit 07-notifications §1.2 — bandeau de notifications paiement/essai
+// NOTE : ce endpoint est un alias vers /api/v1/paiement/notifications
+// qui est monté séparément dans index.ts. Il reste ici pour compatibilité.
+dashboardRouter.get('/notifications', async (c) => {
+  setSecurityHeaders(c)
+  const auth = await verifyAuth(c)
+  if (!auth) return c.json({ error: 'Non authentifié.' }, 401)
+
+  const adminClient = createSupabaseAdminClient(c.env)
+  const notifications: Array<{
+    id: string; type: string; titre: string; message: string;
+    action?: { label: string; href: string }; created_at: string
+  }> = []
+
+  const { data: tenant } = await adminClient
+    .from('tenants')
+    .select('statut, essai_expire_le, paiement_en_attente_depuis')
+    .eq('id', auth.tenant_id)
+    .single()
+
+  if (tenant) {
+    if (tenant.statut === 'essai' && tenant.essai_expire_le) {
+      const joursRestants = Math.ceil(
+        (new Date(tenant.essai_expire_le).getTime() - Date.now()) / 86400000
+      )
+      if (joursRestants <= 5) {
+        notifications.push({
+          id: 'essai-expire',
+          type: joursRestants <= 2 ? 'error' : 'warning',
+          titre: joursRestants <= 0 ? 'Essai expiré' : `Essai expire dans ${joursRestants} jour(s)`,
+          message: joursRestants <= 0
+            ? 'Votre période d\'essai est terminée. Activez votre abonnement.'
+            : `Il vous reste ${joursRestants} jour(s) d\'essai gratuit.`,
+          action: { label: 'Voir les plans', href: '/dashboard/abonnement' },
+          created_at: new Date().toISOString()
+        })
+      }
+    }
+    if (tenant.paiement_en_attente_depuis) {
+      notifications.push({
+        id: 'paiement-attente',
+        type: 'info',
+        titre: 'Paiement en cours de vérification',
+        message: 'Votre preuve de paiement est en cours d\'examen. Confirmation sous 38h max.',
+        action: { label: 'Suivre', href: '/dashboard/abonnement' },
+        created_at: tenant.paiement_en_attente_depuis
+      })
+    }
+  }
+
+  const { data: notifsDb } = await adminClient
+    .from('notifications_restaurant')
+    .select('id, type, titre, message, lue, lien, created_at')
+    .eq('tenant_id', auth.tenant_id)
+    .eq('lue', false)
+    .order('created_at', { ascending: false })
+    .limit(10)
+
+  const notifsMapped = (notifsDb ?? []).map((n: any) => ({
+    id: n.id, type: n.type, titre: n.titre, message: n.message,
+    action: n.lien ? { label: 'Voir', href: n.lien } : undefined,
+    created_at: n.created_at
+  }))
+
+  const toutes = [...notifications, ...notifsMapped]
+  return c.json({ notifications: toutes, count: toutes.length })
+})
 
 // ---- GET /api/v1/dashboard/commandes ----
 dashboardRouter.get('/commandes', async (c) => {

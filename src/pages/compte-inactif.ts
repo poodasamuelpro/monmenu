@@ -25,13 +25,24 @@ export function renderCompteInactifPage(nomProjet: string): string {
       retrouver l'accès complet à votre tableau de bord.
     </p>
     <div class="flex flex-col sm:flex-row gap-3 justify-center">
-      <a href="/tarifs" class="inline-flex items-center justify-center gap-2 bg-red-600 hover:bg-red-700 text-white font-semibold px-6 py-3.5 rounded-xl transition-colors">
+      <!-- CTA principal : déclarer un paiement déjà effectué (audit 04-plan-implementation.md §B) -->
+      <a href="/dashboard/abonnement" id="cta-declarer-paiement"
+        class="inline-flex items-center justify-center gap-2 bg-red-600 hover:bg-red-700 text-white font-semibold px-6 py-3.5 rounded-xl transition-colors">
+        <i class="fa-solid fa-file-invoice" aria-hidden="true"></i>
+        Déclarer mon paiement
+      </a>
+      <a href="/tarifs" class="inline-flex items-center justify-center gap-2 bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 font-semibold px-6 py-3.5 rounded-xl border border-gray-200 dark:border-gray-700 transition-colors">
         Voir les abonnements
       </a>
       <a href="/contact" class="inline-flex items-center justify-center gap-2 bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 font-semibold px-6 py-3.5 rounded-xl border border-gray-200 dark:border-gray-700 transition-colors">
         Contacter un conseiller
       </a>
     </div>
+    <!-- Note informative : délai de confirmation -->
+    <p class="mt-8 text-xs text-gray-400 dark:text-gray-500 max-w-md mx-auto">
+      <i class="fa-solid fa-clock mr-1" aria-hidden="true"></i>
+      Si vous avez déjà effectué un paiement, déclarez-le ci-dessus. Votre accès sera maintenu pendant 72h le temps de la confirmation par notre équipe (délai engagé : 38h).
+    </p>
   </section>
   ${renderFooter(nomProjet, 'fr')}
 </body>

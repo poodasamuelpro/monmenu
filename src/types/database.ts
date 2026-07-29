@@ -1,5 +1,10 @@
 // Types TypeScript alignés sur le schéma Supabase
 // Régénérer avec : supabase gen types typescript
+//
+// AJOUT 2026-07-29 : types mis à jour pour le module paiement manuel
+// - Tenant : ajout statut 'en_attente_confirmation' (indirect via abonnement), paiement_en_attente_depuis
+// - Abonnement : ajout de tous les champs paiement manuel (migration 007)
+// - NotificationRestaurant : nouvelle table (migration 008)
 
 export interface Pays {
   id: string
@@ -43,6 +48,9 @@ export interface Tenant {
   statut: 'actif' | 'inactif' | 'suspendu' | 'essai'
   essai_expire_le: string | null
   plan_id: string
+  // AJOUT migration 007 — suivi paiement en attente
+  paiement_en_attente_depuis: string | null
+  reference_paiement_active: string | null
   metadata: Record<string, unknown>
   created_at: string
   updated_at: string
@@ -52,13 +60,48 @@ export interface Tenant {
 // Historique de paiement / abonnement — utilisé par le cron (api-cron.ts)
 // pour vérifier qu'un tenant en essai expiré n'a pas déjà un abonnement
 // payé avant de le faire passer à 'inactif'.
+//
+// AJOUT migration 007 — champs complets du flux paiement manuel
 export interface Abonnement {
   id: string
   tenant_id: string
   plan_id: string
-  statut: 'actif' | 'expire' | 'annule'
+  // AJOUT : 'en_retard' et 'en_attente_confirmation' (migration 007)
+  statut: 'actif' | 'expire' | 'annule' | 'en_retard' | 'en_attente_confirmation'
   date_debut: string
   date_fin: string | null
+  // Champs paiement manuel
+  montant_paye?: number | null
+  devise?: string | null
+  methode_paiement?: string | null
+  // Référence de rapprochement (SEC-10 : n'autorise rien seule)
+  reference_paiement?: string | null
+  // Clé R2 de la preuve (jamais l'URL publique — cf. SEC-06)
+  preuve_paiement_url?: string | null
+  // Fenêtre 72h
+  soumis_le?: string | null
+  delai_confirmation_expire_le?: string | null
+  // Audit trail confirmation (SEC-04)
+  confirme_par?: string | null
+  confirme_le?: string | null
+  // Audit trail rejet
+  rejete_par?: string | null
+  rejete_le?: string | null
+  motif_rejet?: string | null
+  created_at: string
+  updated_at?: string | null
+}
+
+// Notification in-app restaurant — migration 008
+export interface NotificationRestaurant {
+  id: string
+  tenant_id: string
+  type: 'info' | 'warning' | 'success' | 'error'
+  titre: string
+  message: string
+  lue: boolean
+  lien: string | null
+  payload?: Record<string, unknown> | null
   created_at: string
 }
 
@@ -271,6 +314,9 @@ export type Env = {
   // AJOUT — capture d'écran boutique (voir lib/screenshot.ts, api-cron.ts)
   PUBLIC_BASE_URL?: string   // origine publique utilisée par le cron (var, pas secret)
   THUMIO_API_KEY?: string    // optionnel — clé thum.io pour plus de quota/fiabilité (secret)
+  // AJOUT module paiement — URL de base du dashboard admin (pour appels inter-services)
+  ADMIN_BASE_URL?: string    // ex: https://admin.monmenu.app
+  ADMIN_WEBHOOK_SECRET?: string // secret partagé pour appels admin → web
 }
 
 export interface CartItem {

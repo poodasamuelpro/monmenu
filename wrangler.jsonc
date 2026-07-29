@@ -27,13 +27,14 @@
     }
   ],
 
-  // §1.8 — Cron triggers : 3 tâches nocturnes séparées pour isoler leur
+  // §1.8 — Cron triggers : 4 tâches séparées pour isoler leur
   // budget de temps et leurs logs (voir api-cron.ts) :
   //   02h00 UTC → calcul des stats journalières
   //   02h10 UTC → vérification des essais expirés (essai → inactif)
   //   02h20 UTC → capture des screenshots boutique (thum.io → R2)
+  //   toutes les 6h à :30 → blocage automatique paiements expirés (72h window)
   "triggers": {
-    "crons": ["0 2 * * *", "10 2 * * *", "20 2 * * *"]
+    "crons": ["0 2 * * *", "10 2 * * *", "20 2 * * *", "30 */6 * * *"]
   },
 
   // Variables non sensibles — PUBLIC_BASE_URL utilisée par le cron pour

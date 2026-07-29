@@ -13,6 +13,7 @@ import { dashboardRouter } from './routes/api-dashboard'
 import { blogRouter } from './routes/api-blog'
 import { newsletterRouter } from './routes/api-newsletter'
 import { screenshotsRouter } from './routes/api-screenshots'
+import { paiementRouter } from './routes/api-paiement'
 import { setSecurityHeaders } from './lib/security'
 import { getNomProjet, getWhatsAppSupport, createSupabaseAdminClient, createSupabaseClient } from './lib/supabase'
 import { detectLocale, getTranslations } from './i18n'
@@ -146,6 +147,8 @@ app.route('/api/v1/dashboard', dashboardRouter)
 app.route('/api/v1/blog', blogRouter)
 app.route('/api/v1/newsletter', newsletterRouter)
 app.route('/api/v1/screenshots', screenshotsRouter)
+// Module paiement manuel — audit 04-plan-implementation.md §B
+app.route('/api/v1/paiement', paiementRouter)
 
 // ---- Sitemap dynamique ----
 app.get('/sitemap.xml', async (c) => {
@@ -457,7 +460,8 @@ app.get('/dashboard/*', async (c) => {
         .single()
 
       const statutTenant = (ut?.tenants as any)?.statut
-      if (!statutTenant || !['actif', 'essai'].includes(statutTenant)) {
+      // en_attente_confirmation : fenêtre de 72h — le tenant reste accessible (audit 06-sync §8)
+      if (!statutTenant || !['actif', 'essai', 'en_attente_confirmation'].includes(statutTenant)) {
         return c.redirect('/dashboard/compte-inactif', 302)
       }
     }

@@ -8,14 +8,21 @@
 // exécution on sait immédiatement laquelle (event.cron identifie le
 // déclencheur exact qui a démarré l'invocation).
 //
+// AJOUT 2026-07-29 — 4e tâche : blocage automatique des paiements expirés
+// (délai de confirmation 72h dépassé). Déclenchement : "30 */6 * * *"
+// (toutes les 6h) pour réduire au maximum le délai d'application.
+// Référence : audit 04-plan-implementation.md §Phase 2 / 06-sync §6.1.
+//
 // Déclenchements (wrangler.jsonc, heures UTC) :
-//   "0 2 * * *"  → stats journalières
-//   "10 2 * * *" → vérification essais expirés (essai → inactif)
-//   "20 2 * * *" → capture des screenshots boutique (thum.io → R2)
+//   "0 2 * * *"    → stats journalières
+//   "10 2 * * *"   → vérification essais expirés (essai → inactif)
+//   "20 2 * * *"   → capture des screenshots boutique (thum.io → R2)
+//   "30 */6 * * *" → blocage paiements en_attente_confirmation expirés
 
 import type { Env } from '../types/database'
 import { createSupabaseAdminClient } from '../lib/supabase'
 import { capturerScreenshotBoutique } from '../lib/screenshot'
+import { notifierBlocageAutomatique } from '../lib/whatsapp'
 
 // Plafond de sécurité : borne la durée max de l'exécution de capture
 // ET protège le quota de l'API de capture (thum.io), même si le nombre
@@ -34,6 +41,10 @@ export async function handleScheduled(event: ScheduledEvent, env: Env, ctx: Exec
       break
     case '20 2 * * *':
       ctx.waitUntil(capturerScreenshotsQuotidiens(env))
+      break
+    case '30 */6 * * *':
+      // AJOUT 2026-07-29 — Blocage automatique des paiements expirés (72h dépassées)
+      ctx.waitUntil(bloquerPaiementsExpires(env))
       break
     default:
       console.warn(`[CRON] Déclenchement non reconnu: ${event.cron}`)
@@ -145,6 +156,10 @@ async function calculerStatsUnTenant(
 }
 
 // §5 — passage automatique essai → inactif
+// CORRECTION 2026-07-29 (audit 06-synchronisation §6.1) :
+// La vérification ne portait que sur statut='actif'. Un tenant en
+// 'en_attente_confirmation' ne doit PAS être bloqué par ce cron :
+// il a soumis une preuve et attend la confirmation dans les 72h.
 async function verifierEssaisExpires(env: Env): Promise<void> {
   const adminClient = createSupabaseAdminClient(env)
   const nowIso = new Date().toISOString()
@@ -170,16 +185,22 @@ async function verifierEssaisExpires(env: Env): Promise<void> {
 
   for (const tenant of essaisExpires) {
     try {
-      const { data: abonnementActif } = await adminClient
+      // CORRECTION — vérifier AUSSI 'en_attente_confirmation' (audit 06-sync §6.1)
+      // Un tenant qui a soumis une preuve ne doit pas être bloqué avant les 72h
+      const { data: abonnementActifOuAttente } = await adminClient
         .from('abonnements')
-        .select('id')
+        .select('id, statut')
         .eq('tenant_id', tenant.id)
-        .eq('statut', 'actif')
+        .in('statut', ['actif', 'en_attente_confirmation'])
         .or(`date_fin.is.null,date_fin.gt.${nowIso}`)
         .maybeSingle()
 
-      if (abonnementActif) {
-        console.warn(`[CRON:essais] Tenant ${tenant.id} a un abonnement actif mais statut=essai expiré. Update manquant côté paiement ?`)
+      if (abonnementActifOuAttente) {
+        if (abonnementActifOuAttente.statut === 'en_attente_confirmation') {
+          console.log(`[CRON:essais] Tenant ${tenant.id} a un paiement en attente — non bloqué (72h window).`)
+        } else {
+          console.warn(`[CRON:essais] Tenant ${tenant.id} a un abonnement actif mais statut=essai expiré. Mise à jour manquante côté paiement ?`)
+        }
         continue
       }
 
@@ -201,6 +222,148 @@ async function verifierEssaisExpires(env: Env): Promise<void> {
       console.error(`[CRON:essais] Erreur traitement tenant ${tenant.id}:`, err)
     }
   }
+}
+
+// -----------------------------------------------------------------------
+// AJOUT 2026-07-29 — Blocage automatique des paiements expirés (72h)
+// Référence : audit 04-plan-implementation.md §Phase 2 (api-cron.ts)
+// -----------------------------------------------------------------------
+
+/**
+ * Bloque automatiquement les paiements 'en_attente_confirmation' dont la
+ * deadline de 72h est dépassée.
+ *
+ * Pour chaque abonnement expiré :
+ * 1. Passe abonnement.statut → 'expire'
+ * 2. Passe tenant.statut → 'inactif' (sauf si abonnement actif parallèle)
+ * 3. Envoie notification WhatsApp au restaurant
+ * 4. Crée notification_restaurant (in-app)
+ * 5. Crée notification_admin
+ * 6. Invalide cache KV
+ *
+ * Le cron est idempotent : une double exécution ne crée pas de doublons
+ * (le filtre .eq('statut', 'en_attente_confirmation') exclut les déjà traités).
+ */
+async function bloquerPaiementsExpires(env: Env): Promise<void> {
+  const adminClient = createSupabaseAdminClient(env)
+  const nowIso = new Date().toISOString()
+
+  // Trouver les abonnements en_attente_confirmation dont le délai est dépassé
+  const { data: abonnementsExpires, error } = await adminClient
+    .from('abonnements')
+    .select('id, tenant_id, plan_id, reference_paiement, delai_confirmation_expire_le')
+    .eq('statut', 'en_attente_confirmation')
+    .lt('delai_confirmation_expire_le', nowIso)
+
+  if (error) {
+    console.error('[CRON:paiements] Erreur récupération paiements expirés:', error.message)
+    return
+  }
+
+  if (!abonnementsExpires || abonnementsExpires.length === 0) {
+    console.log('[CRON:paiements] Aucun paiement en attente expiré.')
+    return
+  }
+
+  console.log(`[CRON:paiements] ${abonnementsExpires.length} paiement(s) à bloquer.`)
+
+  for (const abonnement of abonnementsExpires) {
+    try {
+      // 1. Passer l'abonnement en 'expire'
+      const { error: abError } = await adminClient
+        .from('abonnements')
+        .update({ statut: 'expire', updated_at: nowIso })
+        .eq('id', abonnement.id)
+        .eq('statut', 'en_attente_confirmation') // Guard idempotence
+
+      if (abError) {
+        console.error(`[CRON:paiements] Erreur update abonnement ${abonnement.id}:`, abError.message)
+        continue
+      }
+
+      // 2. Récupérer tenant pour vérification + notification
+      const { data: tenant } = await adminClient
+        .from('tenants')
+        .select('id, slug, nom, statut, whatsapp_number')
+        .eq('id', abonnement.tenant_id)
+        .is('deleted_at', null)
+        .single()
+
+      if (!tenant) continue
+
+      // Vérifier s'il existe un autre abonnement actif (ne pas bloquer dans ce cas)
+      const { data: autreActif } = await adminClient
+        .from('abonnements')
+        .select('id')
+        .eq('tenant_id', abonnement.tenant_id)
+        .eq('statut', 'actif')
+        .or(`date_fin.is.null,date_fin.gt.${nowIso}`)
+        .maybeSingle()
+
+      if (!autreActif) {
+        // 3. Passer tenant en inactif
+        await adminClient
+          .from('tenants')
+          .update({
+            statut: 'inactif',
+            paiement_en_attente_depuis: null,
+            updated_at: nowIso
+          })
+          .eq('id', tenant.id)
+          .eq('statut', 'essai') // Ne toucher que les tenants en essai (pas actif)
+
+        // Invalider cache KV
+        if (env.KV_CACHE) {
+          try { await env.KV_CACHE.delete(`tenant:${tenant.slug}`) } catch {}
+        }
+      }
+
+      // 4. Notification WhatsApp au restaurant
+      if (tenant.whatsapp_number) {
+        try {
+          await notifierBlocageAutomatique(env, {
+            nom: tenant.nom,
+            whatsapp_number: tenant.whatsapp_number
+          })
+        } catch {}
+      }
+
+      // 5. Notification in-app restaurant
+      await adminClient
+        .from('notifications_restaurant')
+        .insert({
+          tenant_id: tenant.id,
+          type: 'error',
+          titre: 'Accès bloqué — délai de confirmation dépassé',
+          message: 'Votre paiement n\'a pas été confirmé dans les 72h. Votre accès est suspendu. Contactez le support.',
+          lien: '/dashboard/abonnement',
+          payload: { abonnement_id: abonnement.id }
+        })
+        .catch(() => {})
+
+      // 6. Notification admin
+      await adminClient
+        .from('notifications_admin')
+        .insert({
+          type: 'error',
+          titre: `Paiement bloqué automatiquement — ${tenant.nom}`,
+          message: `Le délai de 72h est dépassé sans confirmation. Tenant passé en inactif.`,
+          lien: '#paiements',
+          payload: {
+            tenant_id: tenant.id,
+            abonnement_id: abonnement.id
+          }
+        })
+        .catch(() => {})
+
+      // SEC-09 : log minimaliste
+      console.log(`[CRON:paiements] Paiement bloqué — tenant: ${tenant.id.slice(0, 8)}...`)
+    } catch (err) {
+      console.error(`[CRON:paiements] Erreur traitement abonnement ${abonnement.id}:`, err)
+    }
+  }
+
+  console.log(`[CRON:paiements] Traitement terminé : ${abonnementsExpires.length} paiement(s) traité(s).`)
 }
 
 // =====================================================================
