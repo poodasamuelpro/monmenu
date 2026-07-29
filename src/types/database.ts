@@ -268,6 +268,9 @@ export type Env = {
   MAPBOX_TOKEN?: string
   OPENWEATHER_API_KEY?: string
   ENVIRONMENT?: 'development' | 'production'
+  // AJOUT — capture d'écran boutique (voir lib/screenshot.ts, api-cron.ts)
+  PUBLIC_BASE_URL?: string   // origine publique utilisée par le cron (var, pas secret)
+  THUMIO_API_KEY?: string    // optionnel — clé thum.io pour plus de quota/fiabilité (secret)
 }
 
 export interface CartItem {
