@@ -1,4 +1,3 @@
-
 // API Dashboard — Routes protégées pour le tableau de bord restaurant
 // ARCHITECTURE :
 //   • D1 (Cloudflare) → SITE WEB uniquement : config_globale, pays, plans
@@ -1482,5 +1481,3 @@ dashboardRouter.post('/setup-restaurant', async (c) => {
 })
 
 export { dashboardRouter }
-
-
