@@ -27,9 +27,20 @@
     }
   ],
 
-  // §1.8 — Cron trigger : calcul des stats journalières à 02h00 UTC chaque nuit
+  // §1.8 — Cron triggers : 3 tâches nocturnes séparées pour isoler leur
+  // budget de temps et leurs logs (voir api-cron.ts) :
+  //   02h00 UTC → calcul des stats journalières
+  //   02h10 UTC → vérification des essais expirés (essai → inactif)
+  //   02h20 UTC → capture des screenshots boutique (thum.io → R2)
   "triggers": {
-    "crons": ["0 2 * * *"]
+    "crons": ["0 2 * * *", "10 2 * * *", "20 2 * * *"]
+  },
+
+  // Variables non sensibles — PUBLIC_BASE_URL utilisée par le cron pour
+  // savoir quelle URL capturer (lib/screenshot.ts). Ajuste-la si ton
+  // domaine définitif diffère.
+  "vars": {
+    "PUBLIC_BASE_URL": "https://monmenu.app"
   },
 
   // Logs d'observabilité Cloudflare (Observability > Logs dans le dashboard)
