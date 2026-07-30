@@ -1,4 +1,13 @@
 // MonMenu — Boutique restaurant (JS côté client)
+// v1.3.0 — FIX 2026-07-30 : géolocalisation rendue OBLIGATOIRE en mode
+// livraison. Avant ce fix, la validation acceptait "adresse texte OU
+// coordonnées GPS", ce qui permettait de valider une commande sans position
+// GPS dès lors qu'une adresse était tapée manuellement. Résultat : le
+// message WhatsApp envoyé au restaurant n'avait ni lien Google Maps ni lien
+// Waze (ces liens ne peuvent être construits qu'à partir de coordonnées).
+// Désormais : adresse ET coordonnées sont toutes les deux requises pour
+// livraison, et le bouton "Confirmer" reste désactivé tant que la position
+// n'est pas connue.
 'use strict';
 
 let tenantId = '';
@@ -436,9 +445,6 @@ function observerFooterPourPanierFlottant() {
 }
 
 // ---- Retour en haut de page ----
-// Affiche la flèche uniquement quand on approche du bas de la page (dernier
-// ~25% de la hauteur totale scrollable), pour ne pas encombrer l'écran
-// pendant la navigation normale dans le menu.
 function initBackToTop() {
   const btn = document.getElementById('back-to-top-btn');
   if (!btn) return;
@@ -541,6 +547,8 @@ function openCheckout() {
     radio.addEventListener('change', onLivraisonTypeChange);
   });
   const isLivraison = document.querySelector('input[name="livraison-type"]:checked')?.value === 'livraison';
+  // FIX — état initial du bouton Confirmer selon que la position est déjà connue
+  mettreAJourEtatSubmit();
   if (isLivraison) {
     setTimeout(() => initCartelivraison(), 200);
     if (clientLat === null || clientLon === null) {
@@ -569,7 +577,28 @@ function onLivraisonTypeChange() {
   } else {
     fraisLivraison = 0;
   }
+  mettreAJourEtatSubmit();
   updateCheckoutRecap();
+}
+
+// FIX — Verrouille/déverrouille le bouton "Confirmer" du formulaire de
+// commande selon que la position GPS est connue (mode livraison
+// uniquement). Empêche de soumettre une commande livraison sans
+// coordonnées, ce qui garantit que le message WhatsApp final contiendra
+// toujours les liens Maps/Waze quand il s'agit d'une livraison.
+function mettreAJourEtatSubmit() {
+  const submitBtn = document.getElementById('submit-btn');
+  const hintEl = document.getElementById('position-manquante-hint');
+  if (!submitBtn) return;
+
+  const isLivraison = document.querySelector('input[name="livraison-type"]:checked')?.value === 'livraison';
+  const positionManquante = isLivraison && (clientLat === null || clientLon === null);
+
+  submitBtn.disabled = positionManquante;
+  submitBtn.classList.toggle('opacity-50', positionManquante);
+  submitBtn.classList.toggle('cursor-not-allowed', positionManquante);
+
+  if (hintEl) hintEl.classList.toggle('hidden', !positionManquante);
 }
 
 // ---- Carte Leaflet interactive (§1.1) ----
@@ -600,6 +629,7 @@ function initCartelivraison() {
       const pos = e.target.getLatLng();
       clientLat = pos.lat;
       clientLon = pos.lng;
+      mettreAJourEtatSubmit();
       await geocoderInverse(pos.lat, pos.lng);
       await calculerFraisLivraison();
     });
@@ -745,7 +775,7 @@ function updateCheckoutRecap() {
 function geolocaliser() {
   const detailEl = document.getElementById('frais-livraison-detail');
   if (!navigator.geolocation) {
-    if (detailEl) detailEl.textContent = 'Géolocalisation non supportée par votre navigateur. Déplacez le repère sur la carte.';
+    if (detailEl) detailEl.textContent = 'Géolocalisation non supportée par votre navigateur. Déplacez le repère sur la carte pour continuer (obligatoire).';
     return;
   }
   if (detailEl) detailEl.textContent = 'Localisation en cours...';
@@ -754,6 +784,7 @@ function geolocaliser() {
     async (pos) => {
       clientLat = pos.coords.latitude;
       clientLon = pos.coords.longitude;
+      mettreAJourEtatSubmit();
       if (livraisonMap && livraisonMarker) {
         livraisonMarker.setLatLng([clientLat, clientLon]);
         livraisonMap.setView([clientLat, clientLon], 16);
@@ -765,7 +796,8 @@ function geolocaliser() {
     },
     (err) => {
       console.warn('Géolocalisation refusée ou indisponible', err);
-      if (detailEl) detailEl.textContent = 'Position non disponible — déplacez le repère sur la carte ou saisissez votre adresse manuellement.';
+      if (detailEl) detailEl.textContent = 'Position non disponible — déplacez le repère sur la carte pour continuer (obligatoire pour la livraison).';
+      mettreAJourEtatSubmit();
     },
     { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 }
   );
@@ -800,11 +832,11 @@ async function calculerFraisLivraison() {
 // FIX WhatsApp — À la confirmation, la commande doit rediriger vers WhatsApp
 // du RESTAURANT avec le récap pré-rempli (lien_whatsapp renvoyé par
 // POST /api/v1/commandes), en plus de la redirection vers la page de suivi.
-// ⚠️ Le lien "lien_whatsapp" est construit CÔTÉ SERVEUR (fichier de l'API
-// qui gère POST /api/v1/commandes), qui n'a pas été fourni pour relecture.
-// Si le lien reste erroné malgré ce fix, le problème est très probablement
-// dans la normalisation du numéro à cet endroit précis côté backend — même
-// logique que formatWhatsAppNumber() ci-dessous à répliquer côté serveur.
+// Le lien_whatsapp est construit CÔTÉ SERVEUR (genererMessageCommande dans
+// lib/whatsapp.ts) et contient désormais TOUJOURS les liens Google Maps et
+// Waze dès lors que client_latitude/client_longitude sont fournis — ce qui
+// est maintenant garanti par la validation stricte ci-dessous (FIX
+// 2026-07-30 : géolocalisation obligatoire en livraison).
 //
 // Pour éviter le blocage popup des navigateurs (qui n'autorisent l'ouverture
 // de fenêtre que si elle a lieu de façon SYNCHRONE dans le même geste
@@ -830,9 +862,20 @@ async function submitOrder(e) {
   if (cart.items.length === 0) { alert('Votre panier est vide.'); return; }
 
   const isEmporter = modeType === 'emporter';
-  if (!isEmporter && (!adresse) && (clientLat === null || clientLon === null)) {
-    alert('Merci de renseigner votre adresse ou d\'autoriser la géolocalisation, ou de déplacer le repère sur la carte.');
-    return;
+
+  // FIX 2026-07-30 — En mode livraison, l'ADRESSE et les COORDONNÉES GPS
+  // sont désormais TOUTES LES DEUX obligatoires (et non plus l'une ou
+  // l'autre). C'est ce qui garantit que le message WhatsApp final contient
+  // toujours les liens Google Maps / Waze.
+  if (!isEmporter) {
+    if (clientLat === null || clientLon === null) {
+      alert('La position GPS est obligatoire pour la livraison. Merci d\'autoriser la géolocalisation ou de déplacer le repère sur la carte.');
+      return;
+    }
+    if (!adresse) {
+      alert('Merci de préciser votre adresse (quartier, rue, repère...).');
+      return;
+    }
   }
 
   const labelInitial = '<i class="fa-solid fa-check"></i> Confirmer';
@@ -849,7 +892,7 @@ async function submitOrder(e) {
     point_de_vente_id: pdvData ? pdvData.id : '',
     client_nom: nom,
     client_telephone: tel,
-    client_adresse: isEmporter ? null : (adresse || null),
+    client_adresse: isEmporter ? null : adresse,
     client_latitude: isEmporter ? null : clientLat,
     client_longitude: isEmporter ? null : clientLon,
     items: cart.items.map(item => ({ produit_id: item.produit_id, quantite: item.quantite })),
@@ -886,17 +929,13 @@ async function submitOrder(e) {
       }
 
       // FIX WhatsApp — redirige l'onglet ouvert plus haut vers le lien
-      // WhatsApp réel (restaurant), pré-rempli avec le récap de commande.
-      // On revalide/normalise le lien reçu du serveur avant de rediriger,
-      // au cas où le numéro qu'il contient serait mal formaté (ex: "00" au
-      // lieu de "+", espaces...).
+      // WhatsApp réel (restaurant), pré-rempli avec le récap de commande
+      // (adresse + Maps + Waze désormais garantis pour toute livraison).
       if (data.lien_whatsapp) {
         const lienCorrige = corrigerLienWhatsApp(data.lien_whatsapp);
         if (whatsappWindow) {
           whatsappWindow.location.href = lienCorrige;
         } else {
-          // Popup malgré tout bloqué : on ouvre normalement (peut être
-          // bloqué par le navigateur, mais on tente).
           window.open(lienCorrige, '_blank');
         }
       } else if (whatsappWindow) {
