@@ -14,6 +14,9 @@ import { blogRouter } from './routes/api-blog'
 import { newsletterRouter } from './routes/api-newsletter'
 import { screenshotsRouter } from './routes/api-screenshots'
 import { paiementRouter } from './routes/api-paiement'
+// AJOUT 2026-07-30 — route admin pour déclencher manuellement les tâches
+// cron (ex: relancer la capture des screenshots sans attendre 2h20 UTC).
+import { adminTasksRouter } from './routes/api-admin-tasks'
 import { setSecurityHeaders } from './lib/security'
 import { getNomProjet, getWhatsAppSupport, createSupabaseAdminClient, createSupabaseClient } from './lib/supabase'
 import { detectLocale, getTranslations } from './i18n'
@@ -149,6 +152,8 @@ app.route('/api/v1/newsletter', newsletterRouter)
 app.route('/api/v1/screenshots', screenshotsRouter)
 // Module paiement manuel — audit 04-plan-implementation.md §B
 app.route('/api/v1/paiement', paiementRouter)
+// AJOUT 2026-07-30 — déclenchement manuel des tâches cron (ex: screenshots)
+app.route('/api/v1/admin/tasks', adminTasksRouter)
 
 // ---- Sitemap dynamique ----
 app.get('/sitemap.xml', async (c) => {
