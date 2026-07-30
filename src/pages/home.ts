@@ -217,7 +217,7 @@ export function renderHomePage(nomProjet: string, locale: string = 'fr'): string
   <section class="py-14 bg-gray-50 dark:bg-[#0B0A09]/50 border-y border-gray-100 dark:border-gray-800" id="partenaires">
     <div id="partenaires-container" class="hidden">
       <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mb-8 text-center">
-        <p class="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+        <p class="text-sm font-extrabold text-red-600 dark:text-red-400 uppercase tracking-wider">
           ${partenairesLabel}
         </p>
       </div>
