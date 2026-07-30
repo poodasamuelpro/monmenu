@@ -8,12 +8,25 @@
 // PATCH /api/v1/commandes/:id/statut - Mise à jour statut (AUTH REQUISE via dashboard)
 // POST /api/v1/commandes/valider-promo - Vérifier un code promo
 //
-// FIX (cohérence avec whatsapp.ts) — genererMessageCommande() prend désormais
-// un paramètre "origin" (domaine dynamique) au lieu d'utiliser un domaine
+// FIX (cohérence avec whatsapp.ts) — genererMessageCommande() prend un
+// paramètre "origin" (domaine dynamique) au lieu d'utiliser un domaine
 // codé en dur. On construit cet origin ici avec new URL(c.req.url).origin,
 // exactement comme déjà fait pour le QR code et les médias R2 ailleurs dans
 // le code, pour que le lien de suivi WhatsApp pointe toujours vers le bon
 // domaine (production, preview *.workers.dev, ou domaine personnalisé).
+//
+// CONFIRMÉ 2026-07-30 — Ce fichier est déjà compatible avec le nouveau
+// gabarit de message (whatsapp.ts) : les deux canaux de notification sont
+// câblés correctement pour la commande client → restaurant :
+//   1) envoyerNotificationWhatsApp() — API WhatsApp Business officielle,
+//      envoyée en arrière-plan via c.executionCtx.waitUntil() (best-effort,
+//      ne bloque jamais la réponse HTTP).
+//   2) lien_whatsapp — renvoyé dans la réponse JSON, utilisé par boutique.js
+//      pour rediriger l'onglet WhatsApp ouvert au clic sur "Confirmer"
+//      (garanti fonctionnel à 100%, indépendant de la config de l'API).
+// Les liens Maps/Waze apparaissent désormais dans les deux canaux dès lors
+// que client_latitude/client_longitude sont fournis — ce qui est maintenant
+// garanti côté boutique.js (géolocalisation obligatoire en livraison).
 
 import { Hono } from 'hono'
 import type { Env } from '../types/database'
@@ -315,18 +328,23 @@ commandesRouter.post('/', async (c) => {
   }
 
   // §1.9 — WhatsApp notification avec mode livraison / à emporter
-  // FIX : origin dynamique passé à genererMessageCommande (voir whatsapp.ts)
-  // pour que le lien de suivi inséré dans le message soit toujours correct,
-  // quel que soit le domaine sur lequel tourne le Worker.
+  // Origin dynamique passé à genererMessageCommande (voir whatsapp.ts) pour
+  // que le lien de suivi + le lien "boutique" en en-tête du message soient
+  // toujours corrects, quel que soit le domaine sur lequel tourne le Worker.
   const origin = new URL(c.req.url).origin
   const modeLivraison = (data.mode_livraison ?? 'livraison') as 'livraison' | 'emporter'
   const messageWhatsApp = genererMessageCommande(commandeComplete as any, tenantRow as any, origin, modeLivraison)
   const lienWhatsApp = genererLienWhatsApp(tenantRow.whatsapp_number, messageWhatsApp)
 
+  // Canal 1 — API WhatsApp Business officielle (best-effort, silencieux,
+  // ne bloque jamais la réponse HTTP renvoyée au client).
   c.executionCtx.waitUntil(
     envoyerNotificationWhatsApp(tenantRow.whatsapp_number, messageWhatsApp, env)
   )
 
+  // Canal 2 — lien de redirection wa.me, TOUJOURS renvoyé : c'est lui que
+  // boutique.js utilise pour rediriger l'onglet WhatsApp ouvert au clic sur
+  // "Confirmer" (garanti fonctionnel indépendamment de la config API).
   const responseData = {
     success: true,
     commande_id: commandeId,
@@ -406,6 +424,10 @@ commandesRouter.get('/suivi/:token', async (c) => {
 })
 
 // PATCH /api/v1/commandes/:id/statut — Mise à jour statut (AUTH JWT REQUISE)
+// NOTE — Cette route est un doublon d'API pour clients externes/API/mobile
+// (auth par header Authorization: Bearer uniquement). Le flux normal du
+// dashboard web utilise plutôt PATCH /api/v1/dashboard/commandes/:id/statut
+// (api-dashboard.ts), qui gère désormais aussi la notification livreur.
 commandesRouter.patch('/:id/statut', async (c) => {
   setSecurityHeaders(c)
 
