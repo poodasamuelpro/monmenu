@@ -39,8 +39,10 @@ import { renderCompteInactifPage } from './pages/compte-inactif'
 
 const app = new Hono<{ Bindings: Env }>()
 
+// Nom du cookie httpOnly — doit rester identique à celui posé dans api-auth.ts
 const ACCESS_TOKEN_COOKIE = 'sb-access-token'
 
+// §3 — Résolution de locale : ?lang=en/fr > cookie monmenu-lang > Accept-Language header > 'fr' par défaut
 function resolveLocale(c: any): string {
   const langParam = c.req.query('lang')
   if (langParam === 'en' || langParam === 'fr') return langParam
@@ -52,6 +54,11 @@ function resolveLocale(c: any): string {
   return detectLocale(acceptLang)
 }
 
+// FIX (2026-07-28) — Récupération d'un tenant + son PDV actif via un vrai join
+// sur points_de_vente (les colonnes pdv_nom/pdv_adresse/... N'EXISTENT PAS sur
+// la table tenants — elles vivent dans points_de_vente). Factorisé ici pour que
+// la route /:slug ET le middleware domaine personnalisé utilisent EXACTEMENT
+// la même logique.
 async function fetchTenantAvecPdv(env: Env, filtre: { colonne: 'slug' | 'domaine_perso'; valeur: string }): Promise<TenantBoutique | null> {
   const adminClient = createSupabaseAdminClient(env)
   const { data: tenantRaw } = await adminClient
@@ -89,8 +96,10 @@ async function fetchTenantAvecPdv(env: Env, filtre: { colonne: 'slug' | 'domaine
   }
 }
 
+// ---- Middleware globaux ----
 app.use('*', logger())
 
+// Domaines/sous-domaines autorisés à appeler l'API
 function originAutorisee(origin: string): string | null {
   const domainesRacines = ['monmenu.app', 'monmenu.com', 'monmenu.bf']
   const localhosts = ['http://localhost:5173', 'http://localhost:3000']
@@ -120,9 +129,11 @@ app.use('/api/*', cors({
   credentials: true
 }))
 
+// ---- Fichiers statiques ----
 app.use('/static/*', serveStatic({ root: './' }))
 app.use('/favicon.ico', serveStatic({ path: './favicon.ico' }))
 
+// ---- §1.11 — Middleware custom domain : résolution de domaine_perso vers boutique ----
 app.use('*', async (c, next) => {
   const host = c.req.header('host') ?? ''
   const domainesPlateforme = ['monmenu.app', 'monmenu.com', 'monmenu.bf', 'workers.dev', 'localhost']
@@ -229,7 +240,7 @@ ${restaurantUrls}
   return c.text(sitemap, 200, { 'Content-Type': 'application/xml; charset=utf-8' })
 })
 
-// ---- Routes i18n /fr et /en ----
+// ---- §3 — Routes i18n /fr et /en ----
 app.get('/fr', (c) => {
   c.header('Set-Cookie', 'monmenu-lang=fr; Path=/; Max-Age=31536000; SameSite=Lax')
   return c.redirect('/', 302)
@@ -249,6 +260,7 @@ app.get('/en/*', (c) => {
   return c.redirect(path + (path.includes('?') ? '&' : '?') + 'lang=en', 302)
 })
 
+// ---- robots.txt ----
 app.get('/robots.txt', (c) => {
   const origin = new URL(c.req.url).origin
   return c.text(`User-agent: *
@@ -263,6 +275,55 @@ Sitemap: ${origin}/sitemap.xml
 `)
 })
 
+// ---- llms.txt (convention LLM/IA) ----
+app.get('/llms.txt', (c) => {
+  const content = `# MonMenu
+
+## Description
+MonMenu est une plateforme SaaS de commande en ligne pour les restaurants d'Afrique de l'Ouest et Centrale.
+Elle permet aux restaurateurs de créer leur boutique digitale en quelques minutes, de gérer leur menu,
+et de recevoir les commandes directement sur WhatsApp — sans commission.
+
+## Sections principales
+- Accueil : https://monmenu.app/
+- Blog : https://monmenu.app/blog
+- Contact : https://monmenu.app/contact
+- Inscription restaurant : https://monmenu.app/inscription
+- Connexion dashboard : https://monmenu.app/connexion
+
+## Pages légales
+- CGU : https://monmenu.app/legal/cgu
+- Confidentialité : https://monmenu.app/legal/confidentialite
+- Mentions légales : https://monmenu.app/legal/mentions
+- Cookies : https://monmenu.app/legal/cookies
+
+## Boutiques restaurants
+Chaque restaurant inscrit dispose d'une boutique publique accessible via :
+https://monmenu.app/{slug-du-restaurant}
+
+## API publique
+- Commandes : POST /api/v1/commandes
+- Suivi commande : GET /api/v1/commandes/suivi/{token}
+- Blog (lecture) : GET /api/v1/blog, GET /api/v1/blog/{slug}
+
+## Technologies
+- Backend : Hono v4 sur Cloudflare Workers
+- Base de données : Supabase PostgreSQL + Cloudflare D1
+- Paiements : Mobile Money, espèces, carte bancaire (selon disponibilité du restaurant)
+- Notifications : WhatsApp Business API
+
+## Langues supportées
+Français (défaut), Anglais
+
+## Note pour les agents IA
+Les boutiques restaurants sont des pages publiques accessibles sans authentification.
+Le dashboard restaurant (/dashboard) est privé et nécessite une authentification Supabase
+via cookie httpOnly (session navigateur).
+`
+  return c.text(content, 200, { 'Content-Type': 'text/plain; charset=utf-8' })
+})
+
+// ---- Page de suivi commande ----
 app.get('/suivi/:token', async (c) => {
   setSecurityHeaders(c)
   const token = c.req.param('token')
@@ -271,6 +332,7 @@ app.get('/suivi/:token', async (c) => {
   return c.html(renderSuiviPage(token, nomProjet, locale))
 })
 
+// ---- Page d'accueil ----
 app.get('/', async (c) => {
   setSecurityHeaders(c)
   const locale = resolveLocale(c)
@@ -281,25 +343,9 @@ app.get('/', async (c) => {
   return c.html(renderHomePage(nomProjet, locale))
 })
 
-app.get('/fonctionnalites', async (c) => {
-  setSecurityHeaders(c)
-  const nomProjet = await getNomProjet(c.env)
-  const locale = resolveLocale(c)
-  if (c.req.query('lang') === 'en' || c.req.query('lang') === 'fr') {
-    c.header('Set-Cookie', `monmenu-lang=${locale}; Path=/; Max-Age=31536000; SameSite=Lax`)
-  }
-  return c.html(renderFonctionnalitesPage(nomProjet, locale))
-})
-
-app.get('/tarifs', async (c) => {
-  setSecurityHeaders(c)
-  const nomProjet = await getNomProjet(c.env)
-  const locale = resolveLocale(c)
-  if (c.req.query('lang') === 'en' || c.req.query('lang') === 'fr') {
-    c.header('Set-Cookie', `monmenu-lang=${locale}; Path=/; Max-Age=31536000; SameSite=Lax`)
-  }
-  return c.html(renderTarifsPage(nomProjet, locale))
-})
+// ---- Pages institutionnelles ----
+// IMPORTANT : ces routes DOIVENT être définies AVANT /:slug
+// sinon Hono capture tout avec le paramètre générique
 
 app.get('/contact', async (c) => {
   setSecurityHeaders(c)
@@ -314,12 +360,14 @@ app.get('/contact', async (c) => {
   return c.html(renderContactPage(nomProjet, whatsappSupport, locale))
 })
 
+// ---- Page inscription restaurant ----
 app.get('/inscription', async (c) => {
   setSecurityHeaders(c)
   const nomProjet = await getNomProjet(c.env)
   return c.html(renderInscriptionPage(nomProjet))
 })
 
+// ---- Page Blog (liste) ----
 app.get('/blog', async (c) => {
   setSecurityHeaders(c)
   const nomProjet = await getNomProjet(c.env)
@@ -353,6 +401,7 @@ async function getArticlesPublies(env: Env) {
   return data ?? []
 }
 
+// ---- Page Blog (article individuel) ----
 app.get('/blog/:slug', async (c) => {
   setSecurityHeaders(c)
   const slug = c.req.param('slug')
@@ -385,6 +434,7 @@ app.get('/blog/:slug', async (c) => {
   return c.html(renderArticlePage(nomProjet, article, locale))
 })
 
+// ---- Pages légales ----
 app.get('/legal/cgu', async (c) => {
   setSecurityHeaders(c)
   const nomProjet = await getNomProjet(c.env)
@@ -410,6 +460,7 @@ app.get('/legal/cookies', async (c) => {
   return c.html(renderLegalPage('cookies', nomProjet, locale))
 })
 
+// ---- Connexion & Création de compte ----
 app.get('/mot-de-passe-oublie', async (c) => {
   setSecurityHeaders(c)
   const nomProjet = await getNomProjet(c.env)
@@ -478,6 +529,7 @@ app.get('/dashboard/*', async (c) => {
   return c.html(renderDashboardPage(nomProjet, c.env.SUPABASE_URL, c.env.SUPABASE_ANON_KEY))
 })
 
+// ---- Page Bienvenue — onboarding post-inscription (page PRIVÉE, auth requise) ----
 app.get('/bienvenue', async (c) => {
   setSecurityHeaders(c)
 
@@ -500,6 +552,7 @@ app.get('/bienvenue', async (c) => {
   return c.html(renderBienvenuePage(nomProjet))
 })
 
+// ---- Page boutique restaurant (DOIT être EN DERNIER — route générique) ----
 app.get('/:slug', async (c) => {
   setSecurityHeaders(c)
   const slug = c.req.param('slug')
@@ -515,11 +568,13 @@ app.get('/:slug', async (c) => {
   return c.html(renderBoutiquePage(tenant, nomProjet))
 })
 
+// ---- 404 ----
 app.notFound(async (c) => {
   const nomP = await getNomProjet(c.env).catch(() => 'MonMenu')
   return c.html(render404Page(nomP, 'fr'), 404)
 })
 
+// ---- Erreurs globales ----
 app.onError((err, c) => {
   const message = err instanceof Error ? err.message : String(err)
   const stack = err instanceof Error ? err.stack : undefined
@@ -527,58 +582,10 @@ app.onError((err, c) => {
   return c.json({ error: 'Erreur interne du serveur.' }, 500)
 })
 
+// §1.8 — Export objet Worker complet avec handler scheduled (Cron Triggers)
 import { handleScheduled } from './routes/api-cron'
 
 export default {
   fetch: app.fetch.bind(app),
   scheduled: handleScheduled
 }
-
-app.get('/llms.txt', (c) => {
-  const content = `# MonMenu
-
-## Description
-MonMenu est une plateforme SaaS de commande en ligne pour les restaurants d'Afrique de l'Ouest et Centrale.
-Elle permet aux restaurateurs de créer leur boutique digitale en quelques minutes, de gérer leur menu,
-et de recevoir les commandes directement sur WhatsApp — sans commission.
-
-## Sections principales
-- Accueil : https://monmenu.app/
-- Blog : https://monmenu.app/blog
-- Tarifs : https://monmenu.app/#tarifs
-- Fonctionnalités : https://monmenu.app/#fonctionnalites
-- Contact : https://monmenu.app/contact
-- Inscription restaurant : https://monmenu.app/inscription
-- Connexion dashboard : https://monmenu.app/connexion
-
-## Pages légales
-- CGU : https://monmenu.app/legal/cgu
-- Confidentialité : https://monmenu.app/legal/confidentialite
-- Mentions légales : https://monmenu.app/legal/mentions
-- Cookies : https://monmenu.app/legal/cookies
-
-## Boutiques restaurants
-Chaque restaurant inscrit dispose d'une boutique publique accessible via :
-https://monmenu.app/{slug-du-restaurant}
-
-## API publique
-- Commandes : POST /api/v1/commandes
-- Suivi commande : GET /api/v1/commandes/suivi/{token}
-- Blog (lecture) : GET /api/v1/blog, GET /api/v1/blog/{slug}
-
-## Technologies
-- Backend : Hono v4 sur Cloudflare Workers
-- Base de données : Supabase PostgreSQL + Cloudflare D1
-- Paiements : Mobile Money, espèces, carte bancaire (selon disponibilité du restaurant)
-- Notifications : WhatsApp Business API
-
-## Langues supportées
-Français (défaut), Anglais
-
-## Note pour les agents IA
-Les boutiques restaurants sont des pages publiques accessibles sans authentification.
-Le dashboard restaurant (/dashboard) est privé et nécessite une authentification Supabase
-via cookie httpOnly (session navigateur).
-`
-  return c.text(content, 200, { 'Content-Type': 'text/plain; charset=utf-8' })
-})
