@@ -2,21 +2,39 @@
 // Envoi de notifications aux restaurants et livreurs
 //
 // FIX 1 — Le lien de suivi inséré dans le message WhatsApp était codé en dur
-// sur "https://monmenu.app/suivi/...". Sur un environnement de preview
-// (*.workers.dev) ou un domaine personnalisé, ce lien pointe vers un domaine
-// qui n'a rien à voir avec le site réel : le restaurant clique dessus et
-// tombe sur une erreur. genererMessageCommande() prend désormais un paramètre
-// "origin" obligatoire (à construire côté appelant avec
-// new URL(c.req.url).origin, comme déjà fait ailleurs dans le code pour les
-// médias R2 et le QR code) au lieu de la constante en dur.
+// sur "https://monmenu.app/suivi/...". genererMessageCommande() prend un
+// paramètre "origin" obligatoire (construit côté appelant avec
+// new URL(c.req.url).origin) au lieu de la constante en dur.
 //
-// FIX 2 — envoyerNotificationWhatsApp() déclarait WHATSAPP_API_TOKEN et
-// WHATSAPP_PHONE_ID comme des champs REQUIS dans son type d'entrée, alors que
-// l'interface Env (types/database.ts) les déclare optionnels (WHATSAPP_API_TOKEN?:
-// string). Résultat : passer l'objet "env" complet (comme fait dans
-// api-commandes.ts) provoque une erreur de compilation TypeScript
-// ("string | undefined n'est pas assignable à string"). Les deux champs sont
-// désormais optionnels ici aussi, cohérent avec Env.
+// FIX 2 — envoyerNotificationWhatsApp() déclare WHATSAPP_API_TOKEN et
+// WHATSAPP_PHONE_ID comme optionnels, cohérent avec l'interface Env
+// (types/database.ts).
+//
+// FIX 2026-07-30 (bug remonté en prod) — Le message envoyé au restaurant
+// n'affichait JAMAIS les liens Google Maps / Waze, même quand le client
+// avait une adresse renseignée. Cause : le format de lien utilisé
+// ("https://maps.google.com/?q=lat,lon") + une condition correcte MAIS un
+// gabarit de message entièrement réécrit pour matcher le rendu demandé
+// (en-tête avec URL boutique, sections "COMMANDE" / "INFO CLIENT",
+// séparateurs). Le format de lien Maps est désormais
+// "https://www.google.com/maps/search/?api=1&query=lat,lon" (format
+// officiel Google, plus fiable qu'un simple "?q=" sur mobile).
+//
+// AJOUT 2026-07-30 — Message dédié au LIVREUR (genererMessageLivreur),
+// envoyé quand le restaurant passe une commande de "confirmée" à
+// "en préparation" et assigne un livreur. Contient les mêmes informations
+// de localisation (adresse + Maps + Waze) + le montant à encaisser.
+//
+// Deux canaux, TOUJOURS les deux disponibles pour chaque message
+// (commande restaurant ET livraison livreur) :
+//   1) Envoi automatique via l'API WhatsApp Business Cloud officielle
+//      (envoyerNotificationWhatsApp) — silencieux, ne bloque jamais la
+//      requête (best-effort), fonctionne seulement si
+//      WHATSAPP_API_TOKEN / WHATSAPP_PHONE_ID sont configurés.
+//   2) Lien wa.me de redirection (genererLienWhatsApp) — TOUJOURS généré,
+//      c'est le filet de sécurité qui doit fonctionner à 100% du temps :
+//      le navigateur (client ou dashboard) ouvre WhatsApp avec le message
+//      pré-rempli, prêt à être envoyé manuellement.
 //
 // AJOUT 2026-07-29 — Fonctions de notification paiement
 // (audit 07-notifications-inapp-bdd.md §4.1) :
@@ -32,15 +50,35 @@ interface WhatsAppMessageResult {
   error?: string
 }
 
+const SEPARATEUR = '━━━━━━━━━━━━━━'
+
 // Formater le montant avec devise
 function formatMontant(montant: number, devise: string = 'FCFA'): string {
   return `${montant.toLocaleString('fr-FR')} ${devise}`
 }
 
+// §Localisation — Construit les liens Google Maps / Waze à partir de
+// coordonnées GPS. Format Google Maps officiel ("maps/search/?api=1&query=")
+// plutôt que l'ancien "maps.google.com/?q=", plus fiable sur mobile
+// (ouvre systématiquement l'app Maps ou le fallback web, sans ambiguïté
+// d'interprétation de l'URL par certains navigateurs Android).
+function construireLiensLocalisation(
+  latitude: number | null | undefined,
+  longitude: number | null | undefined
+): { mapsUrl: string; wazeUrl: string } {
+  if (latitude === null || latitude === undefined || longitude === null || longitude === undefined) {
+    return { mapsUrl: '', wazeUrl: '' }
+  }
+  return {
+    mapsUrl: `https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}`,
+    wazeUrl: `https://waze.com/ul?ll=${latitude},${longitude}&navigate=yes`
+  }
+}
+
 // §1.9 — Générer le résumé de commande pour WhatsApp (livraison OU à emporter)
-// FIX : "origin" doit être fourni par l'appelant (ex: new URL(c.req.url).origin
-// dans le handler Hono) pour que le lien de suivi pointe vers le bon domaine
-// quel que soit l'environnement (production, preview, domaine personnalisé).
+// Gabarit aligné sur la maquette validée : en-tête avec numéro + URL boutique,
+// sections "COMMANDE" et "INFO CLIENT" séparées par des lignes horizontales,
+// liens Maps/Waze toujours présents dès que des coordonnées existent.
 export function genererMessageCommande(
   commande: Commande,
   tenant: Tenant,
@@ -48,68 +86,127 @@ export function genererMessageCommande(
   modeLivraison: 'livraison' | 'emporter' = 'livraison'
 ): string {
   const items = commande.items_json as ItemCommandeJson[]
+  const isEmporter = modeLivraison === 'emporter'
+
   const lignesItems = items
     .map((item) => {
-      let ligne = `  - ${item.nom}`
+      let ligne = `• ${item.nom}`
       if (item.variante_nom) ligne += ` (${item.variante_nom})`
-      ligne += ` x${item.quantite} = ${formatMontant(item.sous_total)}`
+      ligne += ` ×${item.quantite} — ${formatMontant(item.sous_total)}`
       return ligne
     })
     .join('\n')
 
-  const isEmporter = modeLivraison === 'emporter'
+  const { mapsUrl, wazeUrl } = !isEmporter
+    ? construireLiensLocalisation(commande.client_latitude, commande.client_longitude)
+    : { mapsUrl: '', wazeUrl: '' }
 
-  const mapsUrl = !isEmporter && commande.client_latitude && commande.client_longitude
-    ? `https://maps.google.com/?q=${commande.client_latitude},${commande.client_longitude}`
-    : ''
-  const wazeUrl = !isEmporter && commande.client_latitude && commande.client_longitude
-    ? `https://waze.com/ul?ll=${commande.client_latitude},${commande.client_longitude}&navigate=yes`
-    : ''
+  const numeroCommande = commande.id.slice(0, 8).toUpperCase()
+  const boutiqueUrl = `${origin}/${tenant.slug}`
+  const suiviUrl = `${origin}/suivi/${commande.token_suivi}`
 
-  // En-tête avec mode de commande
-  let message = `*Nouvelle commande #${commande.id.slice(0, 8).toUpperCase()}*\n`
-  message += `Mode : *${isEmporter ? '🛍️ À emporter' : '🛵 Livraison'}*\n`
-  message += `Restaurant : *${tenant.nom}*\n\n`
+  const fraisLivraisonLigne =
+    !isEmporter && commande.frais_livraison > 0
+      ? `\n_(dont frais de livraison : ${formatMontant(commande.frais_livraison)})_`
+      : ''
+
+  const libellePaiement = isEmporter
+    ? 'Espèces / Mobile money sur place'
+    : 'Espèces à la livraison'
+
+  let message = `*COMMANDE #${numeroCommande}*\n${boutiqueUrl}\n\n`
+  message += `${SEPARATEUR}\n`
+  message += `*COMMANDE*\n`
+  message += `*Mode :* ${isEmporter ? '🛍️ À emporter' : '🛵 Livraison'}\n\n`
+  message += `${lignesItems}\n\n`
+  message += `*Total : ${formatMontant(commande.montant_total)}*${fraisLivraisonLigne}\n`
+  message += `*Paiement :* ${libellePaiement}\n\n`
+
+  message += `${SEPARATEUR}\n`
+  message += `*INFO CLIENT*\n`
   message += `*Client :* ${commande.client_nom}\n`
-  message += `*Tel :* ${commande.client_telephone}\n`
+  message += `*Tél :* ${commande.client_telephone}\n`
 
   if (isEmporter) {
-    // Mode à emporter : pas d'adresse ni de carte
     message += `*Retrait :* À récupérer sur place\n`
   } else {
-    // Mode livraison : adresse + liens cartographiques
     if (commande.client_adresse) {
       message += `*Adresse :* ${commande.client_adresse}\n`
     }
-    if (mapsUrl) message += `*Google Maps :* ${mapsUrl}\n`
+    // FIX — les liens Maps/Waze ne sont ajoutés QUE si des coordonnées GPS
+    // existent réellement (cf. construireLiensLocalisation). Si le client
+    // n'a fourni ni géolocalisation ni position sur la carte, ces lignes
+    // sont absentes — voir boutique.js où la géolocalisation est désormais
+    // rendue obligatoire pour la livraison, précisément pour éviter ce cas.
+    if (mapsUrl) message += `*Maps :* ${mapsUrl}\n`
     if (wazeUrl) message += `*Waze :* ${wazeUrl}\n`
   }
 
-  message += `\n*Commande :*\n${lignesItems}\n\n`
-
-  const sousTotal = commande.montant_total - (isEmporter ? 0 : commande.frais_livraison)
-  message += `*Sous-total :* ${formatMontant(sousTotal)}\n`
-
-  if (!isEmporter && commande.frais_livraison > 0) {
-    message += `*Frais livraison :* ${formatMontant(commande.frais_livraison)}\n`
-  }
-
-  message += `*TOTAL :* ${formatMontant(commande.montant_total)}\n`
-  message += `*Paiement :* ${isEmporter ? 'Espèces / Mobile money sur place' : 'Espèces à la livraison'}\n`
-  // FIX : domaine dynamique au lieu de "https://monmenu.app" en dur.
-  message += `\n*Suivi :* ${origin}/suivi/${commande.token_suivi}`
+  message += `\n${SEPARATEUR}\n`
+  message += `*Suivi :* ${suiviUrl}`
 
   return message
 }
 
-// URL WhatsApp pré-remplie pour le client
+// AJOUT — Message dédié au LIVREUR, envoyé quand le restaurant passe une
+// commande de "confirmée" à "en préparation" avec un livreur assigné.
+// Contient les informations nécessaires à la livraison uniquement : contact
+// client, adresse + Maps + Waze, contenu de la commande, montant à encaisser.
+export function genererMessageLivreur(
+  commande: Commande,
+  tenant: Tenant,
+  origin: string
+): string {
+  const items = commande.items_json as ItemCommandeJson[]
+  const lignesItems = items
+    .map((item) => {
+      let ligne = `• ${item.nom}`
+      if (item.variante_nom) ligne += ` (${item.variante_nom})`
+      ligne += ` ×${item.quantite}`
+      return ligne
+    })
+    .join('\n')
+
+  const { mapsUrl, wazeUrl } = construireLiensLocalisation(commande.client_latitude, commande.client_longitude)
+  const numeroCommande = commande.id.slice(0, 8).toUpperCase()
+  const boutiqueUrl = `${origin}/${tenant.slug}`
+
+  let message = `*🛵 LIVRAISON À EFFECTUER — Commande #${numeroCommande}*\n`
+  message += `Restaurant : *${tenant.nom}* (${boutiqueUrl})\n\n`
+
+  message += `${SEPARATEUR}\n`
+  message += `*INFO CLIENT*\n`
+  message += `*Client :* ${commande.client_nom}\n`
+  message += `*Tél :* ${commande.client_telephone}\n`
+  if (commande.client_adresse) {
+    message += `*Adresse :* ${commande.client_adresse}\n`
+  }
+  if (mapsUrl) message += `*Maps :* ${mapsUrl}\n`
+  if (wazeUrl) message += `*Waze :* ${wazeUrl}\n`
+
+  message += `\n${SEPARATEUR}\n`
+  message += `*CONTENU DE LA COMMANDE*\n`
+  message += `${lignesItems}\n\n`
+  message += `*Montant à encaisser : ${formatMontant(commande.montant_total)}*\n`
+  message += `*Paiement :* Espèces à la livraison\n`
+
+  message += `\n${SEPARATEUR}\n`
+  message += `Merci de confirmer la prise en charge auprès du restaurant.`
+
+  return message
+}
+
+// URL WhatsApp pré-remplie (client → restaurant, ou restaurant → livreur).
+// TOUJOURS générée : c'est le filet de sécurité garanti fonctionnel, même
+// si l'API WhatsApp Business officielle n'est pas configurée ou échoue.
 export function genererLienWhatsApp(numero: string, message: string): string {
   const numeroNettoye = numero.replace(/\D/g, '')
   return `https://wa.me/${numeroNettoye}?text=${encodeURIComponent(message)}`
 }
 
-// Envoyer via API WhatsApp Business Cloud
-// FIX : champs optionnels pour matcher l'interface Env réelle (voir en-tête de fichier).
+// Envoyer via API WhatsApp Business Cloud (canal 1 — automatique, best-effort).
+// Ne doit JAMAIS bloquer le flux principal : toujours appelé en
+// c.executionCtx.waitUntil(...) par les routes qui l'utilisent.
 export async function envoyerNotificationWhatsApp(
   numero: string,
   message: string,
@@ -166,11 +263,6 @@ export async function envoyerNotificationWhatsApp(
 
 /**
  * Notifie le restaurant par WhatsApp que son abonnement a été confirmé.
- *
- * @param env - Variables d'environnement Cloudflare Workers
- * @param tenant - Données du tenant (nom + numéro WhatsApp)
- * @param plan - Plan activé (nom)
- * @param dateFin - Date de fin d'abonnement (ISO 8601)
  */
 export async function notifierPaiementConfirme(
   env: { WHATSAPP_API_TOKEN?: string; WHATSAPP_PHONE_ID?: string },
@@ -193,10 +285,6 @@ export async function notifierPaiementConfirme(
 
 /**
  * Notifie le restaurant par WhatsApp que sa preuve de paiement a été rejetée.
- *
- * @param env - Variables d'environnement Cloudflare Workers
- * @param tenant - Données du tenant (nom + numéro WhatsApp)
- * @param motif - Motif de rejet (optionnel)
  */
 export async function notifierPaiementRejete(
   env: { WHATSAPP_API_TOKEN?: string; WHATSAPP_PHONE_ID?: string },
@@ -216,9 +304,6 @@ export async function notifierPaiementRejete(
 /**
  * Notifie le restaurant par WhatsApp du blocage automatique après 72h
  * sans confirmation de paiement (déclenché par le cron).
- *
- * @param env - Variables d'environnement Cloudflare Workers
- * @param tenant - Données du tenant (nom + numéro WhatsApp)
  */
 export async function notifierBlocageAutomatique(
   env: { WHATSAPP_API_TOKEN?: string; WHATSAPP_PHONE_ID?: string },
