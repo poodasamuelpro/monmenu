@@ -3,6 +3,17 @@
 // i18n retiré — textes en français uniquement
 // Dark mode retiré — mode clair forcé
 // Design unifié selon charte mobile clair (référence)
+// CORRECTION — les scripts loadPartenaires() et
+// loadBoutiquesShowcase() construisaient leur HTML avec des
+// onerror="..." contenant des apostrophes mal échappées (\' au
+// lieu de \\'), ce qui cassait la syntaxe JS générée dans le
+// <script> final et empêchait TOUT le script de s'exécuter
+// (erreur silencieuse en console) — donc les sections logos et
+// screenshots ne s'affichaient jamais, quel que soit le contenu
+// renvoyé par l'API. Corrigé en construisant les éléments via
+// document.createElement + assignation de .onerror en JS natif
+// (pas de HTML concaténé avec attribut inline), ce qui élimine
+// définitivement ce risque d'échappement à répétition.
 // =============================================================
 import { renderHead, jsonLdOrganization, jsonLdWebSite } from '../components/head'
 import { renderNav } from '../components/nav'
@@ -450,8 +461,8 @@ export function renderHomePage(nomProjet: string): string {
 
             return \`
             <div class="bg-white rounded-2xl p-8 border \${accentBorder} shadow-sm flex flex-col relative">
-              \${isPopular ? '<span class=\\"absolute -top-4 left-1/2 -translate-x-1/2 bg-red-600 text-white text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-widest\\">Le plus populaire</span>' : ''}
-              \${isTopTier ? '<span class=\\"absolute -top-4 left-1/2 -translate-x-1/2 bg-blue-600 text-white text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-widest\\">Meilleure valeur</span>' : ''}
+              \${isPopular ? '<span class="absolute -top-4 left-1/2 -translate-x-1/2 bg-red-600 text-white text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-widest">Le plus populaire</span>' : ''}
+              \${isTopTier ? '<span class="absolute -top-4 left-1/2 -translate-x-1/2 bg-blue-600 text-white text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-widest">Meilleure valeur</span>' : ''}
               <h3 class="text-lg font-bold text-gray-900 mb-2">\${p.nom}</h3>
               \${f.sous_titre ? \`<p class="text-xs text-gray-500 mb-4">\${f.sous_titre}</p>\` : ''}
               <div class="mb-6">
@@ -460,7 +471,7 @@ export function renderHomePage(nomProjet: string): string {
               </div>
               <ul class="space-y-4 mb-8 flex-grow">
                 \${features.map(function (feat) {
-                  return '<li class=\\"flex items-start gap-3 text-sm text-gray-600\\"><i class=\\"fa-solid fa-check text-green-500 mt-0.5\\" aria-hidden=\\"true\\"></i><span>' + feat + '</span></li>';
+                  return '<li class="flex items-start gap-3 text-sm text-gray-600"><i class="fa-solid fa-check text-green-500 mt-0.5" aria-hidden="true"></i><span>' + feat + '</span></li>';
                 }).join('')}
               </ul>
               <a href="/inscription?plan=\${p.id}" class="w-full py-3 rounded-xl font-bold text-center transition-all bg-red-600 text-white hover:bg-red-700 shadow-sm">
@@ -478,6 +489,10 @@ export function renderHomePage(nomProjet: string): string {
   </script>
 
   <!-- Script pour charger le carrousel des restaurants partenaires -->
+  <!-- CORRIGÉ — construction des éléments via document.createElement -->
+  <!-- + assignation directe de .onerror en JS (plus de HTML concaténé -->
+  <!-- avec attribut onerror="..." qui nécessitait 3 niveaux -->
+  <!-- d'échappement de guillemets et cassait tout le script). -->
   <script>
     async function loadPartenaires() {
       const container = document.getElementById('partenaires-container');
@@ -492,27 +507,58 @@ export function renderHomePage(nomProjet: string): string {
 
         if (!tenants.length) return;
 
-        const itemHtml = function (tnt) {
-          const nom = String(tnt.nom || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+        function buildItem(tnt) {
+          const nom = String(tnt.nom || '');
           const slug = String(tnt.slug || '');
           const logo = String(tnt.logo_url || '');
           const estEssai = tnt.statut === 'essai';
-          const badge = estEssai
-            ? '<span class=\\"absolute -top-1.5 -right-1.5 bg-blue-600 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full leading-none z-10\\">Nouveau</span>'
-            : '';
-          return '<a href="/' + slug + '" title="' + nom + '" data-slug="' + slug + '" ' +
-            'class=\\"relative flex-shrink-0 flex items-center justify-center h-14 w-32 opacity-90 hover:opacity-100 hover:-translate-y-0.5 transition-all duration-300\\">' +
-            badge +
-            '<img src="' + logo + '" alt="' + nom + '" class=\\"max-h-14 max-w-full object-contain\\" loading=\\"lazy\\" ' +
-            'onerror=\\"console.warn(\'[partenaires] logo indisponible pour\', this.closest(\'a\').dataset.slug, this.src); this.closest(\'a\').remove()\\"></a>';
-        };
 
-        track.innerHTML = tenants.map(itemHtml).join('') + tenants.map(itemHtml).join('');
+          const a = document.createElement('a');
+          a.href = '/' + slug;
+          a.title = nom;
+          a.dataset.slug = slug;
+          a.className = 'relative flex-shrink-0 flex items-center justify-center h-14 w-32 opacity-90 hover:opacity-100 hover:-translate-y-0.5 transition-all duration-300';
+
+          if (estEssai) {
+            const badge = document.createElement('span');
+            badge.className = 'absolute -top-1.5 -right-1.5 bg-blue-600 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full leading-none z-10';
+            badge.textContent = 'Nouveau';
+            a.appendChild(badge);
+          }
+
+          const img = document.createElement('img');
+          img.src = logo;
+          img.alt = nom;
+          img.loading = 'lazy';
+          img.className = 'max-h-14 max-w-full object-contain';
+          img.onerror = function () {
+            console.warn('[partenaires] logo indisponible pour', slug, img.src);
+            a.remove();
+          };
+          a.appendChild(img);
+
+          return a;
+        }
+
+        const fragment = document.createDocumentFragment();
+        // Deux passages pour un défilement continu (boucle infinie).
+        tenants.concat(tenants).forEach(function (tnt) {
+          fragment.appendChild(buildItem(tnt));
+        });
+        track.innerHTML = '';
+        track.appendChild(fragment);
         track.style.animationDuration = Math.max(15, tenants.length * 3) + 's';
 
+        // Laisser le temps aux <img> de tenter le chargement (et de se
+        // retirer via onerror en cas d'échec) avant de décider si la
+        // section vaut la peine d'être montrée.
         setTimeout(function () {
           const survivants = track.querySelectorAll('a').length;
-          if (survivants > 0) container.classList.remove('hidden');
+          if (survivants > 0) {
+            container.classList.remove('hidden');
+          } else {
+            container.classList.add('hidden');
+          }
         }, 800);
       } catch (err) {
         console.error('Erreur chargement partenaires:', err);
@@ -522,6 +568,8 @@ export function renderHomePage(nomProjet: string): string {
   </script>
 
   <!-- Script pour charger le carrousel des captures d'écran boutique -->
+  <!-- CORRIGÉ — même approche : construction via document.createElement -->
+  <!-- pour éliminer le HTML concaténé fragile. -->
   <script>
     async function loadBoutiquesShowcase() {
       const container = document.getElementById('boutiques-showcase-container');
@@ -536,36 +584,82 @@ export function renderHomePage(nomProjet: string): string {
 
         if (!tenants.length) return;
 
-        const phoneCard = function (tnt) {
-          const nom = String(tnt.nom || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+        function buildPhoneCard(tnt) {
+          const nom = String(tnt.nom || '');
           const slug = String(tnt.slug || '');
-          return (
-            '<div class=\\"flex-shrink-0 w-[200px]\\" data-slug=\\"' + slug + '\\">' +
-              '<a href=\\"/' + slug + '\\" class=\\"block group\\" title=\\"' + nom + '\\">' +
-                '<div class=\\"relative mx-auto w-[200px] h-[410px] rounded-[36px] bg-gray-900 p-[10px] shadow-2xl group-hover:scale-[1.03] transition-transform\\">' +
-                  '<div class=\\"absolute -left-[2px] top-20 w-[3px] h-8 bg-gray-700 rounded-l\\"></div>' +
-                  '<div class=\\"absolute -left-[2px] top-32 w-[3px] h-12 bg-gray-700 rounded-l\\"></div>' +
-                  '<div class=\\"absolute -right-[2px] top-28 w-[3px] h-16 bg-gray-700 rounded-r\\"></div>' +
-                  '<div class=\\"relative w-full h-full rounded-[26px] overflow-hidden bg-white\\">' +
-                    '<img src=\\"/api/v1/screenshots/' + slug + '\\" alt=\\"Aperçu boutique ' + nom + '\\" loading=\\"lazy\\" ' +
-                    'class=\\"w-full h-full object-cover object-top\\" ' +
-                    'onerror=\\"console.warn(\'[boutiques-showcase] screenshot indisponible pour\', \'' + slug + '\', this.src); this.closest(\'.flex-shrink-0\').remove()\\"/>' +
-                    '<div class=\\"absolute left-1/2 -translate-x-1/2 top-0 w-24 h-6 bg-gray-900 rounded-b-2xl\\"></div>' +
-                    '<div class=\\"absolute left-1/2 -translate-x-1/2 bottom-1.5 w-24 h-1 bg-gray-900/70 rounded-full\\"></div>' +
-                  '</div>' +
-                '</div>' +
-                '<p class=\\"text-center text-sm font-semibold text-gray-700 mt-4 truncate\\">' + nom + '</p>' +
-              '</a>' +
-            '</div>'
-          );
-        };
 
-        track.innerHTML = tenants.map(phoneCard).join('') + tenants.map(phoneCard).join('');
+          const wrapper = document.createElement('div');
+          wrapper.className = 'flex-shrink-0 w-[200px]';
+          wrapper.dataset.slug = slug;
+
+          const a = document.createElement('a');
+          a.href = '/' + slug;
+          a.title = nom;
+          a.className = 'block group';
+
+          const phone = document.createElement('div');
+          phone.className = 'relative mx-auto w-[200px] h-[410px] rounded-[36px] bg-gray-900 p-[10px] shadow-2xl group-hover:scale-[1.03] transition-transform';
+
+          const btnVolume1 = document.createElement('div');
+          btnVolume1.className = 'absolute -left-[2px] top-20 w-[3px] h-8 bg-gray-700 rounded-l';
+          const btnVolume2 = document.createElement('div');
+          btnVolume2.className = 'absolute -left-[2px] top-32 w-[3px] h-12 bg-gray-700 rounded-l';
+          const btnPower = document.createElement('div');
+          btnPower.className = 'absolute -right-[2px] top-28 w-[3px] h-16 bg-gray-700 rounded-r';
+
+          const screen = document.createElement('div');
+          screen.className = 'relative w-full h-full rounded-[26px] overflow-hidden bg-white';
+
+          const img = document.createElement('img');
+          img.src = '/api/v1/screenshots/' + slug;
+          img.alt = 'Aperçu boutique ' + nom;
+          img.loading = 'lazy';
+          img.className = 'w-full h-full object-cover object-top';
+          img.onerror = function () {
+            console.warn('[boutiques-showcase] screenshot indisponible pour', slug, img.src);
+            wrapper.remove();
+          };
+
+          const notch = document.createElement('div');
+          notch.className = 'absolute left-1/2 -translate-x-1/2 top-0 w-24 h-6 bg-gray-900 rounded-b-2xl';
+          const homeIndicator = document.createElement('div');
+          homeIndicator.className = 'absolute left-1/2 -translate-x-1/2 bottom-1.5 w-24 h-1 bg-gray-900/70 rounded-full';
+
+          screen.appendChild(img);
+          screen.appendChild(notch);
+          screen.appendChild(homeIndicator);
+
+          phone.appendChild(btnVolume1);
+          phone.appendChild(btnVolume2);
+          phone.appendChild(btnPower);
+          phone.appendChild(screen);
+
+          const label = document.createElement('p');
+          label.className = 'text-center text-sm font-semibold text-gray-700 mt-4 truncate';
+          label.textContent = nom;
+
+          a.appendChild(phone);
+          a.appendChild(label);
+          wrapper.appendChild(a);
+
+          return wrapper;
+        }
+
+        const fragment = document.createDocumentFragment();
+        tenants.concat(tenants).forEach(function (tnt) {
+          fragment.appendChild(buildPhoneCard(tnt));
+        });
+        track.innerHTML = '';
+        track.appendChild(fragment);
         track.style.animationDuration = Math.max(25, tenants.length * 6) + 's';
 
         setTimeout(function () {
           const survivantes = track.querySelectorAll('.flex-shrink-0').length;
-          if (survivantes > 0) container.classList.remove('hidden');
+          if (survivantes > 0) {
+            container.classList.remove('hidden');
+          } else {
+            container.classList.add('hidden');
+          }
         }, 800);
       } catch (err) {
         console.error('Erreur chargement showcase boutiques:', err);
