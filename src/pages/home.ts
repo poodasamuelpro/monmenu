@@ -606,7 +606,7 @@ export function renderHomePage(nomProjet: string, locale: string = 'fr'): string
         // section vaut la peine d'être montrée.
         setTimeout(function () {
           const survivants = track.querySelectorAll('a').length;
-          if (survivants < 3) {
+          if (survivants === 0) {
             container.classList.add('hidden');
           } else {
             container.classList.remove('hidden');
@@ -677,7 +677,7 @@ export function renderHomePage(nomProjet: string, locale: string = 'fr'): string
 
         setTimeout(function () {
           const survivantes = track.querySelectorAll('.flex-shrink-0').length;
-          if (survivantes < 3) {
+          if (survivantes === 0) {
             container.classList.add('hidden');
           } else {
             container.classList.remove('hidden');
