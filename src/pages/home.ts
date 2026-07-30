@@ -6,6 +6,12 @@
 // carrousel de vraies captures d'écran mobile (thum.io, rafraîchies
 // chaque nuit par le cron — voir api-cron.ts), affichées dans un
 // cadre iPhone en CSS pur (encoche, bords arrondis, indicateur home).
+// CORRECTION 2026-07-30 — textes du carrousel screenshots reformulés
+// (accent couleur + texte plus complet), et logs de debug ajoutés
+// sur les onerror des logos partenaires + screenshots pour diagnostiquer
+// les images qui ne chargent pas (voir aussi masquage auto de la
+// section si moins de 3 images survivent, pour éviter un titre affiché
+// au-dessus d'un carrousel vide).
 // =============================================================
 import { renderHead, jsonLdOrganization, jsonLdWebSite } from '../components/head'
 import { renderNav } from '../components/nav'
@@ -36,8 +42,16 @@ export function renderHomePage(nomProjet: string, locale: string = 'fr'): string
     : ['Sans engagement', 'Prêt en quelques minutes', 'Support en français']
 
   const partenairesLabel = isEn ? 'Trusted by restaurants across the region' : 'Ils nous font confiance'
-  const showcaseTitle = isEn ? 'Your future customers, on their phone' : 'Vos futurs clients, sur leur téléphone'
-  const showcaseSubtitle = isEn ? 'Real preview of shops created with MonMenu — updated every night.' : 'Aperçu réel des boutiques créées avec MonMenu — mis à jour chaque nuit.'
+
+  // CORRECTION 2026-07-30 — titre + sous-titre du carrousel "boutiques en
+  // action" reformulés : accent couleur sur un mot-clé (cohérent avec le
+  // hero), texte plus complet et plus professionnel.
+  const showcaseTitle = isEn
+    ? `Your shop, <span class="text-red-600 dark:text-red-400">in the spotlight</span>`
+    : `Vos boutiques, <span class="text-red-600 dark:text-red-400">en vitrine</span>`
+  const showcaseSubtitle = isEn
+    ? 'A preview of what your customers will see the moment they open your MonMenu shop.'
+    : 'Un aperçu de ce que vos clients verront dès qu\'ils ouvriront votre boutique MonMenu.'
 
   return `${renderHead(
     isEn ? `${nomProjet} — Order online at your favourite restaurants` : `${nomProjet} — Commandez en ligne dans vos restaurants préférés`,
@@ -549,6 +563,11 @@ export function renderHomePage(nomProjet: string, locale: string = 'fr'): string
   </script>
 
   <!-- Script pour charger le carrousel des restaurants partenaires -->
+  <!-- CORRECTION 2026-07-30 — ajout d'un console.warn sur chaque échec  -->
+  <!-- de logo (pour voir dans la console lequel casse et pourquoi), et  -->
+  <!-- masquage automatique de toute la section si moins de 3 logos      -->
+  <!-- survivent, pour éviter d'afficher "Ils nous font confiance"       -->
+  <!-- au-dessus d'un carrousel quasi vide.                              -->
   <script>
     async function loadPartenaires() {
       const container = document.getElementById('partenaires-container');
@@ -571,18 +590,28 @@ export function renderHomePage(nomProjet: string, locale: string = 'fr'): string
           const badge = estEssai
             ? '<span class="absolute -top-1.5 -right-1.5 bg-blue-600 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full leading-none z-10">Nouveau</span>'
             : '';
-          return '<a href="/' + slug + '" title="' + nom + '" ' +
+          return '<a href="/' + slug + '" title="' + nom + '" data-slug="' + slug + '" ' +
             'class="relative flex-shrink-0 flex items-center justify-center h-14 w-32 grayscale hover:grayscale-0 opacity-70 hover:opacity-100 transition-all duration-300">' +
             badge +
             '<img src="' + logo + '" alt="' + nom + '" class="max-h-14 max-w-full object-contain" loading="lazy" ' +
-            'onerror="this.closest(\\'a\\').remove()">' +
+            'onerror="console.warn(\\'[partenaires] logo indisponible pour\\', this.closest(\\'a\\').dataset.slug, this.src); this.closest(\\'a\\').remove()">' +
             '</a>';
         };
 
         track.innerHTML = tenants.map(itemHtml).join('') + tenants.map(itemHtml).join('');
         track.style.animationDuration = Math.max(15, tenants.length * 3) + 's';
 
-        container.classList.remove('hidden');
+        // Laisser le temps aux <img> de tenter le chargement (et de se
+        // retirer via onerror en cas d'échec) avant de décider si la
+        // section vaut la peine d'être montrée.
+        setTimeout(function () {
+          const survivants = track.querySelectorAll('a').length;
+          if (survivants < 3) {
+            container.classList.add('hidden');
+          } else {
+            container.classList.remove('hidden');
+          }
+        }, 800);
       } catch (err) {
         console.error('Erreur chargement partenaires:', err);
       }
@@ -597,6 +626,8 @@ export function renderHomePage(nomProjet: string, locale: string = 'fr'): string
     // api-cron.ts + lib/screenshot.ts, via thum.io). Chaque carte est
     // masquée individuellement si son screenshot n'existe pas encore
     // (404) — état honnête, jamais d'image cassée affichée.
+    // CORRECTION 2026-07-30 — console.warn sur chaque échec + masquage
+    // de toute la section si moins de 3 captures survivent.
     async function loadBoutiquesShowcase() {
       const container = document.getElementById('boutiques-showcase-container');
       const track = document.getElementById('boutiques-showcase-track');
@@ -614,7 +645,7 @@ export function renderHomePage(nomProjet: string, locale: string = 'fr'): string
           const nom = String(tnt.nom || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
           const slug = String(tnt.slug || '');
           return (
-            '<div class="flex-shrink-0 w-[200px]">' +
+            '<div class="flex-shrink-0 w-[200px]" data-slug="' + slug + '">' +
               '<a href="/' + slug + '" class="block group" title="' + nom + '">' +
                 // Cadre iPhone : coque noire arrondie, encoche en haut,
                 // bouton latéral, indicateur home en bas — tout en CSS.
@@ -628,7 +659,7 @@ export function renderHomePage(nomProjet: string, locale: string = 'fr'): string
                   '<div class="relative w-full h-full rounded-[26px] overflow-hidden bg-white">' +
                     '<img src="/api/v1/screenshots/' + slug + '" alt="Aperçu boutique ' + nom + '" loading="lazy" ' +
                     'class="w-full h-full object-cover object-top" ' +
-                    'onerror="this.closest(\\'.flex-shrink-0\\').remove()">' +
+                    'onerror="console.warn(\\'[boutiques-showcase] screenshot indisponible pour\\', \\'' + slug + '\\', this.src); this.closest(\\'.flex-shrink-0\\').remove()">' +
                     // Encoche
                     '<div class="absolute left-1/2 -translate-x-1/2 top-0 w-24 h-6 bg-gray-900 rounded-b-2xl"></div>' +
                     // Indicateur home
@@ -644,7 +675,14 @@ export function renderHomePage(nomProjet: string, locale: string = 'fr'): string
         track.innerHTML = tenants.map(phoneCard).join('') + tenants.map(phoneCard).join('');
         track.style.animationDuration = Math.max(25, tenants.length * 6) + 's';
 
-        container.classList.remove('hidden');
+        setTimeout(function () {
+          const survivantes = track.querySelectorAll('.flex-shrink-0').length;
+          if (survivantes < 3) {
+            container.classList.add('hidden');
+          } else {
+            container.classList.remove('hidden');
+          }
+        }, 800);
       } catch (err) {
         console.error('Erreur chargement showcase boutiques:', err);
       }
