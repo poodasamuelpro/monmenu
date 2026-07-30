@@ -210,12 +210,12 @@ export function renderTarifsPage(nomProjet: string): string {
       <p class="text-red-100 mb-8">Plan Gratuit disponible immédiatement. Pas de carte bancaire requise.</p>
       <div class="flex flex-col sm:flex-row gap-3 justify-center">
         <a href="/inscription"
-          class="inline-flex items-center justify-center gap-2 bg-white text-red-600 font-bold px-8 py-3.5 rounded-xl hover:bg-red-50 transition-colors shadow-lg">
+          class="inline-flex items-center justify-center gap-2 bg-white text-red-600 font-bold px-8 py-3 rounded-xl hover:bg-red-50 transition-colors shadow-lg">
           <i class="fa-solid fa-store" aria-hidden="true"></i>
           Créer ma boutique gratuitement
         </a>
         <a href="/contact"
-          class="inline-flex items-center justify-center gap-2 border border-red-400 text-white font-semibold px-8 py-3.5 rounded-xl hover:bg-red-700 transition-colors">
+          class="inline-flex items-center justify-center gap-2 border border-red-400 text-white font-semibold px-8 py-3 rounded-xl hover:bg-red-700 transition-colors">
           <i class="fa-solid fa-envelope" aria-hidden="true"></i>
           Une question ? Contactez-nous
         </a>
