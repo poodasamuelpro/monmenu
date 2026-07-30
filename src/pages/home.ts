@@ -12,6 +12,10 @@
 // les images qui ne chargent pas (voir aussi masquage auto de la
 // section si moins de 3 images survivent, pour éviter un titre affiché
 // au-dessus d'un carrousel vide).
+// CORRECTION 2026-07-30 (bis) — Logos partenaires : suppression du
+// filtre `grayscale` (les logos s'affichaient en noir et blanc par
+// défaut, ne reprenant leur couleur qu'au survol souris — inutile ici,
+// remplacé par une légère ombre/décalage au survol).
 // =============================================================
 import { renderHead, jsonLdOrganization, jsonLdWebSite } from '../components/head'
 import { renderNav } from '../components/nav'
@@ -568,6 +572,9 @@ export function renderHomePage(nomProjet: string, locale: string = 'fr'): string
   <!-- masquage automatique de toute la section si moins de 3 logos      -->
   <!-- survivent, pour éviter d'afficher "Ils nous font confiance"       -->
   <!-- au-dessus d'un carrousel quasi vide.                              -->
+  <!-- CORRECTION 2026-07-30 (bis) — suppression du filtre grayscale sur -->
+  <!-- les logos : ils s'affichent désormais dans leurs couleurs exactes -->
+  <!-- en permanence (plus besoin de survol pour voir la couleur).       -->
   <script>
     async function loadPartenaires() {
       const container = document.getElementById('partenaires-container');
@@ -591,7 +598,7 @@ export function renderHomePage(nomProjet: string, locale: string = 'fr'): string
             ? '<span class="absolute -top-1.5 -right-1.5 bg-blue-600 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full leading-none z-10">Nouveau</span>'
             : '';
           return '<a href="/' + slug + '" title="' + nom + '" data-slug="' + slug + '" ' +
-            'class="relative flex-shrink-0 flex items-center justify-center h-14 w-32 grayscale hover:grayscale-0 opacity-70 hover:opacity-100 transition-all duration-300">' +
+            'class="relative flex-shrink-0 flex items-center justify-center h-14 w-32 opacity-90 hover:opacity-100 hover:-translate-y-0.5 transition-all duration-300">' +
             badge +
             '<img src="' + logo + '" alt="' + nom + '" class="max-h-14 max-w-full object-contain" loading="lazy" ' +
             'onerror="console.warn(\\'[partenaires] logo indisponible pour\\', this.closest(\\'a\\').dataset.slug, this.src); this.closest(\\'a\\').remove()">' +
