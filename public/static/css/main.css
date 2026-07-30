@@ -62,21 +62,7 @@ a, button { transition: all 0.15s ease; }
 .statut-annulee { background: #FEE2E2; color: #991B1B; }
 .statut-remboursee { background: #F3F4F6; color: #374151; }
 
-/* Mode sombre automatique */
-@media (prefers-color-scheme: dark) {
-  /* Activé uniquement si pas de classe override */
-  body:not(.light-mode) {
-    background-color: #111827;
-    color: #F9FAFB;
-  }
-  body:not(.light-mode) .bg-white { background-color: #1F2937 !important; }
-  body:not(.light-mode) .bg-gray-50 { background-color: #111827 !important; }
-  body:not(.light-mode) .border-gray-100 { border-color: #374151 !important; }
-  body:not(.light-mode) .text-gray-900 { color: #F9FAFB !important; }
-  body:not(.light-mode) .text-gray-700 { color: #D1D5DB !important; }
-  body:not(.light-mode) .text-gray-600 { color: #9CA3AF !important; }
-  body:not(.light-mode) .text-gray-500 { color: #6B7280 !important; }
-}
+/* Mode clair forcé — dark mode retiré */
 
 /* Spinner */
 @keyframes spin { to { transform: rotate(360deg); } }

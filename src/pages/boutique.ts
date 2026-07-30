@@ -190,17 +190,11 @@ export function renderBoutiquePage(tenant: TenantBoutique, nomProjet: string): s
         horaires: typeof tenant.pdv_horaires === 'string' ? tenant.pdv_horaires : null,
         url: boutiqueUrl
       }),
-      hreflangAlternates: [
-        { lang: 'fr', url: boutiqueUrl },
-        { lang: 'x-default', url: boutiqueUrl }
-      ],
       extra: `<!-- Leaflet CSS — carte interactive livraison -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.css">`
     }
   )}
-<!-- Forcer le mode light sur la boutique — pas de dark mode -->
-<script>document.documentElement.classList.remove('dark');</script>
-<body class="font-sans bg-gray-50 transition-colors">
+<body class="font-sans bg-gray-50">
   <style>
     :root {
       --color-primary: ${primaryColor};

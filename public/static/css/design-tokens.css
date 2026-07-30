@@ -1,0 +1,34 @@
+/* MonMenu — Design Tokens centralisés
+   Source unique de vérité pour les couleurs, rayons et ombres.
+   Chargé dans head.ts avant main.css sur toutes les pages.
+*/
+
+:root {
+  /* Couleurs primaires */
+  --color-primary: #DC2626;          /* red-600 */
+  --color-primary-hover: #B91C1C;    /* red-700 */
+  --color-primary-light: #FEE2E2;    /* red-100 */
+  --color-secondary: #1D4ED8;        /* blue-700 */
+  --color-secondary-hover: #1E40AF;  /* blue-800 */
+
+  /* Fonds de page */
+  --color-bg-page: #FFFFFF;          /* bg-white — pages marketing/vitrine */
+  --color-bg-subtle: #F9FAFB;        /* gray-50 — pages auth/formulaires */
+  --color-bg-card: #FFFFFF;
+  --color-border: #F3F4F6;           /* gray-100 */
+  --color-border-hover: #E5E7EB;     /* gray-200 */
+
+  /* Texte */
+  --color-text-primary: #111827;     /* gray-900 */
+  --color-text-secondary: #4B5563;   /* gray-600 */
+  --color-text-muted: #9CA3AF;       /* gray-400 */
+
+  /* Rayons — standardisation */
+  --radius-card: 1rem;               /* rounded-2xl partout pour les cartes */
+  --radius-btn: 0.75rem;             /* rounded-xl partout pour les boutons */
+  --radius-full: 9999px;             /* rounded-full pour les badges */
+
+  /* Ombres */
+  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.1);
+  --shadow-card-hover: 0 4px 12px rgba(0, 0, 0, 0.1);
+}

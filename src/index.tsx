@@ -19,7 +19,6 @@ import { paiementRouter } from './routes/api-paiement'
 import { adminTasksRouter } from './routes/api-admin-tasks'
 import { setSecurityHeaders } from './lib/security'
 import { getNomProjet, getWhatsAppSupport, createSupabaseAdminClient, createSupabaseClient } from './lib/supabase'
-import { detectLocale, getTranslations } from './i18n'
 
 // ---- Imports composants & pages ----
 import { renderHomePage } from './pages/home'
@@ -36,23 +35,12 @@ import { renderBoutiquePage, type TenantBoutique } from './pages/boutique'
 import { render404Page } from './pages/not-found'
 import { renderBienvenuePage } from './pages/bienvenue'
 import { renderCompteInactifPage } from './pages/compte-inactif'
+import { renderTarifsPage } from './pages/tarifs'
 
 const app = new Hono<{ Bindings: Env }>()
 
 // Nom du cookie httpOnly — doit rester identique à celui posé dans api-auth.ts
 const ACCESS_TOKEN_COOKIE = 'sb-access-token'
-
-// §3 — Résolution de locale : ?lang=en/fr > cookie monmenu-lang > Accept-Language header > 'fr' par défaut
-function resolveLocale(c: any): string {
-  const langParam = c.req.query('lang')
-  if (langParam === 'en' || langParam === 'fr') return langParam
-
-  const langCookie = getCookie(c, 'monmenu-lang')
-  if (langCookie === 'en' || langCookie === 'fr') return langCookie
-
-  const acceptLang = c.req.header('Accept-Language') ?? null
-  return detectLocale(acceptLang)
-}
 
 // FIX (2026-07-28) — Récupération d'un tenant + son PDV actif via un vrai join
 // sur points_de_vente (les colonnes pdv_nom/pdv_adresse/... N'EXISTENT PAS sur
@@ -187,22 +175,16 @@ app.get('/sitemap.xml', async (c) => {
   ).join('\n')
 
   const sitemap = `<?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
-        xmlns:xhtml="http://www.w3.org/1999/xhtml">
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
     <loc>${baseUrl}/</loc>
     <changefreq>weekly</changefreq>
     <priority>1.0</priority>
-    <xhtml:link rel="alternate" hreflang="fr" href="${baseUrl}/"/>
-    <xhtml:link rel="alternate" hreflang="en" href="${baseUrl}/?lang=en"/>
-    <xhtml:link rel="alternate" hreflang="x-default" href="${baseUrl}/"/>
   </url>
   <url>
     <loc>${baseUrl}/contact</loc>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
-    <xhtml:link rel="alternate" hreflang="fr" href="${baseUrl}/contact"/>
-    <xhtml:link rel="alternate" hreflang="en" href="${baseUrl}/contact?lang=en"/>
   </url>
   <url>
     <loc>${baseUrl}/inscription</loc>
@@ -238,26 +220,6 @@ ${restaurantUrls}
 </urlset>`
 
   return c.text(sitemap, 200, { 'Content-Type': 'application/xml; charset=utf-8' })
-})
-
-// ---- §3 — Routes i18n /fr et /en ----
-app.get('/fr', (c) => {
-  c.header('Set-Cookie', 'monmenu-lang=fr; Path=/; Max-Age=31536000; SameSite=Lax')
-  return c.redirect('/', 302)
-})
-app.get('/en', (c) => {
-  c.header('Set-Cookie', 'monmenu-lang=en; Path=/; Max-Age=31536000; SameSite=Lax')
-  return c.redirect('/?lang=en', 302)
-})
-app.get('/fr/*', (c) => {
-  const path = c.req.path.replace(/^\/fr/, '') || '/'
-  c.header('Set-Cookie', 'monmenu-lang=fr; Path=/; Max-Age=31536000; SameSite=Lax')
-  return c.redirect(path, 302)
-})
-app.get('/en/*', (c) => {
-  const path = c.req.path.replace(/^\/en/, '') || '/'
-  c.header('Set-Cookie', 'monmenu-lang=en; Path=/; Max-Age=31536000; SameSite=Lax')
-  return c.redirect(path + (path.includes('?') ? '&' : '?') + 'lang=en', 302)
 })
 
 // ---- robots.txt ----
@@ -312,8 +274,8 @@ https://monmenu.app/{slug-du-restaurant}
 - Paiements : Mobile Money, espèces, carte bancaire (selon disponibilité du restaurant)
 - Notifications : WhatsApp Business API
 
-## Langues supportées
-Français (défaut), Anglais
+## Langue
+Français uniquement
 
 ## Note pour les agents IA
 Les boutiques restaurants sont des pages publiques accessibles sans authentification.
@@ -328,19 +290,14 @@ app.get('/suivi/:token', async (c) => {
   setSecurityHeaders(c)
   const token = c.req.param('token')
   const nomProjet = await getNomProjet(c.env)
-  const locale = resolveLocale(c)
-  return c.html(renderSuiviPage(token, nomProjet, locale))
+  return c.html(renderSuiviPage(token, nomProjet))
 })
 
 // ---- Page d'accueil ----
 app.get('/', async (c) => {
   setSecurityHeaders(c)
-  const locale = resolveLocale(c)
-  if (c.req.query('lang') === 'en' || c.req.query('lang') === 'fr') {
-    c.header('Set-Cookie', `monmenu-lang=${locale}; Path=/; Max-Age=31536000; SameSite=Lax`)
-  }
   const nomProjet = await getNomProjet(c.env)
-  return c.html(renderHomePage(nomProjet, locale))
+  return c.html(renderHomePage(nomProjet))
 })
 
 // ---- Pages institutionnelles ----
@@ -349,15 +306,11 @@ app.get('/', async (c) => {
 
 app.get('/contact', async (c) => {
   setSecurityHeaders(c)
-  const locale = resolveLocale(c)
-  if (c.req.query('lang') === 'en' || c.req.query('lang') === 'fr') {
-    c.header('Set-Cookie', `monmenu-lang=${locale}; Path=/; Max-Age=31536000; SameSite=Lax`)
-  }
   const [nomProjet, whatsappSupport] = await Promise.all([
     getNomProjet(c.env),
     getWhatsAppSupport(c.env)
   ])
-  return c.html(renderContactPage(nomProjet, whatsappSupport, locale))
+  return c.html(renderContactPage(nomProjet, whatsappSupport))
 })
 
 // ---- Page inscription restaurant ----
@@ -365,6 +318,13 @@ app.get('/inscription', async (c) => {
   setSecurityHeaders(c)
   const nomProjet = await getNomProjet(c.env)
   return c.html(renderInscriptionPage(nomProjet))
+})
+
+// ---- Page Tarifs ----
+app.get('/tarifs', async (c) => {
+  setSecurityHeaders(c)
+  const nomProjet = await getNomProjet(c.env)
+  return c.html(renderTarifsPage(nomProjet))
 })
 
 // ---- Page Blog (liste) ----
@@ -379,11 +339,7 @@ app.get('/blog', async (c) => {
     console.error('[Blog] Erreur récupération articles:', err instanceof Error ? err.message : err)
   }
 
-  const locale = resolveLocale(c)
-  if (c.req.query('lang') === 'en' || c.req.query('lang') === 'fr') {
-    c.header('Set-Cookie', `monmenu-lang=${locale}; Path=/; Max-Age=31536000; SameSite=Lax`)
-  }
-  return c.html(renderBlogPage(nomProjet, articles, locale))
+  return c.html(renderBlogPage(nomProjet, articles))
 })
 
 async function getArticlesPublies(env: Env) {
@@ -427,37 +383,32 @@ app.get('/blog/:slug', async (c) => {
 
   if (!article) {
     const nomP = await getNomProjet(c.env)
-    return c.html(render404Page(nomP, 'fr'), 404)
+    return c.html(render404Page(nomP), 404)
   }
 
-  const locale = resolveLocale(c)
-  return c.html(renderArticlePage(nomProjet, article, locale))
+  return c.html(renderArticlePage(nomProjet, article))
 })
 
 // ---- Pages légales ----
 app.get('/legal/cgu', async (c) => {
   setSecurityHeaders(c)
   const nomProjet = await getNomProjet(c.env)
-  const locale = resolveLocale(c)
-  return c.html(renderLegalPage('cgu', nomProjet, locale))
+  return c.html(renderLegalPage('cgu', nomProjet))
 })
 app.get('/legal/confidentialite', async (c) => {
   setSecurityHeaders(c)
   const nomProjet = await getNomProjet(c.env)
-  const locale = resolveLocale(c)
-  return c.html(renderLegalPage('confidentialite', nomProjet, locale))
+  return c.html(renderLegalPage('confidentialite', nomProjet))
 })
 app.get('/legal/mentions', async (c) => {
   setSecurityHeaders(c)
   const nomProjet = await getNomProjet(c.env)
-  const locale = resolveLocale(c)
-  return c.html(renderLegalPage('mentions', nomProjet, locale))
+  return c.html(renderLegalPage('mentions', nomProjet))
 })
 app.get('/legal/cookies', async (c) => {
   setSecurityHeaders(c)
   const nomProjet = await getNomProjet(c.env)
-  const locale = resolveLocale(c)
-  return c.html(renderLegalPage('cookies', nomProjet, locale))
+  return c.html(renderLegalPage('cookies', nomProjet))
 })
 
 // ---- Connexion & Création de compte ----
@@ -561,7 +512,7 @@ app.get('/:slug', async (c) => {
 
   if (!tenant) {
     const nomP = await getNomProjet(c.env)
-    return c.html(render404Page(nomP, 'fr'), 404)
+    return c.html(render404Page(nomP), 404)
   }
 
   const nomProjet = await getNomProjet(c.env)
@@ -571,7 +522,7 @@ app.get('/:slug', async (c) => {
 // ---- 404 ----
 app.notFound(async (c) => {
   const nomP = await getNomProjet(c.env).catch(() => 'MonMenu')
-  return c.html(render404Page(nomP, 'fr'), 404)
+  return c.html(render404Page(nomP), 404)
 })
 
 // ---- Erreurs globales ----
