@@ -1,4 +1,4 @@
-# AUDIT PARCOURS INSCRIPTION — MonMenu
+# AUDIT PARCOURS INSCRIPTION — MonMenu 
 **Mission 5 — Audit complet du flux onboarding restaurateur**
 **Date :** 2026-07-28
 **Auditeur :** Agent IA (session audit+corrections)
