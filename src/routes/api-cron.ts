@@ -13,6 +13,11 @@
 // (toutes les 6h) pour réduire au maximum le délai d'application.
 // Référence : audit 04-plan-implementation.md §Phase 2 / 06-sync §6.1.
 //
+// AJOUT 2026-07-30 — capturerScreenshotsQuotidiens est désormais exportée
+// (elle était privée au module) afin de pouvoir être déclenchée à la
+// demande depuis la nouvelle route admin protégée (voir
+// api-admin-tasks.ts), sans attendre l'horaire du cron nocturne.
+//
 // Déclenchements (wrangler.jsonc, heures UTC) :
 //   "0 2 * * *"    → stats journalières
 //   "10 2 * * *"   → vérification essais expirés (essai → inactif)
@@ -381,11 +386,15 @@ async function bloquerPaiementsExpires(env: Env): Promise<void> {
 // bouclant automatiquement une fois le dernier atteint. Aucun état à
 // stocker : le numéro du jour (depuis l'epoch) modulo le nombre de
 // paquets détermine seul quel paquet est traité ce soir.
+//
+// CORRECTION 2026-07-30 — passée de "async function" (privée) à
+// "export async function" pour permettre son déclenchement manuel via
+// la route admin api-admin-tasks.ts, sans dupliquer la logique.
 // =====================================================================
-async function capturerScreenshotsQuotidiens(env: Env): Promise<void> {
+export async function capturerScreenshotsQuotidiens(env: Env): Promise<{ reussies: number; total: number }> {
   if (!env.R2_MEDIA) {
     console.warn('[CRON:screenshots] R2_MEDIA non configuré — capture ignorée.')
-    return
+    return { reussies: 0, total: 0 }
   }
 
   const adminClient = createSupabaseAdminClient(env)
@@ -403,12 +412,12 @@ async function capturerScreenshotsQuotidiens(env: Env): Promise<void> {
 
   if (error || !tousTenants) {
     console.error('[CRON:screenshots] Erreur récupération tenants:', error?.message)
-    return
+    return { reussies: 0, total: 0 }
   }
 
   if (tousTenants.length === 0) {
     console.log('[CRON:screenshots] Aucun tenant éligible.')
-    return
+    return { reussies: 0, total: 0 }
   }
 
   const nbPaquets = Math.ceil(tousTenants.length / MAX_SCREENSHOTS_PAR_EXECUTION)
@@ -440,4 +449,5 @@ async function capturerScreenshotsQuotidiens(env: Env): Promise<void> {
   }
 
   console.log(`[CRON:screenshots] Terminé : ${reussies}/${tenants.length} capture(s) réussie(s).`)
+  return { reussies, total: tenants.length }
 }
