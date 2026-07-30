@@ -1,18 +1,21 @@
-// MonMenu — Dashboard restaurant (v1.5.1 — fix normalisation numéro WhatsApp)
+// MonMenu — Dashboard restaurant (v1.6.0 — fix page Abonnement + notif livreur)
 //
 // CHANGELOG de ce fichier par rapport à la version précédente :
-//   ... (voir historique v1.4.0 / v1.5.0, inchangées)
-//   7. FIX WhatsApp — genererLienWhatsAppClient() normalise désormais le
-//      numéro du client avant de construire le lien wa.me (retire les
-//      espaces/tirets/parenthèses, convertit un préfixe "00" en "+" avant
-//      de le retirer). Corrige les liens qui ouvraient un navigateur sur
-//      une page WhatsApp "morte" au lieu de rediriger vers une conversation
-//      réelle, quand le numéro du client était saisi avec ce genre de
-//      formatage. Ne peut pas deviner un indicatif pays manquant.
-//   8. FIX Paramètres — le champ "Numéro WhatsApp" du restaurant impose
-//      désormais un format avec indicatif international (pattern + aide
-//      contextuelle), pour éviter les numéros locaux sans indicatif qui
-//      cassent tous les liens WhatsApp de la boutique.
+//   ... (voir historique v1.4.0 / v1.5.0 / v1.5.1, inchangées)
+//   9. FIX Abonnement — la section "/dashboard/abonnement" ne s'affichait
+//      jamais : initDashboard() ne reconnaissait pas cette route (fallback
+//      silencieux vers "commandes") et navigateTo() n'avait pas de "case
+//      'abonnement'". Ajout des deux + création de loadAbonnement() qui
+//      injecte le conteneur attendu par dashboard-paiement.js et délègue à
+//      initSectionAbonnement().
+//   10. AJOUT — Assignation d'un livreur à la commande au moment de cliquer
+//      sur "Préparer" (confirmée → en préparation), via une modale de choix.
+//      Si un livreur est choisi, un message WhatsApp lui est envoyé avec
+//      l'adresse + Maps + Waze du client, sur DEUX canaux (comme pour la
+//      notification client) :
+//        1) API WhatsApp Business officielle (silencieuse, gérée serveur)
+//        2) Redirection wa.me (garantie, ouverte en synchrone dans le clic
+//           pour éviter le blocage popup des navigateurs)
 'use strict';
 
 let currentSection = 'commandes';
@@ -178,6 +181,7 @@ async function initDashboard() {
   else if (path.includes('codes-promo')) navigateTo('codes-promo');
   else if (path.includes('pdv')) navigateTo('pdv');
   else if (path.includes('apparence')) navigateTo('apparence');
+  else if (path.includes('abonnement')) navigateTo('abonnement'); // FIX — route manquante
   else if (path.includes('parametres')) navigateTo('parametres');
   else navigateTo('commandes');
   document.querySelectorAll('.nav-link').forEach(link => {
@@ -214,7 +218,8 @@ function navigateTo(section) {
   const titles = {
     commandes:'Commandes', menu:'Gestion du menu', statistiques:'Statistiques',
     livreurs:'Livreurs', qrcode:'QR Code', apparence:'Apparence & Médias',
-    parametres:'Paramètres', 'codes-promo':'Codes promo', pdv:'Mon restaurant'
+    parametres:'Paramètres', 'codes-promo':'Codes promo', pdv:'Mon restaurant',
+    abonnement:'Abonnement' // FIX — libellé manquant
   };
   if (title) title.textContent = titles[section] || section;
   switch (section) {
@@ -227,6 +232,35 @@ function navigateTo(section) {
     case 'parametres':   loadParametres();   break;
     case 'codes-promo':  loadCodesPromo();   break;
     case 'pdv':          loadPdv();          break;
+    case 'abonnement':   loadAbonnement();   break; // FIX — case manquant
+  }
+}
+
+// ==============================
+// SECTION ABONNEMENT (FIX — section manquante du routing SPA)
+// ==============================
+// Injecte le conteneur attendu par dashboard-paiement.js
+// (#section-abonnement-content) puis délègue le rendu complet à
+// initSectionAbonnement(), définie dans dashboard-paiement.js.
+function loadAbonnement() {
+  const content = document.getElementById('dashboard-content');
+  if (!content) return;
+  content.innerHTML = `<div id="section-abonnement-content" class="max-w-2xl"></div>`;
+
+  if (typeof chargerPlansSelect === 'function') {
+    // Pré-charge le select de plans si le formulaire d'upload est déjà présent
+    // (no-op silencieux si l'élément n'existe pas encore, chargé à nouveau
+    // dans construireFormUpload une fois le HTML injecté).
+  }
+
+  if (typeof initSectionAbonnement === 'function') {
+    initSectionAbonnement();
+  } else {
+    content.innerHTML = `
+      <div class="bg-red-50 border border-red-100 rounded-xl p-4 text-center text-sm text-red-600">
+        <i class="fa-solid fa-circle-exclamation mr-1"></i>
+        Module de paiement indisponible (dashboard-paiement.js non chargé).
+      </div>`;
   }
 }
 
@@ -340,7 +374,10 @@ function renderCommandes(commandes, container, total) {
       actions.push(`<button onclick="changerStatut('${cmd.id}','confirmee')" class="bg-blue-600 text-white text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-blue-700"><i class="fa-solid fa-check mr-1"></i>Confirmer</button>`);
       actions.push(`<button onclick="changerStatut('${cmd.id}','annulee')" class="border border-red-200 text-red-600 text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-red-50">Annuler</button>`);
     }
-    if (cmd.statut === 'confirmee') actions.push(`<button onclick="changerStatut('${cmd.id}','en_preparation')" class="bg-orange-500 text-white text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-orange-600"><i class="fa-solid fa-fire-burner mr-1"></i>Préparer</button>`);
+    // FIX — "Préparer" ouvre désormais une modale de choix du livreur
+    // (choisirLivreurEtPreparer) au lieu d'appeler changerStatut() direct,
+    // pour pouvoir notifier le livreur assigné par WhatsApp.
+    if (cmd.statut === 'confirmee') actions.push(`<button onclick="choisirLivreurEtPreparer('${cmd.id}')" class="bg-orange-500 text-white text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-orange-600"><i class="fa-solid fa-fire-burner mr-1"></i>Préparer</button>`);
     if (cmd.statut === 'en_preparation') actions.push(`<button onclick="changerStatut('${cmd.id}','en_livraison')" class="bg-purple-600 text-white text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-purple-700"><i class="fa-solid fa-motorcycle mr-1"></i>En livraison</button>`);
     if (cmd.statut === 'en_livraison') actions.push(`<button onclick="changerStatut('${cmd.id}','livree')" class="bg-green-600 text-white text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-green-700"><i class="fa-solid fa-check-double mr-1"></i>Livrée</button>`);
     return `<div class="bg-white border border-gray-100 rounded-xl p-4 hover:shadow-sm transition-shadow mb-3">
@@ -404,64 +441,135 @@ function construireMessageConfirmationClient(cmd) {
 
 // §WhatsApp — Construit un lien wa.me vers le numéro du CLIENT (pas celui du
 // restaurant) avec le message pré-rempli.
-// FIX — le numéro est désormais normalisé via formatWhatsAppNumber() (au
-// lieu d'un simple retrait des caractères non numériques), pour corriger le
-// cas fréquent d'un numéro client saisi/enregistré avec un préfixe "00"
-// (ex: "0022670000000") qui générait un lien wa.me invalide, ouvrant une
-// page WhatsApp "morte" dans le navigateur au lieu d'une conversation.
 function genererLienWhatsAppClient(numero, message) {
   const numeroNettoye = formatWhatsAppNumber(numero);
   return `https://wa.me/${numeroNettoye}?text=${encodeURIComponent(message)}`;
 }
 
+// ==============================
+// AJOUT — Assignation livreur + notification WhatsApp (2 canaux)
+// ==============================
+
+// §Livreur — Ouvre une modale de choix de livreur avant de passer la
+// commande en "en_preparation". Si aucun livreur actif n'existe, on passe
+// directement au changement de statut (pas de notification possible).
+async function choisirLivreurEtPreparer(commandeId) {
+  let livreurs = [];
+  try {
+    const res = await fetch('/api/v1/dashboard/livreurs', { credentials: 'include' });
+    if (res.ok) {
+      const d = await res.json();
+      livreurs = (d.livreurs || []).filter(l => l.actif);
+    }
+  } catch { /* silencieux — on retombe sur le comportement sans livreur */ }
+
+  if (!livreurs.length) {
+    changerStatut(commandeId, 'en_preparation');
+    return;
+  }
+
+  showModal('Mettre en préparation', `
+    <form onsubmit="submitChoixLivreur(event,'${commandeId}')" class="space-y-4">
+      <div>
+        <label class="block text-sm font-semibold text-gray-700 mb-1.5">Assigner un livreur (optionnel)</label>
+        <select id="choix-livreur" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200">
+          <option value="">Ne pas assigner maintenant</option>
+          ${livreurs.map(l => `<option value="${l.id}">${escHtml(l.nom)}</option>`).join('')}
+        </select>
+        <p class="text-xs text-gray-400 mt-1">
+          Si vous assignez un livreur, un message WhatsApp avec l'adresse, l'itinéraire (Maps/Waze)
+          et le montant à encaisser lui sera envoyé automatiquement.
+        </p>
+      </div>
+      <button type="submit" class="w-full bg-orange-500 text-white font-bold py-3 rounded-xl hover:bg-orange-600">
+        <i class="fa-solid fa-fire-burner mr-1.5"></i> Mettre en préparation
+      </button>
+    </form>`);
+}
+
+function submitChoixLivreur(e, commandeId) {
+  e.preventDefault();
+  const livreurId = document.getElementById('choix-livreur')?.value || null;
+  closeModal();
+  changerStatut(commandeId, 'en_preparation', livreurId);
+}
+
 // FIX WhatsApp confirmation — Lorsqu'une commande passe à "confirmee", un
 // onglet WhatsApp s'ouvre automatiquement vers le CLIENT pour le notifier
-// (récap + lien de suivi). Aucune redirection automatique pour les autres
-// statuts (Préparer/En livraison/Livrée) : le livreur contacte directement
-// le client, qui suit l'avancement sur sa page de suivi.
+// (récap + lien de suivi). Lorsqu'elle passe à "en_preparation" AVEC un
+// livreur assigné (livreurId fourni), un second onglet s'ouvre vers le
+// LIVREUR (adresse + Maps + Waze + montant à encaisser).
 //
-// Popup-safe : la fenêtre WhatsApp est ouverte de façon SYNCHRONE au moment
-// du clic (avant tout `await`), puis redirigée vers le vrai lien une fois le
-// PATCH de statut confirmé côté serveur. Si le PATCH échoue, la fenêtre est
-// simplement fermée (pas de notification envoyée pour un statut non
-// appliqué).
-async function changerStatut(commandeId, newStatut) {
+// Deux canaux TOUJOURS actifs pour chaque notification (client ET livreur) :
+//   1) API WhatsApp Business officielle — gérée côté serveur
+//      (envoyerNotificationWhatsApp dans api-dashboard.ts / api-commandes.ts),
+//      silencieuse, best-effort.
+//   2) Redirection wa.me — c'est ELLE qui doit fonctionner à 100% du temps :
+//      la fenêtre est ouverte de façon SYNCHRONE au moment du clic (avant
+//      tout `await`, pour rester popup-safe), puis redirigée vers le vrai
+//      lien une fois la réponse serveur reçue. Si aucun destinataire
+//      (téléphone client manquant, ou pas de livreur assigné), la fenêtre
+//      est simplement fermée.
+async function changerStatut(commandeId, newStatut, livreurId) {
   const labels = { confirmee:'Confirmer', en_preparation:'Mettre en préparation', en_livraison:'Marquer en livraison', livree:'Marquer comme livrée', annulee:'Annuler' };
   if (!confirm((labels[newStatut]||newStatut) + ' cette commande ?')) return;
 
   const doitNotifierClient = newStatut === 'confirmee';
-  let whatsappWindow = null;
-  if (doitNotifierClient) {
-    whatsappWindow = window.open('about:blank', '_blank');
-  }
+  const doitNotifierLivreur = newStatut === 'en_preparation' && !!livreurId;
+
+  let whatsappWindowClient = null;
+  let whatsappWindowLivreur = null;
+  if (doitNotifierClient) whatsappWindowClient = window.open('about:blank', '_blank');
+  if (doitNotifierLivreur) whatsappWindowLivreur = window.open('about:blank', '_blank');
 
   try {
+    const body = { statut: newStatut };
+    if (livreurId) body.livreur_id = livreurId;
+
     const res = await fetch('/api/v1/dashboard/commandes/' + commandeId + '/statut', {
       method: 'PATCH',
       headers: { 'Content-Type':'application/json', 'X-Requested-With':'XMLHttpRequest' },
       credentials: 'include',
-      body: JSON.stringify({ statut: newStatut })
+      body: JSON.stringify(body)
     });
 
     if (res.ok) {
+      const data = await res.json().catch(() => ({}));
+
       if (doitNotifierClient) {
         const cmd = _commandeRegistry[commandeId];
         if (cmd && cmd.client_telephone) {
           const message = construireMessageConfirmationClient(cmd);
           const lien = genererLienWhatsAppClient(cmd.client_telephone, message);
-          if (whatsappWindow) whatsappWindow.location.href = lien;
+          if (whatsappWindowClient) whatsappWindowClient.location.href = lien;
           else window.open(lien, '_blank');
-        } else if (whatsappWindow) {
-          whatsappWindow.close();
+        } else if (whatsappWindowClient) {
+          whatsappWindowClient.close();
         }
       }
+
+      if (doitNotifierLivreur) {
+        // Le lien wa.me du livreur est construit côté serveur (PATCH
+        // /commandes/:id/statut) car il a besoin du message complet
+        // (adresse + Maps + Waze + montant), renvoyé dans
+        // data.lien_whatsapp_livreur.
+        if (data.lien_whatsapp_livreur) {
+          if (whatsappWindowLivreur) whatsappWindowLivreur.location.href = data.lien_whatsapp_livreur;
+          else window.open(data.lien_whatsapp_livreur, '_blank');
+        } else if (whatsappWindowLivreur) {
+          whatsappWindowLivreur.close();
+        }
+      }
+
       await fetchCommandes();
     } else {
-      if (whatsappWindow) whatsappWindow.close();
+      if (whatsappWindowClient) whatsappWindowClient.close();
+      if (whatsappWindowLivreur) whatsappWindowLivreur.close();
       alert('Erreur lors de la mise à jour du statut.');
     }
   } catch {
-    if (whatsappWindow) whatsappWindow.close();
+    if (whatsappWindowClient) whatsappWindowClient.close();
+    if (whatsappWindowLivreur) whatsappWindowLivreur.close();
     alert('Erreur réseau.');
   }
 }
@@ -1218,9 +1326,6 @@ async function loadParametres() {
           </div>
           <div>
             <label class="block text-sm font-semibold text-gray-700 mb-1.5">Numéro WhatsApp</label>
-            <!-- FIX WhatsApp — format international exigé (pattern + placeholder
-                 explicite), pour éviter un numéro local sans indicatif qui
-                 casserait tous les liens wa.me générés depuis la boutique. -->
             <input id="param-whatsapp" type="tel" required
               pattern="^\\+[0-9]{8,15}$"
               title="Format international requis, avec indicatif pays. Exemple : +22670000000"
@@ -1255,7 +1360,7 @@ async function loadParametres() {
             </span>
             <p class="text-xs text-gray-500 mt-1">Statut : <strong>${escHtml(tenant.statut||'essai')}</strong> • ${tenant.total_commandes||0} commande(s) total</p>
           </div>
-          <a href="/tarifs" class="text-xs text-red-600 font-semibold hover:underline">Changer de plan →</a>
+          <a href="/dashboard/abonnement" class="text-xs text-red-600 font-semibold hover:underline">Gérer l'abonnement →</a>
         </div>
       </div>
       <div class="bg-white rounded-2xl border border-gray-100 p-6">
@@ -1639,85 +1744,4 @@ function showModal(titre, contenu) {
   modal.innerHTML = `
     <div class="absolute inset-0 bg-black/50" onclick="closeModal()"></div>
     <div class="absolute inset-x-4 bottom-0 sm:inset-auto sm:top-1/2 sm:left-1/2 sm:-translate-x-1/2 sm:-translate-y-1/2 bg-white rounded-2xl sm:w-96 shadow-2xl max-h-[90vh] overflow-y-auto">
-      <div class="flex items-center justify-between px-5 py-4 border-b border-gray-100 sticky top-0 bg-white z-10">
-        <h3 class="font-bold text-gray-900">${escHtml(titre)}</h3>
-        <button onclick="closeModal()" class="p-1.5 hover:bg-gray-100 rounded-lg"><i class="fa-solid fa-xmark text-gray-500"></i></button>
-      </div>
-      <div class="p-5">${contenu}</div>
-    </div>`;
-  modal.classList.remove('hidden');
-}
-function closeModal() { const m = document.getElementById('dash-modal'); if (m) m.classList.add('hidden'); }
-function getAuthToken() { return ''; }
-function getTenantSlug() {
-  if (tenantData && tenantData.slug) return tenantData.slug;
-  const t = localStorage.getItem('monmenu_tenant');
-  if (t) { try { return JSON.parse(t).slug||''; } catch {} }
-  return '';
-}
-function showAuthError() { localStorage.removeItem('monmenu_tenant'); window.location.href = '/dashboard'; }
-
-function escHtml(str) {
-  if (!str) return '';
-  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
-
-function escJs(str) {
-  if (!str) return '';
-  return String(str)
-    .replace(/\\/g, '\\\\')
-    .replace(/'/g, "\\'")
-    .replace(/\n/g, '\\n')
-    .replace(/\r/g, '');
-}
-
-// Expositions globales
-window.initDashboard = initDashboard;
-window.navigateTo = navigateTo;
-window.filtrerCommandes = filtrerCommandes;
-window.changerStatut = changerStatut;
-window.loadCommandes = loadCommandes;
-window.exportCommandes = exportCommandes;
-window.loadMenu = loadMenu;
-window.showAddCategorieModal = showAddCategorieModal;
-window.submitAddCategorie = submitAddCategorie;
-window.showEditCategorieModal = showEditCategorieModal;
-window.submitEditCategorie = submitEditCategorie;
-window.supprimerCategorie = supprimerCategorie;
-window.showAddProduitModal = showAddProduitModal;
-window.submitAddProduit = submitAddProduit;
-window.showEditProduitModal = showEditProduitModal;
-window.submitEditProduit = submitEditProduit;
-window.supprimerProduit = supprimerProduit;
-window.toggleDisponible = toggleDisponible;
-window.loadLivreurs = loadLivreurs;
-window.showAddLivreurModal = showAddLivreurModal;
-window.submitAddLivreur = submitAddLivreur;
-window.toggleLivreurActif = toggleLivreurActif;
-window.supprimerLivreur = supprimerLivreur;
-window.loadQRCode = loadQRCode;
-window.copyLink = copyLink;
-window.loadStatistiques = loadStatistiques;
-window.switchChart = switchChart;
-window.loadApparence = loadApparence;
-window.saveApparence = saveApparence;
-window.saveLogo = saveLogo;
-window.saveBanniere = saveBanniere;
-window.loadParametres = loadParametres;
-window.saveParametres = saveParametres;
-window.demanderResetPassword = demanderResetPassword;
-window.confirmerSuppression = confirmerSuppression;
-window.loadCodesPromo = loadCodesPromo;
-window.showAddCodePromoModal = showAddCodePromoModal;
-window.updatePromoValeurMax = updatePromoValeurMax;
-window.submitAddCodePromo = submitAddCodePromo;
-window.supprimerCodePromo = supprimerCodePromo;
-window.copierCodePromo = copierCodePromo;
-window.exportCodesPromo = exportCodesPromo;
-window.loadPdv = loadPdv;
-window.savePdv = savePdv;
-window.useMyLocation = useMyLocation;
-window._togglePdvHoraire = _togglePdvHoraire;
-window.showModal = showModal;
-window.closeModal = closeModal;
-window.escJs = escJs;
+      <div class="flex items-center justify-between px-5 py-4 border-b border-gray-100 sticky top-0 bg-w
