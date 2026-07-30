@@ -20,6 +20,13 @@
 //      DROITE (alignement explicite, plus de rendu "centré"), police agrandie.
 //   7. Modales (panier / checkout) : hauteur et défilement adaptés mobile
 //      (meilleur usage de l'écran, scroll interne plus fluide).
+//
+// FIX 2026-07-30 — Ajout d'un message d'alerte "#position-manquante-hint"
+// sous le bouton "Confirmer" du formulaire de commande. Il est piloté par
+// boutique.js (mettreAJourEtatSubmit()) : affiché tant que la géolocalisation
+// n'a pas été obtenue en mode livraison, ce qui rend visible pourquoi le
+// bouton est désactivé (la position GPS est désormais obligatoire pour
+// garantir que le message WhatsApp final contient les liens Maps/Waze).
 import { renderHead, jsonLdRestaurant } from '../components/head'
 
 export interface TenantBoutique {
@@ -264,6 +271,12 @@ export function renderBoutiquePage(tenant: TenantBoutique, nomProjet: string): s
       overscroll-behavior: contain;
       -webkit-overflow-scrolling: touch;
     }
+
+    /* FIX 2026-07-30 — bouton Confirmer désactivé tant que la position GPS
+       n'est pas connue (mode livraison). Le style disabled natif suffit
+       pour le curseur/l'opacité (gérés en JS via classes), ceci évite juste
+       un focus visuel trompeur sur un bouton non cliquable. */
+    #submit-btn:disabled { pointer-events: none; }
   </style>
 
   <!-- En-tête boutique : bannière + logo médaillon + nom -->
@@ -506,6 +519,16 @@ export function renderBoutiquePage(tenant: TenantBoutique, nomProjet: string): s
           </div>
         </div>
 
+        <!-- FIX 2026-07-30 — Message visible tant que la position GPS n'est
+             pas connue en mode livraison (géré par boutique.js via
+             mettreAJourEtatSubmit()). Le bouton "Confirmer" est désactivé
+             en même temps, pour empêcher l'envoi d'une commande sans
+             coordonnées (garantit les liens Maps/Waze dans le message). -->
+        <p id="position-manquante-hint" class="hidden text-xs text-orange-600 bg-orange-50 border border-orange-100 rounded-lg px-3 py-2 flex items-center gap-1.5">
+          <i class="fa-solid fa-location-crosshairs"></i>
+          Position GPS requise pour la livraison — autorisez la géolocalisation ou déplacez le repère sur la carte ci-dessus.
+        </p>
+
         <!-- §Confirmer — En confirmant, un onglet WhatsApp s'ouvre vers le
              restaurant avec le récap de commande pré-rempli (voir
              boutique.js:submitOrder), en plus de la redirection vers le
@@ -550,7 +573,7 @@ export function renderBoutiquePage(tenant: TenantBoutique, nomProjet: string): s
             <span>${tenant.pdv_adresse || 'Adresse non renseignée'}</span>
           </div>
           ${tenant.pdv_latitude && tenant.pdv_longitude ? `
-          <a href="https://www.google.com/maps?q=${tenant.pdv_latitude},${tenant.pdv_longitude}"
+          <a href="https://www.google.com/maps/search/?api=1&query=${tenant.pdv_latitude},${tenant.pdv_longitude}"
              target="_blank" rel="noopener"
              class="mt-2 inline-flex items-center gap-1.5 text-xs text-blue-400 hover:text-blue-300 transition-colors">
             <i class="fa-solid fa-map-location-dot"></i>
