@@ -8,6 +8,15 @@
 // désormais essai_expire_le à la création (durée fixée par la constante
 // ESSAI_DUREE_JOURS, voir lib/constants.ts — pas de config en base pour
 // cette valeur, elle change rarement et un redéploiement suffit).
+//
+// CORRECTION 2026-07-30 — le filtre `.or()` de GET / traitait un
+// essai_expire_le NULL comme "expiré" (car ni statut=actif, ni
+// essai_expire_le > now n'étaient vrais), ce qui excluait à tort tout
+// tenant en essai créé sans cette date renseignée (ex: insertion
+// manuelle en base, ou ancien flux d'inscription). Ajout de la
+// condition essai_expire_le.is.null pour traiter "pas de date" comme
+// "n'expire pas", au lieu de l'exclure silencieusement de la liste
+// publique.
 
 import { Hono } from 'hono'
 import type { Env } from '../types/database'
@@ -53,7 +62,10 @@ tenantsRouter.get('/', async (c) => {
     .not('logo_url', 'is', null)
     // Filet de sécurité côté requête : un essai expiré n'apparaît
     // jamais, même si le cron n'est pas encore passé.
-    .or(`statut.eq.actif,essai_expire_le.gt.${nowIso}`)
+    // CORRECTION 2026-07-30 — essai_expire_le.is.null ajouté : un
+    // tenant en essai sans date d'expiration renseignée ne doit pas
+    // être traité comme expiré, mais comme "n'expire pas".
+    .or(`statut.eq.actif,essai_expire_le.gt.${nowIso},essai_expire_le.is.null`)
     .order('statut', { ascending: true }) // 'actif' avant 'essai' (alphabétique)
     .order('updated_at', { ascending: false })
     .limit(limit)
