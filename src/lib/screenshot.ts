@@ -12,6 +12,14 @@
 // compte gratuit sur https://www.thum.io fournit une clé à mettre dans
 // le secret Worker THUMIO_API_KEY — entièrement optionnel, la fonction
 // marche aussi sans (voir wrangler secret put THUMIO_API_KEY).
+//
+// CORRECTION 2026-07-30 — ajout d'un paramètre _cachebust unique (timestamp)
+// sur l'URL cible capturée. thum.io met en cache ses captures par URL ;
+// sans ce paramètre, une capture ratée une fois (ex: pendant que
+// PUBLIC_BASE_URL pointait vers un domaine cassé) restait servie en cache
+// indéfiniment, même après correction du domaine. Le paramètre force
+// thum.io à traiter chaque appel comme une URL inédite et donc à
+// effectuer une vraie nouvelle capture à chaque exécution du cron.
 
 import type { Env } from '../types/database'
 
@@ -23,7 +31,7 @@ export async function capturerScreenshotBoutique(
   slug: string,
   baseUrl: string
 ): Promise<ArrayBuffer | null> {
-  const cible = `${baseUrl}/${slug}`
+  const cible = `${baseUrl}/${slug}?_cachebust=${Date.now()}`
 
   // Segments de l'URL thum.io — voir https://www.thum.io/documentation
   // width/crop définissent le viewport mobile ; noanimate désactive les
