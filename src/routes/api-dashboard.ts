@@ -20,12 +20,23 @@
 // les horaires du point de vente (pdv_horaires), afin que la page
 // /bienvenue puisse pré-remplir l'étape 2 si l'utilisateur y revient
 // après un premier passage (ou après un "Passer" suivi d'un retour).
+//
+// AJOUT 2026-07-30 — Notification WhatsApp au LIVREUR quand le restaurant
+// passe une commande de "confirmée" à "en préparation" avec un livreur
+// assigné (body.livreur_id). Deux canaux, toujours les deux tentés :
+//   1) Envoi automatique via l'API WhatsApp Business officielle
+//      (best-effort, ne bloque jamais la réponse).
+//   2) Lien wa.me renvoyé dans la réponse JSON ("lien_whatsapp_livreur")
+//      pour que le dashboard ouvre un onglet WhatsApp pré-rempli — c'est
+//      le filet de sécurité qui doit fonctionner à 100% du temps, que
+//      l'API officielle soit configurée ou non.
 
 import { Hono } from 'hono'
 import { getCookie } from 'hono/cookie'
 import type { Env } from '../types/database'
 import { createSupabaseClient, createSupabaseClientWithToken, createSupabaseAdminClient } from '../lib/supabase'
 import { setSecurityHeaders, checkRateLimit } from '../lib/security'
+import { genererMessageLivreur, genererLienWhatsApp, envoyerNotificationWhatsApp } from '../lib/whatsapp'
 
 const dashboardRouter = new Hono<{ Bindings: Env }>()
 
@@ -207,6 +218,12 @@ dashboardRouter.get('/commandes', async (c) => {
 })
 
 // ---- PATCH /api/v1/dashboard/commandes/:id/statut ----
+// AJOUT 2026-07-30 — Si un livreur est assigné (body.livreur_id) au moment
+// où la commande passe en "en_preparation", on lui envoie un message
+// WhatsApp avec les infos de livraison (adresse + Maps + Waze + montant à
+// encaisser), sur les DEUX canaux :
+//   1) API WhatsApp Business officielle (best-effort, silencieux)
+//   2) lien_whatsapp_livreur renvoyé au dashboard (redirection garantie)
 dashboardRouter.patch('/commandes/:id/statut', async (c) => {
   setSecurityHeaders(c)
   const auth = await verifyAuth(c)
@@ -223,9 +240,12 @@ dashboardRouter.patch('/commandes/:id/statut', async (c) => {
 
   const supabase = createSupabaseClientWithToken(c.env, auth.token)
 
+  // FIX — select élargi : on a besoin de toutes les infos de la commande
+  // pour pouvoir construire le message WhatsApp du livreur (adresse, GPS,
+  // items, montant), pas seulement id/statut comme avant.
   const { data: commande, error: fetchError } = await supabase
     .from('commandes')
-    .select('id, statut')
+    .select('id, statut, client_nom, client_telephone, client_adresse, client_latitude, client_longitude, items_json, montant_total, frais_livraison, token_suivi, livreur_id')
     .eq('id', commandeId)
     .eq('tenant_id', auth.tenant_id)
     .is('deleted_at', null)
@@ -259,7 +279,49 @@ dashboardRouter.patch('/commandes/:id/statut', async (c) => {
       note: body.note ?? null
     })
 
-  return c.json({ success: true, statut: body.statut })
+  // AJOUT — Notification livreur : uniquement quand on assigne/confirme un
+  // livreur au moment du passage en "en_preparation" (le cas d'usage
+  // "restaurant lance la préparation et prévient son livreur").
+  let lienWhatsappLivreur: string | null = null
+  const livreurIdCible = body.livreur_id ?? null
+  if (livreurIdCible && body.statut === 'en_preparation') {
+    try {
+      const { data: livreur } = await adminClient
+        .from('livreurs')
+        .select('id, nom, whatsapp_number')
+        .eq('id', livreurIdCible)
+        .eq('tenant_id', auth.tenant_id)
+        .maybeSingle()
+
+      const { data: tenantInfo } = await adminClient
+        .from('tenants')
+        .select('nom, slug')
+        .eq('id', auth.tenant_id)
+        .single()
+
+      if (livreur?.whatsapp_number && tenantInfo) {
+        const origin = new URL(c.req.url).origin
+        const messageLivreur = genererMessageLivreur(commande as any, tenantInfo as any, origin)
+
+        // Canal 1 — API WhatsApp officielle (best-effort, ne bloque jamais la réponse)
+        c.executionCtx.waitUntil(
+          envoyerNotificationWhatsApp(livreur.whatsapp_number, messageLivreur, c.env).catch(() => {})
+        )
+
+        // Canal 2 — lien de redirection, TOUJOURS renvoyé au dashboard
+        lienWhatsappLivreur = genererLienWhatsApp(livreur.whatsapp_number, messageLivreur)
+      }
+    } catch {
+      // Ne jamais faire échouer la mise à jour de statut à cause d'une
+      // erreur de notification livreur — la commande est déjà mise à jour.
+    }
+  }
+
+  return c.json({
+    success: true,
+    statut: body.statut,
+    ...(lienWhatsappLivreur ? { lien_whatsapp_livreur: lienWhatsappLivreur } : {})
+  })
 })
 
 // ---- GET /api/v1/dashboard/commandes/export-csv ----
@@ -1588,20 +1650,11 @@ dashboardRouter.post('/setup-restaurant', async (c) => {
       .eq('actif', true)
 
     if (errPdv) {
-      // FIX (visibilité erreurs) — l'erreur n'est plus seulement loguée
-      // côté serveur : elle est remontée dans la réponse pour que ce genre
-      // de bug (adresse/horaires silencieusement non enregistrés) soit
-      // visible immédiatement au lieu de passer inaperçu.
       console.error('Erreur mise à jour PDV:', errPdv.message)
       pdvWarning = 'Adresse et/ou horaires non enregistrés : ' + errPdv.message
     }
   }
 
-  // FIX (cache) — invalidation du cache tenant, comme le font déjà
-  // /apparence, /pdv et /parametres. Sans ça, la boutique publique et le
-  // dashboard pouvaient continuer d'afficher des données obsolètes après
-  // l'onboarding, ce qui donnait l'impression qu'il fallait tout ressaisir
-  // manuellement dans le dashboard pour que ça s'affiche dans la boutique.
   try { if (c.env.KV_CACHE) await c.env.KV_CACHE.delete(`tenant:${auth.tenant_slug}`) } catch {}
 
   return c.json({
