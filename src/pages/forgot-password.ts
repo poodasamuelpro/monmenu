@@ -9,7 +9,7 @@ export function renderForgotPasswordPage(nomProjet: string): string {
     '',
     'https://monmenu.app/mot-de-passe-oublie'
   )}
-<body class="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center px-4 transition-colors">
+<body class="min-h-screen bg-gray-50 flex items-center justify-center px-4 transition-colors">
   <div class="w-full max-w-md">
 
     <!-- Logo -->
@@ -21,18 +21,18 @@ export function renderForgotPasswordPage(nomProjet: string): string {
     </div>
 
     <!-- Étape 1 : Saisie email -->
-    <div id="step-email" class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 p-8">
-      <h1 class="text-xl font-bold text-gray-900 dark:text-white mb-1">Mot de passe oublié</h1>
-      <p class="text-sm text-gray-500 dark:text-gray-400 mb-6">
+    <div id="step-email" class="bg-white rounded-2xl shadow-sm border border-gray-100 p-8">
+      <h1 class="text-xl font-bold text-gray-900 mb-1">Mot de passe oublié</h1>
+      <p class="text-sm text-gray-500 mb-6">
         Entrez votre adresse email. Nous vous enverrons un code OTP à 6 chiffres.
       </p>
       <form id="form-email" onsubmit="sendOtp(event)" class="space-y-4">
         <div>
-          <label class="block text-sm font-semibold text-gray-700 dark:text-gray-200 mb-1.5">
+          <label class="block text-sm font-semibold text-gray-700 mb-1.5">
             Adresse email
           </label>
           <input id="input-email" type="email" required autocomplete="email"
-            class="w-full border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200 focus:border-red-400 placeholder-gray-400 dark:placeholder-gray-500"
+            class="w-full border border-gray-200 bg-white text-gray-900 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200 focus:border-red-400 placeholder-gray-400"
             placeholder="vous@restaurant.com">
         </div>
         <p id="email-error" class="text-xs text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2 hidden"></p>
@@ -43,25 +43,25 @@ export function renderForgotPasswordPage(nomProjet: string): string {
         </button>
       </form>
       <div class="mt-4 text-center">
-        <a href="/dashboard" class="text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 transition-colors">
+        <a href="/dashboard" class="text-sm text-gray-500 hover:text-gray-700 transition-colors">
           <i class="fa-solid fa-arrow-left mr-1"></i> Retour à la connexion
         </a>
       </div>
     </div>
 
     <!-- Étape 2 : Saisie OTP -->
-    <div id="step-otp" class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 p-8 hidden">
-      <h1 class="text-xl font-bold text-gray-900 dark:text-white mb-1">Entrez votre code</h1>
-      <p id="otp-hint" class="text-sm text-gray-500 dark:text-gray-400 mb-6">
+    <div id="step-otp" class="bg-white rounded-2xl shadow-sm border border-gray-100 p-8 hidden">
+      <h1 class="text-xl font-bold text-gray-900 mb-1">Entrez votre code</h1>
+      <p id="otp-hint" class="text-sm text-gray-500 mb-6">
         Code OTP envoyé à votre adresse.
       </p>
       <form id="form-otp" onsubmit="verifyOtp(event)" class="space-y-4">
         <div>
-          <label class="block text-sm font-semibold text-gray-700 dark:text-gray-200 mb-1.5">
+          <label class="block text-sm font-semibold text-gray-700 mb-1.5">
             Code OTP à 6 chiffres
           </label>
           <input id="input-otp" type="text" required pattern="[0-9]{6}" maxlength="6" inputmode="numeric" autocomplete="one-time-code"
-            class="w-full border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-xl px-4 py-3 text-center text-2xl font-mono tracking-[0.5em] focus:outline-none focus:ring-2 focus:ring-red-200 focus:border-red-400"
+            class="w-full border border-gray-200 bg-white text-gray-900 rounded-xl px-4 py-3 text-center text-2xl font-mono tracking-[0.5em] focus:outline-none focus:ring-2 focus:ring-red-200 focus:border-red-400"
             placeholder="000000">
         </div>
         <p id="otp-error" class="text-xs text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2 hidden"></p>
@@ -71,23 +71,23 @@ export function renderForgotPasswordPage(nomProjet: string): string {
           <span>Vérifier le code</span>
         </button>
       </form>
-      <button onclick="goBack('step-email')" class="mt-4 w-full text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 transition-colors">
+      <button onclick="goBack('step-email')" class="mt-4 w-full text-sm text-gray-500 hover:text-gray-700 transition-colors">
         <i class="fa-solid fa-arrow-left mr-1"></i> Changer d'adresse
       </button>
     </div>
 
     <!-- Étape 3 : Nouveau mot de passe -->
-    <div id="step-password" class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 p-8 hidden">
-      <h1 class="text-xl font-bold text-gray-900 dark:text-white mb-1">Nouveau mot de passe</h1>
-      <p class="text-sm text-gray-500 dark:text-gray-400 mb-6">Choisissez un mot de passe sécurisé (8 caractères minimum).</p>
+    <div id="step-password" class="bg-white rounded-2xl shadow-sm border border-gray-100 p-8 hidden">
+      <h1 class="text-xl font-bold text-gray-900 mb-1">Nouveau mot de passe</h1>
+      <p class="text-sm text-gray-500 mb-6">Choisissez un mot de passe sécurisé (8 caractères minimum).</p>
       <form id="form-password" onsubmit="resetPassword(event)" class="space-y-4">
         <div>
-          <label class="block text-sm font-semibold text-gray-700 dark:text-gray-200 mb-1.5">
+          <label class="block text-sm font-semibold text-gray-700 mb-1.5">
             Nouveau mot de passe
           </label>
           <div class="relative">
             <input id="input-password" type="password" required minlength="8" autocomplete="new-password"
-              class="w-full border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-xl px-4 py-3 pr-10 text-sm focus:outline-none focus:ring-2 focus:ring-red-200 focus:border-red-400 placeholder-gray-400 dark:placeholder-gray-500"
+              class="w-full border border-gray-200 bg-white text-gray-900 rounded-xl px-4 py-3 pr-10 text-sm focus:outline-none focus:ring-2 focus:ring-red-200 focus:border-red-400 placeholder-gray-400"
               placeholder="Minimum 8 caractères">
             <button type="button" onclick="togglePwd()" class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
               <i id="pwd-icon" class="fa-regular fa-eye text-sm"></i>
@@ -104,12 +104,12 @@ export function renderForgotPasswordPage(nomProjet: string): string {
     </div>
 
     <!-- Étape 4 : Succès -->
-    <div id="step-success" class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 p-8 text-center hidden">
-      <div class="w-16 h-16 bg-green-100 dark:bg-green-900/30 rounded-full flex items-center justify-center mx-auto mb-4">
-        <i class="fa-solid fa-check text-green-600 dark:text-green-400 text-2xl"></i>
+    <div id="step-success" class="bg-white rounded-2xl shadow-sm border border-gray-100 p-8 text-center hidden">
+      <div class="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
+        <i class="fa-solid fa-check text-green-600 text-2xl"></i>
       </div>
-      <h1 class="text-xl font-bold text-gray-900 dark:text-white mb-2">Mot de passe mis à jour</h1>
-      <p class="text-sm text-gray-500 dark:text-gray-400 mb-6">
+      <h1 class="text-xl font-bold text-gray-900 mb-2">Mot de passe mis à jour</h1>
+      <p class="text-sm text-gray-500 mb-6">
         Votre mot de passe a bien été modifié. Vous pouvez maintenant vous connecter.
       </p>
       <a href="/dashboard"

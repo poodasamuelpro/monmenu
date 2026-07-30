@@ -1,18 +1,10 @@
-// src/components/footer.ts — Pied de page principal (i18n FR/EN)
-import { getTranslations } from '../i18n'
+// src/components/footer.ts — Pied de page principal (FR uniquement, sans dark mode)
 
-export function renderFooter(nomProjet: string, locale: string = 'fr'): string {
-  const t = getTranslations(locale)
+export function renderFooter(nomProjet: string): string {
   const year = new Date().getFullYear()
 
-  // Variables injectées dans le JS inline via template literals
-  const nlSending  = t.footer.newsletter_sending
-  const nlSuccess  = t.footer.newsletter_success
-  const nlError    = t.footer.newsletter_error
-  const nlBtn      = t.footer.newsletter_btn
-
   return `
-<footer class="bg-gray-900 dark:bg-black text-gray-300 transition-colors" id="main-footer" aria-label="Pied de page">
+<footer class="bg-gray-900 text-gray-300" id="main-footer" aria-label="Pied de page">
   <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-14">
     <div class="grid grid-cols-2 md:grid-cols-4 gap-10">
 
@@ -23,7 +15,7 @@ export function renderFooter(nomProjet: string, locale: string = 'fr'): string {
           <span>${nomProjet}</span>
         </a>
         <p class="text-sm text-gray-400 leading-relaxed mb-5">
-          ${t.footer.description}
+          La solution qui simplifie la commande en ligne pour les restaurants. Gagnez du temps, vendez plus, sans commission.
         </p>
 
         <!-- Réseaux sociaux -->
@@ -57,35 +49,35 @@ export function renderFooter(nomProjet: string, locale: string = 'fr'): string {
 
       <!-- Colonne 2 : Produit -->
       <nav aria-label="Liens produit">
-        <h3 class="text-white font-semibold text-sm mb-4 uppercase tracking-wide">${t.footer.product_title}</h3>
+        <h3 class="text-white font-semibold text-sm mb-4 uppercase tracking-wide">Produit</h3>
         <ul class="space-y-2.5 text-sm">
-          <li><a href="/#fonctionnalites" class="hover:text-white transition-colors">${t.footer.features}</a></li>
-          <li><a href="/#tarifs" class="hover:text-white transition-colors">${t.footer.pricing}</a></li>
-          <li><a href="/inscription" class="hover:text-white transition-colors">${t.footer.create_shop}</a></li>
-          <li><a href="/connexion" class="hover:text-white transition-colors">${t.footer.login}</a></li>
-          <li><a href="/blog" class="hover:text-white transition-colors">${t.footer.blog}</a></li>
-          <li><a href="/contact?sujet=partenariat" class="hover:text-white transition-colors">${t.footer.partner}</a></li>
+          <li><a href="/#fonctionnalites" class="hover:text-white transition-colors">Fonctionnalités</a></li>
+          <li><a href="/#tarifs" class="hover:text-white transition-colors">Tarifs</a></li>
+          <li><a href="/inscription" class="hover:text-white transition-colors">Créer ma boutique</a></li>
+          <li><a href="/connexion" class="hover:text-white transition-colors">Se connecter</a></li>
+          <li><a href="/blog" class="hover:text-white transition-colors">Blog</a></li>
+          <li><a href="/contact?sujet=partenariat" class="hover:text-white transition-colors">Devenir partenaire</a></li>
         </ul>
       </nav>
 
       <!-- Colonne 3 : Support -->
       <nav aria-label="Support et Aide">
-        <h3 class="text-white font-semibold text-sm mb-4 uppercase tracking-wide">${t.footer.help_title}</h3>
+        <h3 class="text-white font-semibold text-sm mb-4 uppercase tracking-wide">Aide</h3>
         <ul class="space-y-2.5 text-sm">
-          <li><a href="/contact" class="hover:text-white transition-colors">${t.footer.contact}</a></li>
-          <li><a href="/#faq" class="hover:text-white transition-colors">${t.footer.faq}</a></li>
-          <li><a href="mailto:support@monmenu.app" class="hover:text-white transition-colors">${t.footer.support}</a></li>
+          <li><a href="/contact" class="hover:text-white transition-colors">Contactez-nous</a></li>
+          <li><a href="/#faq" class="hover:text-white transition-colors">FAQ</a></li>
+          <li><a href="mailto:support@monmenu.app" class="hover:text-white transition-colors">Support technique</a></li>
         </ul>
       </nav>
 
       <!-- Colonne 4 : Légal -->
       <nav aria-label="Liens légaux">
-        <h3 class="text-white font-semibold text-sm mb-4 uppercase tracking-wide">${t.footer.legal_title}</h3>
+        <h3 class="text-white font-semibold text-sm mb-4 uppercase tracking-wide">Légal</h3>
         <ul class="space-y-2.5 text-sm">
-          <li><a href="/legal/cgu" class="hover:text-white transition-colors">${t.footer.cgu}</a></li>
-          <li><a href="/legal/confidentialite" class="hover:text-white transition-colors">${t.footer.privacy}</a></li>
-          <li><a href="/legal/mentions" class="hover:text-white transition-colors">${t.footer.mentions}</a></li>
-          <li><a href="/legal/cookies" class="hover:text-white transition-colors">${t.footer.cookies_policy}</a></li>
+          <li><a href="/legal/cgu" class="hover:text-white transition-colors">CGU</a></li>
+          <li><a href="/legal/confidentialite" class="hover:text-white transition-colors">Confidentialité</a></li>
+          <li><a href="/legal/mentions" class="hover:text-white transition-colors">Mentions légales</a></li>
+          <li><a href="/legal/cookies" class="hover:text-white transition-colors">Politique cookies</a></li>
         </ul>
       </nav>
     </div>
@@ -93,15 +85,15 @@ export function renderFooter(nomProjet: string, locale: string = 'fr'): string {
     <!-- Newsletter -->
     <div class="border-t border-gray-800 mt-12 pt-8 flex flex-col md:flex-row items-start md:items-center justify-between gap-5">
       <div>
-        <h3 class="text-white font-semibold text-sm mb-1">${t.footer.newsletter_title}</h3>
-        <p class="text-sm text-gray-500">${t.footer.newsletter_desc}</p>
+        <h3 class="text-white font-semibold text-sm mb-1">Recevez nos conseils par email</h3>
+        <p class="text-sm text-gray-500">Un guide pratique de temps en temps. Pas de spam.</p>
       </div>
       <form id="newsletter-form" class="flex w-full md:w-auto gap-2" onsubmit="submitNewsletterFooter(event)">
-        <input type="email" id="newsletter-email" required placeholder="${t.footer.newsletter_placeholder}"
-          class="flex-1 md:w-64 bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-red-500/40 focus:border-red-500 transition-colors">
+        <input type="email" id="newsletter-email" required placeholder="votre@email.com"
+          class="flex-1 md:w-64 bg-gray-800 border border-gray-700 rounded-xl px-4 py-2.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-red-500/40 focus:border-red-500 transition-colors">
         <button type="submit" id="newsletter-btn"
-          class="bg-red-600 hover:bg-red-700 text-white text-sm font-semibold px-5 py-2.5 rounded-lg transition-colors whitespace-nowrap">
-          ${t.footer.newsletter_btn}
+          class="bg-red-600 hover:bg-red-700 text-white text-sm font-semibold px-5 py-2.5 rounded-xl transition-colors whitespace-nowrap">
+          S'abonner
         </button>
       </form>
     </div>
@@ -110,27 +102,27 @@ export function renderFooter(nomProjet: string, locale: string = 'fr'): string {
     <!-- Barre de bas de footer -->
     <div class="border-t border-gray-800 mt-8 pt-6 flex flex-col sm:flex-row justify-between items-center gap-4">
       <p class="text-xs text-gray-500">
-        &copy; ${year} ${nomProjet}. ${t.footer.rights}
+        &copy; ${year} ${nomProjet}. Tous droits réservés.
       </p>
     </div>
   </div>
 </footer>
 
 <!-- Bannière cookies -->
-<div id="cookie-banner" class="hidden fixed bottom-0 inset-x-0 z-[60] bg-white dark:bg-gray-900 border-t border-gray-200 dark:border-gray-800 shadow-2xl">
+<div id="cookie-banner" class="hidden fixed bottom-0 inset-x-0 z-[60] bg-white border-t border-gray-200 shadow-2xl">
   <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex flex-col sm:flex-row items-center gap-4">
-    <p class="text-sm text-gray-600 dark:text-gray-300 flex-1">
-      ${t.footer.cookie_text}
-      <a href="/legal/cookies" class="text-red-600 dark:text-red-400 hover:underline">${t.footer.cookie_link}</a>.
+    <p class="text-sm text-gray-600 flex-1">
+      Nous utilisons des cookies essentiels au fonctionnement du site et, avec votre accord, des cookies de mesure d'audience. Voir notre
+      <a href="/legal/cookies" class="text-red-600 hover:underline">politique de cookies</a>.
     </p>
     <div class="flex items-center gap-2 flex-shrink-0">
       <button onclick="rejectCookies()"
-        class="text-sm font-semibold px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
-        ${t.footer.cookie_reject}
+        class="text-sm font-semibold px-4 py-2 rounded-xl border border-gray-300 text-gray-700 hover:bg-gray-50 transition-colors">
+        Refuser
       </button>
       <button onclick="acceptCookies()"
-        class="text-sm font-semibold px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white transition-colors">
-        ${t.footer.cookie_accept}
+        class="text-sm font-semibold px-4 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white transition-colors">
+        Accepter
       </button>
     </div>
   </div>
@@ -145,7 +137,7 @@ export function renderFooter(nomProjet: string, locale: string = 'fr'): string {
     const email = emailInput.value.trim();
 
     btn.disabled = true;
-    btn.textContent = '${nlSending}';
+    btn.textContent = 'Envoi...';
 
     try {
       const res = await fetch('/api/v1/newsletter', {
@@ -156,21 +148,21 @@ export function renderFooter(nomProjet: string, locale: string = 'fr'): string {
       const data = await res.json();
 
       if (res.ok) {
-        feedback.textContent = '✓ ${nlSuccess}';
+        feedback.textContent = '✓ Inscription réussie. Merci !';
         feedback.className = 'text-xs mt-3 text-green-400';
         emailInput.value = '';
       } else {
-        feedback.textContent = data.error || '${nlError}';
+        feedback.textContent = data.error || 'Une erreur est survenue.';
         feedback.className = 'text-xs mt-3 text-red-400';
       }
     } catch (err) {
-      feedback.textContent = '${nlError}';
+      feedback.textContent = 'Une erreur est survenue.';
       feedback.className = 'text-xs mt-3 text-red-400';
     }
 
     feedback.classList.remove('hidden');
     btn.disabled = false;
-    btn.textContent = '${nlBtn}';
+    btn.textContent = "S'abonner";
   }
 </script>`
 }

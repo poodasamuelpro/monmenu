@@ -4,17 +4,15 @@
 import { renderHead } from '../components/head'
 import { renderNav } from '../components/nav'
 import { renderFooter } from '../components/footer'
-import { getTranslations } from '../i18n'
 
-export function renderTarifsPage(nomProjet: string, locale: string = 'fr'): string {
-  const t = getTranslations(locale)
+export function renderTarifsPage(nomProjet: string): string {
   return `${renderHead(
-    `${t.tarifs.meta_title} — ${nomProjet}`,
-    t.tarifs.meta_desc,
+    `Tarifs — ${nomProjet}`,
+    'Tarifs transparents sans commission pour votre restaurant. Forfait mensuel ou annuel. Gratuit pour commencer.',
     nomProjet
   )}
-<body class="font-sans bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 transition-colors">
-  ${renderNav(nomProjet, 'tarifs', locale)}
+<body class="font-sans bg-white text-gray-900">
+  ${renderNav(nomProjet, 'tarifs')}
 
   <!-- Hero tarifs -->
   <section class="py-16 bg-gradient-to-b from-gray-50 to-white" aria-labelledby="pricing-hero-heading">
@@ -212,12 +210,12 @@ export function renderTarifsPage(nomProjet: string, locale: string = 'fr'): stri
       <p class="text-red-100 mb-8">Plan Gratuit disponible immédiatement. Pas de carte bancaire requise.</p>
       <div class="flex flex-col sm:flex-row gap-3 justify-center">
         <a href="/inscription"
-          class="inline-flex items-center justify-center gap-2 bg-white text-red-600 font-bold px-8 py-3.5 rounded-xl hover:bg-red-50 transition-colors shadow-lg">
+          class="inline-flex items-center justify-center gap-2 bg-white text-red-600 font-bold px-8 py-3 rounded-xl hover:bg-red-50 transition-colors shadow-lg">
           <i class="fa-solid fa-store" aria-hidden="true"></i>
           Créer ma boutique gratuitement
         </a>
         <a href="/contact"
-          class="inline-flex items-center justify-center gap-2 border border-red-400 text-white font-semibold px-8 py-3.5 rounded-xl hover:bg-red-700 transition-colors">
+          class="inline-flex items-center justify-center gap-2 border border-red-400 text-white font-semibold px-8 py-3 rounded-xl hover:bg-red-700 transition-colors">
           <i class="fa-solid fa-envelope" aria-hidden="true"></i>
           Une question ? Contactez-nous
         </a>
@@ -225,7 +223,7 @@ export function renderTarifsPage(nomProjet: string, locale: string = 'fr'): stri
     </div>
   </section>
 
-  ${renderFooter(nomProjet, locale)}
+  ${renderFooter(nomProjet)}
   <script src="/static/js/main.js"></script>
   <script>
     let deviseCourante = 'FCFA';
@@ -304,7 +302,7 @@ export function renderTarifsPage(nomProjet: string, locale: string = 'fr'): stri
             \${features.support_whatsapp ? '<li class=\\"flex items-start gap-2\\"><i class=\\"fa-solid fa-check text-green-500 flex-shrink-0 mt-0.5\\"></i>Support WhatsApp prioritaire</li>' : ''}
           </ul>
           <a href="/inscription"
-            class="block w-full text-center \${isPro ? 'bg-red-600 hover:bg-red-700 text-white shadow-md' : 'bg-gray-50 hover:bg-gray-100 text-gray-900 border border-gray-200'} font-bold py-3.5 rounded-xl transition-colors text-sm">
+            class="block w-full text-center \${isPro ? 'bg-red-600 hover:bg-red-700 text-white shadow-sm' : 'bg-gray-50 hover:bg-gray-100 text-gray-900 border border-gray-200'} font-bold py-3 rounded-xl transition-colors text-sm">
             \${plan.prix_mensuel === 0 ? 'Commencer gratuitement' : 'Choisir ' + plan.nom}
           </a>
         </div>\`;

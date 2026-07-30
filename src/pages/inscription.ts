@@ -122,7 +122,7 @@ export function renderInscriptionPage(nomProjet: string): string {
           <p id="reg-success" class="text-xs text-green-700 bg-green-50 border border-green-100 rounded-lg px-3 py-2 hidden"></p>
 
           <button type="submit" id="reg-btn"
-            class="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3.5 rounded-xl transition-colors flex items-center justify-center gap-2">
+            class="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2">
             <i class="fa-solid fa-store"></i>
             <span>Créer ma boutique gratuitement</span>
           </button>
