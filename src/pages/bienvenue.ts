@@ -11,6 +11,15 @@
 // GET /api/v1/dashboard/profil pour pré-remplir les champs déjà saisis
 // à l'inscription (nom, téléphone, adresse, couleurs, logo/bannière),
 // afin que l'utilisateur n'ait pas à ressaisir des informations connues.
+//
+// FIX (2026-07-31) — Bug "Suivant" bloqué : goStep() était déclarée deux
+// fois (déclaration function classique, hoistée). La deuxième déclaration
+// wrappait `_goStepOriginal = goStep`, mais à cause du hoisting JS,
+// `goStep` pointait déjà vers la 2e déclaration au moment de l'affectation
+// → `_goStepOriginal` référençait la fonction elle-même → boucle infinie
+// (stack overflow silencieux) dès le premier clic sur "Suivant".
+// Fix : suppression du monkey-patch, appel de chargerPlans() intégré
+// directement dans la fonction goStep d'origine.
 import { renderHead } from '../components/head'
 
 export function renderBienvenuePage(nomProjet: string): string {
@@ -377,6 +386,8 @@ export function renderBienvenuePage(nomProjet: string): string {
 
     // ═══════════════════════════════════════════
     // Navigation entre étapes
+    // FIX (2026-07-31) : plus de monkey-patch de goStep en fin de fichier.
+    // L'appel à chargerPlans() à l'étape 5 est intégré ici directement.
     // ═══════════════════════════════════════════
     let currentStep = 1;
 
@@ -400,6 +411,7 @@ export function renderBienvenuePage(nomProjet: string): string {
       });
       currentStep = n;
       window.scrollTo({ top: 0, behavior: 'smooth' });
+      if (n === 5) chargerPlans();
     }
 
     // ═══════════════════════════════════════════
@@ -812,13 +824,6 @@ export function renderBienvenuePage(nomProjet: string): string {
           setTimeout(() => { btn.innerHTML = '<i class="fa-solid fa-copy"></i> Copier'; }, 2000);
         }
       });
-    }
-
-    // ─── Patch goStep pour charger les plans à l'étape 5 ───
-    const _goStepOriginal = goStep;
-    function goStep(n) {
-      _goStepOriginal(n);
-      if (n === 5) chargerPlans();
     }
   </script>
 </body>
