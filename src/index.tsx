@@ -29,7 +29,12 @@ import { renderBlogPage } from './pages/blog'
 import { renderArticlePage } from './pages/article'
 import { renderInscriptionPage } from './pages/inscription'
 import { renderLegalPage } from './pages/legal'
-import { renderConnexionPage, renderCreerComptePage } from './pages/auth'
+// CORRECTION 2026-07-31 — renderCreerComptePage retiré de l'import : la page
+// /creer-compte ne rend plus son propre formulaire (voir route plus bas),
+// elle redirige désormais vers /inscription (seule page avec sélection de
+// plan, obligatoire côté serveur). La fonction reste dans pages/auth.ts au
+// cas où, mais n'est plus utilisée ici.
+import { renderConnexionPage } from './pages/auth'
 import { renderForgotPasswordPage } from './pages/forgot-password'
 import { renderDashboardPage } from './pages/dashboard'
 import { renderSuiviPage } from './pages/suivi'
@@ -455,10 +460,18 @@ app.get('/connexion', async (c) => {
   return c.html(renderConnexionPage(nomProjet))
 })
 
+// CORRECTION 2026-07-31 — /creer-compte redirige désormais vers /inscription
+// au lieu de rendre son propre formulaire. Raison : cette page envoyait
+// POST /api/v1/auth/register SANS plan_id, alors que ce champ est
+// obligatoire côté serveur (CYCLE-3) → toute tentative échouait avec
+// 422 "Veuillez choisir un plan pour continuer." Plutôt que de dupliquer
+// la grille de plans ici (double logique = double surface à bug), on
+// redirige vers la seule page qui gère correctement la sélection de plan.
+// 301 (redirection permanente) : si un lien externe ou un ancien favori
+// pointe encore vers /creer-compte, il continuera de fonctionner et
+// atterrira sur la bonne page.
 app.get('/creer-compte', async (c) => {
-  setSecurityHeaders(c)
-  const nomProjet = await getNomProjet(c.env)
-  return c.html(renderCreerComptePage(nomProjet))
+  return c.redirect('/inscription', 301)
 })
 
 // ---- Dashboard ----
