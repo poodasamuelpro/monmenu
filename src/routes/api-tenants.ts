@@ -17,6 +17,21 @@
 // condition essai_expire_le.is.null pour traiter "pas de date" comme
 // "n'expire pas", au lieu de l'exclure silencieusement de la liste
 // publique.
+//
+// CORRECTION 2026-07-31 — POST / (création tenant) récupérait l'ID du
+// plan gratuit directement depuis D1 :
+//   SELECT id FROM plans WHERE nom = 'Gratuit' ... (dans D1)
+// et injectait cet ID D1 tel quel dans tenants.plan_id (Supabase), qui
+// attend en réalité l'UUID Supabase du plan (le même bug que celui déjà
+// corrigé côté api-auth.ts). Résultat : tenants.plan_id ne correspondait
+// à aucune ligne dans la table Supabase `plans`, cassant tout lookup ou
+// jointure ultérieure sur le plan du tenant.
+// Fix : on récupère toujours l'ID du plan gratuit depuis D1 (source de
+// vérité pour la config des plans), puis on résout l'UUID Supabase
+// correspondant via la colonne de correspondance `d1_plan_id` sur la
+// table Supabase `plans`, exactement comme dans api-auth.ts. Si aucune
+// correspondance n'est trouvée, planId reste `null` plutôt que
+// d'insérer un identifiant invalide.
 
 import { Hono } from 'hono'
 import type { Env } from '../types/database'
@@ -290,13 +305,30 @@ tenantsRouter.post('/', async (c) => {
     return c.json({ error: 'Ce nom de boutique est déjà utilisé.' }, 409)
   }
 
+  // CORRECTION 2026-07-31 — Résolution du plan gratuit en 2 temps :
+  //   1) D1 = source de vérité pour la config des plans (nom, ordre_affichage)
+  //   2) Supabase `plans` = table applicative, avec sa propre colonne `id`
+  //      (UUID) et une colonne `d1_plan_id` qui référence l'id D1 ci-dessus.
+  // tenants.plan_id (Supabase) doit contenir l'UUID Supabase, jamais l'id D1.
   let planId: string | null = null
   let paysId: string | null = null
   try {
-    const planGratuit = await c.env.DB
+    const planGratuitD1 = await c.env.DB
       .prepare("SELECT id FROM plans WHERE nom = 'Gratuit' OR ordre_affichage = 0 LIMIT 1")
       .first<{ id: string }>()
-    planId = planGratuit?.id ?? null
+
+    if (planGratuitD1?.id) {
+      const { data: planSupabase, error: planLookupError } = await adminClient
+        .from('plans')
+        .select('id')
+        .eq('d1_plan_id', planGratuitD1.id)
+        .maybeSingle()
+
+      if (planLookupError) {
+        console.error('[Tenants] Erreur résolution plan Supabase:', planLookupError.message)
+      }
+      planId = planSupabase?.id ?? null
+    }
   } catch { /* plans table may not exist yet */ }
 
   try {
