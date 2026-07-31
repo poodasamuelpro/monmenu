@@ -1,13 +1,33 @@
 // API Auth — Supabase Auth (connexion, inscription, déconnexion restaurant)
 // ARCHITECTURE :
 //   • Supabase Auth  → authentification (signIn, signUp, JWT, refresh)
-//   • Supabase DB    → tenants, utilisateurs_tenant, points_de_vente  (APPLICATION)
-//   • D1 Cloudflare  → plans, pays  (SITE WEB — lecture uniquement pour inscription)
+//   • Supabase DB    → tenants, utilisateurs_tenant, points_de_vente, plans (APPLICATION)
+//   • D1 Cloudflare  → pays, config_globale (SITE WEB uniquement)
 //
 // §2 — Migration cookies httpOnly : login/register posent désormais des
 // cookies httpOnly + Secure + SameSite=Lax contenant access/refresh token.
 // Le corps JSON continue de renvoyer les tokens en clair pour les clients
 // API/mobile qui n'utilisent pas de cookies (rétrocompatibilité).
+//
+// CORRECTION 2026-07-31 (BUG plan_id UUID) —
+//   Le plan choisi était auparavant lu dans D1 (table `plans`, id texte type
+//   "plan_faso"), puis cet id texte était injecté tel quel dans la colonne
+//   Supabase tenants.plan_id, qui est de type UUID. Résultat : crash
+//   "invalid input syntax for type uuid" pour tout plan gratuit.
+//
+//   D1 reste la source d'affichage public des plans (site web,
+//   /api/v1/plans), mais l'inscription (application) doit désormais
+//   résoudre le plan dans SUPABASE via la colonne de correspondance
+//   `plans.d1_plan_id` (unique). C'est cette ligne Supabase — avec son
+//   vrai UUID — qui est utilisée pour tenants.plan_id.
+//   plan_initial_id (TEXT) stocke ce même UUID Supabase (au format texte),
+//   pas le slug D1, pour rester cohérent avec plan_id une fois confirmé.
+//
+//   HYPOTHÈSE (à confirmer) : le front envoie toujours body.plan_id sous
+//   forme de slug D1 (ex: "plan_faso"), car la page d'inscription affiche
+//   les plans via /api/v1/plans (D1). Si le front est un jour changé pour
+//   consommer directement Supabase, il faudra adapter ce lookup pour
+//   accepter un UUID Supabase directement (ou les deux).
 
 import { Hono } from 'hono'
 import { setCookie, deleteCookie, getCookie } from 'hono/cookie'
@@ -180,10 +200,13 @@ authRouter.post('/login', async (c) => {
 //
 // CYCLE-3 — Logique plan obligatoire :
 //   - plan_id est OBLIGATOIRE dans le body (plus de fallback silencieux Gratuit)
+//   - Le plan est résolu dans SUPABASE (table `plans`) via `d1_plan_id`, PAS
+//     dans D1 — voir note d'en-tête du fichier (correction 2026-07-31).
 //   - Si plan payant (prix_mensuel > 0) → statut tenant = 'en_attente_paiement_initial'
 //     Le client doit d'abord soumettre une preuve de paiement avant d'accéder au dashboard.
 //   - Si plan gratuit (prix_mensuel = 0) → statut tenant = 'essai' (comportement classique)
-//   - plan_initial_id stocké pour affichage dans section abonnement avant première soumission
+//   - plan_initial_id stocké (UUID Supabase en texte) pour affichage dans la
+//     section abonnement avant la première soumission de preuve.
 authRouter.post('/register', async (c) => {
   setSecurityHeaders(c)
   const ip = c.req.header('CF-Connecting-IP') ?? 'unknown'
@@ -197,7 +220,9 @@ authRouter.post('/register', async (c) => {
   let body: {
     email?: string; password?: string; nom_restaurant?: string
     whatsapp_number?: string; nom_gerant?: string
-    plan_id?: string  // OBLIGATOIRE — le client doit choisir un plan explicitement
+    plan_id?: string  // OBLIGATOIRE — slug D1 du plan choisi (ex: "plan_faso"),
+                       // résolu ci-dessous vers la ligne Supabase correspondante
+                       // via plans.d1_plan_id.
   }
   try { body = await c.req.json() }
   catch { return c.json({ error: 'JSON invalide.' }, 400) }
@@ -241,13 +266,26 @@ authRouter.post('/register', async (c) => {
     slug = slug + '-' + Date.now().toString(36).slice(-4)
   }
 
-  // Valider le plan choisi depuis D1 — OBLIGATOIRE, pas de fallback silencieux
+  // CORRECTION 2026-07-31 — Valider le plan choisi dans SUPABASE (pas D1).
+  // body.plan_id est le slug D1 (ex: "plan_faso") affiché par la page
+  // publique /inscription (qui lit encore /api/v1/plans → D1). On résout
+  // ce slug vers la ligne Supabase correspondante via `d1_plan_id`, qui
+  // porte le vrai UUID à utiliser pour tenants.plan_id.
   let planChoisi: { id: string; nom: string; prix_mensuel: number } | null = null
   try {
-    planChoisi = await c.env.DB
-      .prepare('SELECT id, nom, prix_mensuel FROM plans WHERE id = ? AND actif = 1 LIMIT 1')
-      .bind(body.plan_id.trim())
-      .first<{ id: string; nom: string; prix_mensuel: number }>()
+    const { data: planRow, error: planError } = await adminClient
+      .from('plans')
+      .select('id, nom, prix_mensuel')
+      .eq('d1_plan_id', body.plan_id.trim())
+      .eq('actif', true)
+      .limit(1)
+      .maybeSingle()
+
+    if (planError) {
+      console.error('Erreur lookup plan Supabase:', planError.message)
+      return c.json({ error: 'Erreur lors de la vérification du plan.' }, 500)
+    }
+    planChoisi = planRow
   } catch {
     return c.json({ error: 'Erreur lors de la vérification du plan.' }, 500)
   }
@@ -291,11 +329,12 @@ authRouter.post('/register', async (c) => {
   const now = new Date().toISOString()
 
   // Créer le tenant dans SUPABASE (APPLICATION)
-  // CYCLE-3 :
+  // CYCLE-3 + CORRECTION 2026-07-31 :
   //   - statut selon type plan (essai vs en_attente_paiement_initial)
-  //   - plan_initial_id = plan choisi (pour affichage dans section abonnement)
-  //   - plan_id = null si payant (sera renseigné à la confirmation du paiement)
-  //             = planChoisi.id si gratuit (actif immédiatement)
+  //   - plan_initial_id = UUID Supabase du plan choisi, en texte (pour
+  //     affichage dans section abonnement avant confirmation)
+  //   - plan_id = null si payant (renseigné à la confirmation du paiement)
+  //             = planChoisi.id (UUID Supabase, valide) si gratuit
   const { data: newTenant, error: tenantInsertError } = await adminClient
     .from('tenants')
     .insert({
@@ -307,7 +346,7 @@ authRouter.post('/register', async (c) => {
       couleur_secondaire: '#1D4ED8',
       statut: statutInitial,
       plan_id: estPlanGratuit ? planChoisi.id : null,
-      plan_initial_id: planChoisi.id,  // Toujours stocké pour référence
+      plan_initial_id: planChoisi.id,  // UUID Supabase (texte), toujours stocké pour référence
       metadata: {}
     })
     .select('id, slug')
