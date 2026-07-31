@@ -231,9 +231,33 @@ export interface StatsJournalieres {
   tenant_id: string
   date: string
   nb_commandes: number
+  // Colonnes originales (migration 001)
   ca_total: number
   produit_top_id: string | null
   taux_annulation: number
+  // Colonnes ajoutées par migration 010 — utilisées par api-cron.ts
+  chiffre_affaires: number            // Alias actif de ca_total côté cron
+  frais_livraison_total: number       // Total frais de livraison
+  top_produits: Array<{ produit_id: string; nom: string; quantite: number }>
+  nb_commandes_livrees: number
+  nb_commandes_annulees: number
+  updated_at?: string | null
+}
+
+// Type interface pour les moyens de paiement (migration 012)
+export interface MoyenPaiement {
+  id: string
+  code: string
+  nom: string
+  description: string
+  instructions: string
+  numero: string | null
+  nom_compte: string | null
+  logo_url: string | null
+  actif: boolean
+  ordre_affichage: number
+  created_at: string
+  updated_at: string
 }
 
 export interface CodePromo {
@@ -317,6 +341,8 @@ export type Env = {
   // AJOUT module paiement — URL de base du dashboard admin (pour appels inter-services)
   ADMIN_BASE_URL?: string    // ex: https://admin.monmenu.app
   ADMIN_WEBHOOK_SECRET?: string // secret partagé pour appels admin → web
+  // BUG-012 CORRIGÉ — ADMIN_TASK_SECRET pour les tâches cron manuelles (api-admin-tasks.ts)
+  ADMIN_TASK_SECRET?: string // secret transmis dans header X-Admin-Task-Secret
 }
 
 export interface CartItem {

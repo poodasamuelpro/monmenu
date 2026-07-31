@@ -162,7 +162,7 @@ export function setSecurityHeaders(c: Context, nonce?: string): void {
     `style-src 'self' 'unsafe-inline' cdn.tailwindcss.com cdn.jsdelivr.net api.mapbox.com fonts.googleapis.com; ` +
     // FIX QR code : api.qrserver.com ajouté (image du QR chargée directement
     // par le dashboard, comme mapbox/openstreetmap déjà autorisés ici).
-    `img-src 'self' data: blob: *.mapbox.com *.openstreetmap.org *.supabase.co *.tile.openstreetmap.org api.qrserver.com; ` +
+    `img-src 'self' data: blob: *.mapbox.com *.openstreetmap.org *.supabase.co *.tile.openstreetmap.org api.qrserver.com image.thum.io; ` +
     `connect-src 'self' *.supabase.co api.mapbox.com events.mapbox.com api.openweathermap.org graph.facebook.com nominatim.openstreetmap.org api.qrserver.com; ` +
     `font-src 'self' fonts.gstatic.com cdn.jsdelivr.net; ` +
     `frame-ancestors 'none';`

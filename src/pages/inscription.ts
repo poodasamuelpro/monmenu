@@ -2,6 +2,7 @@
 // §2 — Migration cookies httpOnly : fetch('/api/v1/auth/register') utilise
 // désormais credentials:'include' pour accepter le cookie httpOnly posé
 // par le serveur. Le token n'est plus stocké en localStorage.
+// BUG-010 + Feat B — Grille plans dynamique + ?plan= pre-fill + plan_id transmis
 import { renderHead } from '../components/head'
 import { renderNav } from '../components/nav'
 import { renderFooter } from '../components/footer'
@@ -17,7 +18,7 @@ export function renderInscriptionPage(nomProjet: string): string {
   ${renderNav(nomProjet, '')}
 
   <section class="py-16">
-    <div class="max-w-lg mx-auto px-4">
+    <div class="max-w-2xl mx-auto px-4">
       <div class="text-center mb-8">
         <div class="inline-flex items-center justify-center w-14 h-14 bg-red-100 rounded-2xl mb-4">
           <i class="fa-solid fa-store text-red-600 text-2xl"></i>
@@ -44,7 +45,32 @@ export function renderInscriptionPage(nomProjet: string): string {
         </div>
       </div>
 
+      <!-- Feat B : Sélection de plan — affiché dynamiquement selon ?plan= et l'API -->
+      <div id="section-plans" class="mb-8 hidden">
+        <h2 class="text-lg font-bold text-gray-900 mb-1 text-center">Choisissez votre formule</h2>
+        <p class="text-sm text-gray-500 text-center mb-5">Vous pouvez changer de plan à tout moment depuis votre tableau de bord.</p>
+        <div id="grille-plans" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          <!-- Injecté par JS -->
+          <div class="col-span-full flex justify-center py-6">
+            <i class="fa-solid fa-circle-notch fa-spin text-red-400 text-2xl"></i>
+          </div>
+        </div>
+      </div>
+
+      <!-- Badge plan sélectionné (affiché si ?plan= présent et valide) -->
+      <div id="badge-plan-selectionne" class="hidden mb-6 bg-red-50 border border-red-200 rounded-xl px-4 py-3 flex items-center gap-3">
+        <i class="fa-solid fa-circle-check text-red-600 text-lg flex-shrink-0"></i>
+        <div>
+          <p class="text-sm font-semibold text-gray-900">Plan sélectionné : <span id="badge-plan-nom" class="text-red-600">—</span></p>
+          <p class="text-xs text-gray-500 mt-0.5">Vous pourrez passer à un autre plan depuis votre tableau de bord.</p>
+        </div>
+        <button type="button" onclick="afficherGrillePlans()" class="ml-auto text-xs text-gray-400 hover:text-red-600 underline flex-shrink-0">Changer</button>
+      </div>
+
       <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-8">
+        <!-- Champ caché pour plan_id -->
+        <input type="hidden" id="reg-plan-id" value="">
+
         <form id="inscription-form" class="space-y-5" onsubmit="handleInscription(event)">
           <div>
             <label class="block text-sm font-semibold text-gray-700 mb-1.5">
@@ -157,37 +183,151 @@ export function renderInscriptionPage(nomProjet: string): string {
   ${renderFooter(nomProjet)}
   <script src="/static/js/main.js"></script>
   <script>
+    // ─── Feat B : Gestion plans ───────────────────────────────────────────────
+    // Cache plans chargés depuis l'API
+    var _inscriptionPlans = []
+
+    // Sélectionner un plan dans la grille et mettre à jour le champ caché
+    function selectionnerPlan(planId, planNom) {
+      document.getElementById('reg-plan-id').value = planId
+      // Mettre à jour visuellement les cartes
+      document.querySelectorAll('.plan-card').forEach(function(card) {
+        if (card.dataset.planId === planId) {
+          card.classList.add('ring-2', 'ring-red-500', 'border-red-400', 'bg-red-50')
+          card.classList.remove('border-gray-200')
+          card.querySelector('.plan-check').classList.remove('hidden')
+        } else {
+          card.classList.remove('ring-2', 'ring-red-500', 'border-red-400', 'bg-red-50')
+          card.classList.add('border-gray-200')
+          card.querySelector('.plan-check').classList.add('hidden')
+        }
+      })
+      // Mettre à jour le badge
+      document.getElementById('badge-plan-nom').textContent = planNom
+      document.getElementById('badge-plan-selectionne').classList.remove('hidden')
+      // Masquer la grille après sélection
+      document.getElementById('section-plans').classList.add('hidden')
+    }
+
+    // Afficher la grille plans (bouton "Changer" dans le badge)
+    function afficherGrillePlans() {
+      document.getElementById('section-plans').classList.remove('hidden')
+      document.getElementById('badge-plan-selectionne').classList.add('hidden')
+      document.getElementById('reg-plan-id').value = ''
+    }
+
+    // Construire une carte plan
+    function construireCartePlan(plan, estSelectionne) {
+      var devise = plan.devise || 'FCFA'
+      var prixMensuel = plan.prix_mensuel || 0
+      var isGratuit = prixMensuel === 0
+      var badgeGratuit = isGratuit
+        ? '<span class="absolute top-3 right-3 text-xs font-bold bg-green-100 text-green-700 px-2 py-0.5 rounded-full">Gratuit</span>'
+        : ''
+      var ringClasses = estSelectionne
+        ? 'ring-2 ring-red-500 border-red-400 bg-red-50'
+        : 'border-gray-200'
+      var checkClasses = estSelectionne ? '' : 'hidden'
+      var features = []
+      try { features = typeof plan.fonctionnalites === 'string' ? JSON.parse(plan.fonctionnalites) : (plan.fonctionnalites || []) }
+      catch { features = [] }
+      var featuresHtml = features.slice(0, 4).map(function(f) {
+        return '<li class="flex items-center gap-1.5 text-xs text-gray-600"><i class="fa-solid fa-check text-green-500 text-xs flex-shrink-0"></i>' + String(f).replace(/</g,'&lt;') + '</li>'
+      }).join('')
+      if (features.length > 4) {
+        featuresHtml += '<li class="text-xs text-gray-400">+' + (features.length - 4) + ' autres...</li>'
+      }
+      return '<div class="plan-card relative border rounded-xl p-5 cursor-pointer transition-all ' + ringClasses + '" data-plan-id="' + plan.id + '" onclick="selectionnerPlan(' + "'" + plan.id + "'" + ', ' + "'" + (plan.nom || '').replace(/'/g,"\\'") + "'" + ')">' +
+        badgeGratuit +
+        '<i class="plan-check fa-solid fa-circle-check text-red-600 absolute top-3 left-3 ' + checkClasses + '"></i>' +
+        '<h3 class="font-bold text-gray-900 text-base mb-1 mt-1">' + (plan.nom || '').replace(/</g,'&lt;') + '</h3>' +
+        '<div class="text-2xl font-extrabold text-red-600 mb-3">' +
+          (isGratuit ? 'Gratuit' : prixMensuel.toLocaleString() + ' <span class="text-sm font-semibold text-gray-500">' + devise + '/mois</span>') +
+        '</div>' +
+        (featuresHtml ? '<ul class="space-y-1.5">' + featuresHtml + '</ul>' : '') +
+        '</div>'
+    }
+
+    // Charger les plans depuis l'API et afficher la grille
+    async function chargerEtAfficherPlans(planIdPreselect) {
+      try {
+        var res = await fetch('/api/v1/plans', {
+          headers: { 'X-Requested-With': 'XMLHttpRequest' }
+        })
+        if (!res.ok) throw new Error('API plans indisponible')
+        var data = await res.json()
+        _inscriptionPlans = data.plans || []
+        var grille = document.getElementById('grille-plans')
+        if (!_inscriptionPlans.length) {
+          grille.innerHTML = '<p class="col-span-full text-center text-sm text-gray-400">Aucun plan disponible.</p>'
+          return
+        }
+        grille.innerHTML = _inscriptionPlans.map(function(plan) {
+          return construireCartePlan(plan, plan.id === planIdPreselect)
+        }).join('')
+
+        // Si un plan était présélectionné et trouvé → auto-sélection silencieuse
+        if (planIdPreselect) {
+          var planTrouve = _inscriptionPlans.find(function(p) { return p.id === planIdPreselect })
+          if (planTrouve) {
+            document.getElementById('reg-plan-id').value = planTrouve.id
+            document.getElementById('badge-plan-nom').textContent = planTrouve.nom
+            document.getElementById('badge-plan-selectionne').classList.remove('hidden')
+            document.getElementById('section-plans').classList.add('hidden')
+            return
+          }
+        }
+        // Pas de présélection → afficher la grille
+        document.getElementById('section-plans').classList.remove('hidden')
+      } catch(err) {
+        // En cas d'erreur API plans : on continue sans grille (plan Gratuit par défaut côté serveur)
+        console.warn('[inscription] Plans indisponibles:', err.message)
+      }
+    }
+
+    // ─── Initialisation au chargement ────────────────────────────────────────
+    document.addEventListener('DOMContentLoaded', function() {
+      var params = new URLSearchParams(window.location.search)
+      var planIdFromUrl = params.get('plan') || ''
+      // Toujours charger les plans pour permettre la sélection ou la confirmation
+      chargerEtAfficherPlans(planIdFromUrl)
+    })
+
+    // ─── Utilitaires formulaire ───────────────────────────────────────────────
     function updateSlugPreview() {
-      const nom = document.getElementById('reg-nom-restaurant').value;
-      const slug = nom
+      var nom = document.getElementById('reg-nom-restaurant').value;
+      var slug = nom
         .toLowerCase()
         .normalize('NFD').replace(/[\\u0300-\\u036f]/g, '')
         .replace(/[^a-z0-9\\s-]/g, '')
         .replace(/\\s+/g, '-')
         .replace(/-+/g, '-')
-        .replace(/^-+|-+$/g, '')
+        .replace(/^-+|-+$/, '')
         || 'votre-restaurant';
       document.getElementById('slug-preview').textContent = slug;
     }
 
     function togglePwd() {
-      const input = document.getElementById('reg-password');
-      const icon = document.getElementById('reg-eye');
+      var input = document.getElementById('reg-password');
+      var icon = document.getElementById('reg-eye');
       input.type = input.type === 'password' ? 'text' : 'password';
       icon.className = input.type === 'password' ? 'fa-regular fa-eye text-sm' : 'fa-regular fa-eye-slash text-sm';
     }
 
     async function handleInscription(e) {
       e.preventDefault();
-      const btn = document.getElementById('reg-btn');
-      const errEl = document.getElementById('reg-error');
-      const successEl = document.getElementById('reg-success');
+      var btn = document.getElementById('reg-btn');
+      var errEl = document.getElementById('reg-error');
+      var successEl = document.getElementById('reg-success');
       errEl.classList.add('hidden');
       successEl.classList.add('hidden');
       btn.disabled = true;
       btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i><span>Création en cours...</span>';
 
-      const payload = {
+      // BUG-010 FIX — plan_id lu depuis le champ caché (renseigné par selectionnerPlan())
+      var planId = document.getElementById('reg-plan-id').value.trim()
+
+      var payload = {
         nom_restaurant: document.getElementById('reg-nom-restaurant').value.trim(),
         nom_gerant: document.getElementById('reg-nom-gerant').value.trim(),
         whatsapp_number: document.getElementById('reg-whatsapp').value.trim(),
@@ -195,28 +335,36 @@ export function renderInscriptionPage(nomProjet: string): string {
         password: document.getElementById('reg-password').value
       };
 
+      // Ajouter plan_id au payload uniquement s'il est renseigné
+      if (planId) {
+        payload.plan_id = planId
+      }
+
       try {
         // §2 — credentials:'include' pour accepter le cookie httpOnly
         // posé par le serveur si la session est créée immédiatement.
-        const res = await fetch('/api/v1/auth/register', {
+        var res = await fetch('/api/v1/auth/register', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Requested-With': 'XMLHttpRequest'
+          },
           credentials: 'include',
           body: JSON.stringify(payload)
         });
-        const data = await res.json();
+        var data = await res.json();
         if (res.ok && data.success) {
           if (data.tenant) {
             localStorage.setItem('monmenu_tenant', JSON.stringify(data.tenant));
             successEl.textContent = data.message || 'Compte créé ! Redirection vers votre tableau de bord...';
             successEl.classList.remove('hidden');
             e.target.reset();
-            setTimeout(() => { window.location.href = '/bienvenue'; }, 2000);
+            setTimeout(function() { window.location.href = '/bienvenue'; }, 2000);
           } else {
             successEl.textContent = 'Compte créé ! Vérifiez votre email pour confirmer, puis connectez-vous.';
             successEl.classList.remove('hidden');
             e.target.reset();
-            setTimeout(() => { window.location.href = '/dashboard'; }, 3000);
+            setTimeout(function() { window.location.href = '/dashboard'; }, 3000);
           }
         } else {
           errEl.textContent = data.error || 'Erreur lors de la création du compte.';

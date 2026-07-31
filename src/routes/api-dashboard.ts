@@ -1375,7 +1375,8 @@ dashboardRouter.post('/upload-image', async (c) => {
     return c.json({ error: 'Stockage médias non configuré.' }, 503)
   }
 
-  const rateLimit = await checkRateLimit(`upload:${auth.tenant_id}`, 25, 3600000)
+  // BUG-005 FIX — passer c.env.KV_CACHE pour le rate limiting distribué
+  const rateLimit = await checkRateLimit(`upload:${auth.tenant_id}`, 25, 3600000, c.env.KV_CACHE)
   if (!rateLimit.allowed) {
     const secsRemaining = Math.ceil((rateLimit.resetAt - Date.now()) / 1000)
     const minsRemaining = Math.ceil(secsRemaining / 60)

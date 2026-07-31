@@ -6,11 +6,12 @@ import { setSecurityHeaders } from '../lib/security'
 
 const plansRouter = new Hono<{ Bindings: Env }>()
 
-// Taux de conversion FCFA → autres devises (à remplacer par un appel API
-// temps réel — ex. exchangerate.host — dès que le volume le justifie ;
-// en attendant, ces taux doivent être mis à jour manuellement en
-// config_globale ou ici, jamais laissés silencieusement obsolètes).
-const TAUX_CONVERSION: Record<string, number> = {
+// Taux de conversion FCFA → autres devises
+// BUG-015 FIX — les taux sont désormais lus depuis D1 config_globale (clé 'taux_conversion_json')
+// Fallback sur les valeurs ci-dessous si la config D1 est absente ou invalide.
+// Pour mettre à jour les taux : INSERT OR REPLACE INTO config_globale (cle, valeur)
+// VALUES ('taux_conversion_json', '{"FCFA":1,"XOF":1,"XAF":1,"EUR":0.00152,"USD":0.00168,"MAD":0.0165,"GHS":0.019}');
+const TAUX_CONVERSION_DEFAUT: Record<string, number> = {
   FCFA: 1,
   XOF: 1,
   XAF: 1,
@@ -18,6 +19,21 @@ const TAUX_CONVERSION: Record<string, number> = {
   USD: 0.00168,
   MAD: 0.0165,
   GHS: 0.019,
+}
+
+async function getTauxConversion(env: any): Promise<Record<string, number>> {
+  try {
+    // Essayer D1 d'abord (config_globale)
+    const row = await env.DB
+      .prepare("SELECT valeur FROM config_globale WHERE cle = 'taux_conversion_json' LIMIT 1")
+      .first<{ valeur: string }>()
+    if (row?.valeur) {
+      const taux = JSON.parse(row.valeur)
+      // Toujours assurer FCFA/XOF = 1
+      return { FCFA: 1, XOF: 1, ...taux }
+    }
+  } catch { /* D1 absent ou parsing raté — utiliser fallback */ }
+  return TAUX_CONVERSION_DEFAUT
 }
 
 type FonctionnalitesPlan = {
@@ -63,7 +79,9 @@ plansRouter.get('/', async (c) => {
     .prepare('SELECT * FROM plans WHERE actif = 1 ORDER BY ordre_affichage ASC')
     .all<Plan>()
 
-  const taux = TAUX_CONVERSION[deviseParam] ?? TAUX_CONVERSION.FCFA!
+  // BUG-015 FIX — lire taux depuis D1 config_globale avec fallback hardcodé
+  const tauxConversion = await getTauxConversion(c.env)
+  const taux = tauxConversion[deviseParam] ?? tauxConversion['FCFA'] ?? 1
 
   const plansConverted = plansResult.results.map((plan) => {
     const fonctionnalites = parseFonctionnalites(plan.fonctionnalites)

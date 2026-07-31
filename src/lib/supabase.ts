@@ -24,16 +24,6 @@ export type SupabaseEnv = {
  */
 export function createSupabaseClient(env: SupabaseEnv): SupabaseClient {
   if (!_client) {
-    // ---- DEBUG TEMPORAIRE — à retirer une fois le bug "supabaseUrl is required" résolu ----
-    console.error('[DEBUG ENV]', {
-      hasUrl: !!env.SUPABASE_URL,
-      urlLength: env.SUPABASE_URL?.length ?? 0,
-      hasAnonKey: !!env.SUPABASE_ANON_KEY,
-      anonKeyLength: env.SUPABASE_ANON_KEY?.length ?? 0,
-      allKeys: Object.keys(env as object)
-    })
-    // ---- FIN DEBUG TEMPORAIRE ----
-
     _client = createClient(env.SUPABASE_URL, env.SUPABASE_ANON_KEY, {
       auth: {
         autoRefreshToken: false,

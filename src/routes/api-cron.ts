@@ -324,13 +324,16 @@ async function bloquerPaiementsExpires(env: Env): Promise<void> {
       }
 
       // 4. Notification WhatsApp au restaurant
+      // BUG-013 FIX — appel non-bloquant : ne pas await pour éviter que
+      // l'échec ou la lenteur de l'API WhatsApp bloque le cron.
+      // L'appel est best-effort ; le cron continue même si WhatsApp échoue.
       if (tenant.whatsapp_number) {
-        try {
-          await notifierBlocageAutomatique(env, {
-            nom: tenant.nom,
-            whatsapp_number: tenant.whatsapp_number
-          })
-        } catch {}
+        notifierBlocageAutomatique(env, {
+          nom: tenant.nom,
+          whatsapp_number: tenant.whatsapp_number
+        }).catch((err) => {
+          console.warn(`[CRON:paiements] WhatsApp non bloquant échoué — tenant: ${tenant.id.slice(0, 8)}...`, err?.message)
+        })
       }
 
       // 5. Notification in-app restaurant

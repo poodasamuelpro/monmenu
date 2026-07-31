@@ -7,11 +7,15 @@
 // cron à 2h20 UTC), en appelant directement la même fonction que le cron
 // (capturerScreenshotsQuotidiens, exportée depuis api-cron.ts).
 //
-// Protection : GET simple avec secret en query string (pas de POST/outil
-// nécessaire — on peut coller l'URL directement dans un navigateur).
+// Protection : header X-Admin-Task-Secret (JAMAIS en query string).
 // Le secret est comparé à la variable d'environnement ADMIN_TASK_SECRET,
 // à définir dans Cloudflare → Workers & Pages → Variables and Secrets.
 // Ne JAMAIS committer cette valeur dans le dépôt.
+//
+// BUG-012 CORRIGÉ — le secret était passé via query string (?secret=…),
+// ce qui l'expose dans les logs de proxy/CDN et l'historique du navigateur.
+// Il est désormais attendu dans le header X-Admin-Task-Secret, invisible
+// dans les logs HTTP standards.
 
 import { Hono } from 'hono'
 import type { Env } from '../types/database'
@@ -23,7 +27,8 @@ const adminTasksRouter = new Hono<{ Bindings: Env }>()
 adminTasksRouter.get('/screenshots', async (c) => {
   setSecurityHeaders(c)
 
-  const secret = c.req.query('secret')
+  // BUG-012 FIX — secret en header X-Admin-Task-Secret, pas en query string
+  const secret = c.req.header('X-Admin-Task-Secret')
 
   if (!c.env.ADMIN_TASK_SECRET) {
     console.error('[admin-tasks] ADMIN_TASK_SECRET non configuré côté serveur.')

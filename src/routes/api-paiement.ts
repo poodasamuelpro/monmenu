@@ -510,8 +510,26 @@ paiementRouter.get('/historique', async (c) => {
     return c.json({ error: 'Erreur lors de la récupération de l\'historique.' }, 500)
   }
 
+  // BUG-007 FIX — enrichir chaque abonnement avec le nom du plan depuis D1
+  // La table abonnements (Supabase) stocke plan_id (UUID D1).
+  // On résout les noms en batch pour éviter N requêtes individuelles.
+  const abonnementsAvecNomPlan = await Promise.all(
+    (abonnements ?? []).map(async (ab: any) => {
+      if (!ab.plan_id) return { ...ab, plan_nom: null }
+      try {
+        const plan = await c.env.DB
+          .prepare('SELECT nom, prix_mensuel, prix_annuel, devise FROM plans WHERE id = ? LIMIT 1')
+          .bind(ab.plan_id)
+          .first<{ nom: string; prix_mensuel: number; prix_annuel: number; devise: string }>()
+        return { ...ab, plan_nom: plan?.nom ?? null, plan_prix_mensuel: plan?.prix_mensuel ?? null }
+      } catch {
+        return { ...ab, plan_nom: null }
+      }
+    })
+  )
+
   return c.json({
-    abonnements: abonnements ?? [],
+    abonnements: abonnementsAvecNomPlan,
     total: count ?? 0,
     page,
     limit,

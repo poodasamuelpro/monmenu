@@ -182,6 +182,9 @@ authRouter.post('/login', async (c) => {
 // pointe vers la table "pays" de Supabase, pas celle de D1. Les deux
 // bases ont des UUID générés indépendamment — un ID D1 ne peut jamais
 // satisfaire une contrainte FK Supabase. (CORRIGÉ — bug identifié le 27/07)
+// BUG-010 FIX — plan_id optionnel transmis depuis la page d'inscription
+// Si plan_id est fourni et valide (actif dans D1), le tenant est créé
+// directement sur ce plan. Sinon, fallback sur le plan Gratuit.
 authRouter.post('/register', async (c) => {
   setSecurityHeaders(c)
   const ip = c.req.header('CF-Connecting-IP') ?? 'unknown'
@@ -195,6 +198,7 @@ authRouter.post('/register', async (c) => {
   let body: {
     email?: string; password?: string; nom_restaurant?: string
     whatsapp_number?: string; nom_gerant?: string
+    plan_id?: string  // BUG-010 FIX — plan choisi lors de l'inscription (optionnel)
   }
   try { body = await c.req.json() }
   catch { return c.json({ error: 'JSON invalide.' }, 400) }
@@ -249,10 +253,29 @@ authRouter.post('/register', async (c) => {
     return c.json({ error: authError?.message ?? 'Erreur lors de la création du compte.' }, 500)
   }
 
-  // Récupérer plan gratuit depuis D1 (SITE WEB) — lecture uniquement pour nom du plan.
+  // Récupérer plan gratuit depuis D1 (SITE WEB) — fallback si plan_id absent ou invalide.
   const planGratuit = await c.env.DB
     .prepare("SELECT id, nom FROM plans WHERE nom = 'Gratuit' OR ordre_affichage = 0 LIMIT 1")
     .first<{ id: string; nom: string }>()
+
+  // BUG-010 FIX — Résoudre le plan à utiliser pour ce nouveau tenant.
+  // Si plan_id fourni dans le body ET référence un plan actif dans D1 → utiliser ce plan.
+  // Sinon → fallback sur le plan Gratuit (comportement antérieur).
+  let planChoisi: { id: string; nom: string } | null = planGratuit ?? null
+  if (body.plan_id && typeof body.plan_id === 'string' && body.plan_id.length > 0) {
+    try {
+      const planDemande = await c.env.DB
+        .prepare('SELECT id, nom FROM plans WHERE id = ? AND actif = 1 LIMIT 1')
+        .bind(body.plan_id)
+        .first<{ id: string; nom: string }>()
+      if (planDemande) {
+        planChoisi = planDemande
+      }
+      // Si plan_id invalide/inactif : silencieux — on retombe sur planGratuit
+    } catch {
+      // Erreur D1 non fatale — on retombe sur planGratuit
+    }
+  }
 
   // pays_id lu depuis SUPABASE (pas D1), car c'est la table Supabase "pays"
   // que la contrainte FK tenants_pays_id_fkey vérifie.
@@ -276,7 +299,7 @@ authRouter.post('/register', async (c) => {
       couleur_primaire: '#DC2626',
       couleur_secondaire: '#1D4ED8',
       statut: 'essai',
-      plan_id: planGratuit?.id ?? null,
+      plan_id: planChoisi?.id ?? null,
       metadata: {}
     })
     .select('id, slug')

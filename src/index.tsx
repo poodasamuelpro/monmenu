@@ -17,6 +17,8 @@ import { paiementRouter } from './routes/api-paiement'
 // AJOUT 2026-07-30 — route admin pour déclencher manuellement les tâches
 // cron (ex: relancer la capture des screenshots sans attendre 2h20 UTC).
 import { adminTasksRouter } from './routes/api-admin-tasks'
+// FEAT-E 2026-07-31 — endpoints admin paiements (confirmer/rejeter/preuve/moyens)
+import { adminPaiementsRouter } from './routes/api-admin-paiements'
 import { setSecurityHeaders } from './lib/security'
 import { getNomProjet, getWhatsAppSupport, createSupabaseAdminClient, createSupabaseClient } from './lib/supabase'
 
@@ -153,6 +155,31 @@ app.route('/api/v1/screenshots', screenshotsRouter)
 app.route('/api/v1/paiement', paiementRouter)
 // AJOUT 2026-07-30 — déclenchement manuel des tâches cron (ex: screenshots)
 app.route('/api/v1/admin/tasks', adminTasksRouter)
+// FEAT-E 2026-07-31 — administration des paiements manuels
+app.route('/api/v1/admin/paiements', adminPaiementsRouter)
+
+// ─── Feat F — Endpoint PUBLIC GET /api/v1/moyens-paiement ──────────────────
+// Retourne les moyens de paiement actifs pour affichage dans le dashboard
+// restaurant et la page de soumission de preuve. Accès public (pas d'auth)
+// car ces infos (numéros de dépôt) doivent être visibles sans être connecté.
+// Sécurité : lecture seule, RLS Supabase = service_role pour l'admin,
+// ici on lit directement la table moyens_paiement avec le client anon (lecture publique).
+app.get('/api/v1/moyens-paiement', async (c) => {
+  setSecurityHeaders(c)
+  try {
+    const { createSupabaseClient } = await import('./lib/supabase')
+    const supabase = createSupabaseClient(c.env)
+    const { data, error } = await supabase
+      .from('moyens_paiement')
+      .select('id, nom, type, numero, instructions, logo_url, actif')
+      .eq('actif', true)
+      .order('ordre_affichage', { ascending: true })
+    if (error) throw error
+    return c.json({ moyens: data ?? [] })
+  } catch (err: any) {
+    return c.json({ moyens: [], error: 'Moyens de paiement temporairement indisponibles.' }, 200)
+  }
+})
 
 // ---- Sitemap dynamique ----
 app.get('/sitemap.xml', async (c) => {
