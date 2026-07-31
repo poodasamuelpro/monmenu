@@ -82,6 +82,16 @@ function checkCsrfProtection(c: any): boolean {
 }
 
 // ---- Middleware d'authentification ----
+// CYCLE-3 — Logique de blocage par statut tenant :
+//   'actif'                        → accès complet dashboard
+//   'essai'                        → accès complet dashboard (essai en cours)
+//   'en_attente_paiement_initial'  → BLOQUÉ ici (doit aller soumettre preuve d'abord)
+//   'inactif'                      → BLOQUÉ
+//   'suspendu'                     → BLOQUÉ
+//
+// Le statut 'en_attente_paiement_initial' est autorisé UNIQUEMENT par verifyAuthPaiement()
+// dans api-paiement.ts, qui expose /api/v1/paiement/* (pour soumettre la preuve).
+// Toutes les routes /api/v1/dashboard/* utilisent verifyAuth() qui bloque ce statut.
 async function verifyAuth(c: any): Promise<{ user_id: string; tenant_id: string; tenant_slug: string; token: string } | null> {
   const token = extractToken(c)
   if (!token) return null
@@ -97,12 +107,9 @@ async function verifyAuth(c: any): Promise<{ user_id: string; tenant_id: string;
       .select('tenant_id, tenants!inner(id, slug, statut, deleted_at)')
       .eq('auth_user_id', user.id)
       .is('tenants.deleted_at', null)
-      // FIX — liste blanche au lieu de liste noire : bloque explicitement
-      // 'inactif' ET 'suspendu', autorise seulement 'actif' et 'essai'.
-      // AJOUT 2026-07-29 (audit 06-sync §8) : les tenants avec un abonnement
-      // 'en_attente_confirmation' valide restent accessibles pendant la fenêtre
-      // de 72h. Leur statut tenant reste 'essai' dans ce cas — pas de changement
-      // requis ici, mais la note documente l'invariant.
+      // Liste blanche stricte : seuls 'actif' et 'essai' ont accès au dashboard complet.
+      // 'en_attente_paiement_initial' → redirigé vers /dashboard/abonnement (géré côté client)
+      // 'inactif', 'suspendu' → bloqués
       .in('tenants.statut', ['actif', 'essai'])
       .single()
 

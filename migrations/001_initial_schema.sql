@@ -72,7 +72,10 @@ CREATE TABLE IF NOT EXISTS plans (
   nom TEXT NOT NULL,
   prix_mensuel INTEGER NOT NULL DEFAULT 0,
   prix_annuel INTEGER NOT NULL DEFAULT 0,
+  devise TEXT NOT NULL DEFAULT 'FCFA',
   commandes_incluses INTEGER NOT NULL DEFAULT 50,
+  frais_par_commande INTEGER NOT NULL DEFAULT 0,
+  limite_pdv INTEGER NOT NULL DEFAULT 1,
   fonctionnalites TEXT,
   ordre_affichage INTEGER NOT NULL DEFAULT 0,
   actif INTEGER NOT NULL DEFAULT 1,
@@ -80,21 +83,8 @@ CREATE TABLE IF NOT EXISTS plans (
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
--- Plans tarifaires (prix en FCFA)
--- prix_annuel = prix_mensuel * 10 (2 mois offerts)
-INSERT OR IGNORE INTO plans (nom, prix_mensuel, prix_annuel, commandes_incluses, fonctionnalites, ordre_affichage) VALUES
-  ('Gratuit', 0, 0, 50,
-   '{"menu_en_ligne":true,"commandes_whatsapp":true,"qr_code":true,"stats_base":true,"support_email":false,"domaine_perso":false,"livreurs":1,"produits_max":20}',
-   0),
-  ('Starter', 5000, 50000, 200,
-   '{"menu_en_ligne":true,"commandes_whatsapp":true,"qr_code":true,"stats_avancees":true,"support_email":true,"domaine_perso":false,"livreurs":3,"produits_max":100,"codes_promo":true}',
-   1),
-  ('Pro', 15000, 150000, 1000,
-   '{"menu_en_ligne":true,"commandes_whatsapp":true,"qr_code":true,"stats_avancees":true,"support_email":true,"support_whatsapp":true,"domaine_perso":true,"livreurs_illimites":true,"produits_max":-1,"codes_promo":true,"export_csv":true,"api_access":true}',
-   2),
-  ('Enterprise', 0, 0, -1,
-   '{"tout_inclus":true,"support_dedie":true,"onboarding":true,"formation":true,"sla":true}',
-   3);
+-- Les plans sont insérés par la migration 0002_seed_plans_faso.sql
+-- qui définit les 4 plans officiels (Faso, Baraka, Naaba, Mogho).
 
 -- Index pour les recherches fréquentes
 CREATE INDEX IF NOT EXISTS idx_pays_code_iso ON pays(code_iso);

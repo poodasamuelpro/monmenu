@@ -167,11 +167,15 @@ app.route('/api/v1/admin/paiements', adminPaiementsRouter)
 app.get('/api/v1/moyens-paiement', async (c) => {
   setSecurityHeaders(c)
   try {
-    const { createSupabaseClient } = await import('./lib/supabase')
+    // BUG-NOUVEAU-001 FIX (CYCLE-3) : import dynamique redondant supprimé —
+    // createSupabaseClient est importé statiquement ligne 23.
+    // Colonne 'type' inexistante remplacée par les vraies colonnes de la table
+    // moyens_paiement (migration 012) : code, nom, description, instructions,
+    // numero, logo_url, actif.
     const supabase = createSupabaseClient(c.env)
     const { data, error } = await supabase
       .from('moyens_paiement')
-      .select('id, nom, type, numero, instructions, logo_url, actif')
+      .select('id, code, nom, description, instructions, numero, logo_url, actif')
       .eq('actif', true)
       .order('ordre_affichage', { ascending: true })
     if (error) throw error
@@ -494,8 +498,15 @@ app.get('/dashboard/*', async (c) => {
         .single()
 
       const statutTenant = (ut?.tenants as any)?.statut
-      // en_attente_confirmation : fenêtre de 72h — le tenant reste accessible (audit 06-sync §8)
-      if (!statutTenant || !['actif', 'essai', 'en_attente_confirmation'].includes(statutTenant)) {
+      // CYCLE-3 : en_attente_paiement_initial → redirigé vers /dashboard/abonnement
+      // (tenant avec plan payant choisi mais preuve non encore soumise)
+      if (statutTenant === 'en_attente_paiement_initial') {
+        // Autoriser l'accès uniquement à /dashboard/abonnement pour soumettre la preuve
+        if (!c.req.path.startsWith('/dashboard/abonnement')) {
+          return c.redirect('/dashboard/abonnement', 302)
+        }
+      } else if (!statutTenant || !['actif', 'essai', 'en_attente_confirmation'].includes(statutTenant)) {
+        // en_attente_confirmation : fenêtre de 72h — le tenant reste accessible (audit 06-sync §8)
         return c.redirect('/dashboard/compte-inactif', 302)
       }
     }

@@ -1,40 +1,13 @@
 // API Plans/Forfaits — Prix dynamiques depuis la DB (D1, site web uniquement)
 // Section 8.6 du cahier des charges — AUCUN prix codé en dur côté client.
+// CYCLE-3 : Suppression intégrale de getTauxConversion(), TAUX_CONVERSION_DEFAUT,
+//           paramètre ?devise=, prix_annuel_converti, economie_annuelle.
+//           Tous les prix sont retournés en FCFA bruts (pas de conversion).
 import { Hono } from 'hono'
 import type { Env, Plan } from '../types/database'
 import { setSecurityHeaders } from '../lib/security'
 
 const plansRouter = new Hono<{ Bindings: Env }>()
-
-// Taux de conversion FCFA → autres devises
-// BUG-015 FIX — les taux sont désormais lus depuis D1 config_globale (clé 'taux_conversion_json')
-// Fallback sur les valeurs ci-dessous si la config D1 est absente ou invalide.
-// Pour mettre à jour les taux : INSERT OR REPLACE INTO config_globale (cle, valeur)
-// VALUES ('taux_conversion_json', '{"FCFA":1,"XOF":1,"XAF":1,"EUR":0.00152,"USD":0.00168,"MAD":0.0165,"GHS":0.019}');
-const TAUX_CONVERSION_DEFAUT: Record<string, number> = {
-  FCFA: 1,
-  XOF: 1,
-  XAF: 1,
-  EUR: 0.00152,
-  USD: 0.00168,
-  MAD: 0.0165,
-  GHS: 0.019,
-}
-
-async function getTauxConversion(env: any): Promise<Record<string, number>> {
-  try {
-    // Essayer D1 d'abord (config_globale)
-    const row = await env.DB
-      .prepare("SELECT valeur FROM config_globale WHERE cle = 'taux_conversion_json' LIMIT 1")
-      .first<{ valeur: string }>()
-    if (row?.valeur) {
-      const taux = JSON.parse(row.valeur)
-      // Toujours assurer FCFA/XOF = 1
-      return { FCFA: 1, XOF: 1, ...taux }
-    }
-  } catch { /* D1 absent ou parsing raté — utiliser fallback */ }
-  return TAUX_CONVERSION_DEFAUT
-}
 
 type FonctionnalitesPlan = {
   sous_titre?: string
@@ -57,12 +30,14 @@ function parseFonctionnalites(raw: Plan['fonctionnalites']): FonctionnalitesPlan
   return raw as FonctionnalitesPlan
 }
 
-// GET /api/v1/plans — Liste des plans actifs, triés, avec conversion devise
+// GET /api/v1/plans — Liste des plans actifs, triés, prix en FCFA bruts
+// CYCLE-3 : paramètre ?devise= ignoré — devise fixe FCFA.
+//           getTauxConversion() supprimé, aucune conversion effectuée.
 plansRouter.get('/', async (c) => {
   setSecurityHeaders(c)
 
-  const deviseParam = (c.req.query('devise') ?? 'FCFA').toUpperCase()
-  const cacheKey = `plans:${deviseParam}`
+  // CYCLE-3 : cache KV sans devise (clé unique 'plans:FCFA' immuable)
+  const cacheKey = 'plans:FCFA'
 
   // Cache KV (optionnel, 10 min) — ne bloque jamais la requête si absent
   try {
@@ -79,19 +54,13 @@ plansRouter.get('/', async (c) => {
     .prepare('SELECT * FROM plans WHERE actif = 1 ORDER BY ordre_affichage ASC')
     .all<Plan>()
 
-  // BUG-015 FIX — lire taux depuis D1 config_globale avec fallback hardcodé
-  const tauxConversion = await getTauxConversion(c.env)
-  const taux = tauxConversion[deviseParam] ?? tauxConversion['FCFA'] ?? 1
-
-  const plansConverted = plansResult.results.map((plan) => {
+  const plans = plansResult.results.map((plan) => {
     const fonctionnalites = parseFonctionnalites(plan.fonctionnalites)
     return {
       ...plan,
       fonctionnalites,
-      prix_mensuel_converti: Math.round(plan.prix_mensuel * taux),
-      prix_annuel_converti: Math.round(plan.prix_annuel * taux),
-      devise_affichage: deviseParam,
-      economie_annuelle: Math.round((plan.prix_mensuel * 12 - plan.prix_annuel) * taux),
+      // CYCLE-3 : prix bruts FCFA uniquement — pas de conversion devise
+      devise: 'FCFA',
       // -1 en base = illimité : on normalise ici pour ne pas laisser le
       // front réinterpréter (et potentiellement mal afficher) un -1 brut.
       commandes_incluses_affichage:
@@ -100,7 +69,8 @@ plansRouter.get('/', async (c) => {
     }
   })
 
-  const result = { plans: plansConverted, devise: deviseParam }
+  // CYCLE-3 : devise fixe FCFA dans la réponse (plus de paramètre dynamique)
+  const result = { plans, devise: 'FCFA' }
 
   try {
     if (c.env.KV_CACHE) {

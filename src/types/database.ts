@@ -45,9 +45,12 @@ export interface Tenant {
   couleur_secondaire: string
   whatsapp_number: string
   domaine_perso: string | null
-  statut: 'actif' | 'inactif' | 'suspendu' | 'essai'
+  // CYCLE-3 : ajout statut 'en_attente_paiement_initial' (tenant plan payant, preuve non soumise)
+  statut: 'actif' | 'inactif' | 'suspendu' | 'essai' | 'en_attente_paiement_initial'
   essai_expire_le: string | null
-  plan_id: string
+  plan_id: string | null
+  // CYCLE-3 : plan choisi à l'inscription avant confirmation paiement
+  plan_initial_id?: string | null
   // AJOUT migration 007 — suivi paiement en attente
   paiement_en_attente_depuis: string | null
   reference_paiement_active: string | null
@@ -70,6 +73,8 @@ export interface Abonnement {
   statut: 'actif' | 'expire' | 'annule' | 'en_retard' | 'en_attente_confirmation'
   date_debut: string
   date_fin: string | null
+  // CYCLE-3 : periodicite exclusivement mensuel
+  periodicite?: 'mensuel' | null
   // Champs paiement manuel
   montant_paye?: number | null
   devise?: string | null

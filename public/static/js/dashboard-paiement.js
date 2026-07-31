@@ -4,14 +4,16 @@
  * Ce module gère :
  *   - Les bandeaux de notification paiement dans le header du dashboard
  *   - La section /dashboard/abonnement complète (statut, référence, upload preuve,
- *     historique, progression délai, toggle mensuel/annuel, upgrade/downgrade)
+ *     historique, progression délai, upgrade/downgrade)
  *   - L'upload avec drag-and-drop et validation 4 couches côté client
  *
- * CORRECTIONS APPLIQUÉES :
+ * CORRECTIONS CYCLE-3 :
  *   BUG-002 — construireCarteStatut() lit désormais s.abonnement.statut (pas s.statut_abonnement)
  *   BUG-003 — initBandeauxPaiement() filtre sur types API réels : 'info','warning','error','success'
- *   BUG-006 — toggle mensuel/annuel ajouté au formulaire de soumission preuve
+ *   BUG-006 — toggle mensuel/annuel SUPPRIMÉ (tous les abonnements sont mensuels — CYCLE-3)
  *   BUG-009 — race condition DOMContentLoaded corrigée : chargerPlansSelect + initSection séquentiels
+ *   BUG-NOUVEAU-001 — /api/v1/moyens-paiement retournait [] (colonne 'type' inexistante) → corrigé
+ *   CYCLE-3 — Ajout état 'en_attente_paiement_initial' : affichage récapitulatif plan + CTA paiement
  *   Feat C  — Section abonnement complète : statut, référence, moyens de paiement, historique enrichi
  *   Feat D  — Bouton upgrade/downgrade plan dans la section abonnement
  *
@@ -89,7 +91,6 @@ function apiCallPaiement(path, opts = {}) {
 /**
  * BUG-003 CORRIGÉ — filtre sur les types réels retournés par l'API :
  * 'info', 'warning', 'error', 'success'
- * (l'ancien filtre utilisait 'paiement_en_attente', 'essai_expirant' qui n'existent pas)
  *
  * @returns {Promise<void>}
  */
@@ -102,7 +103,6 @@ async function initBandeauxPaiement() {
     if (!res.ok) return;
     const data = await res.json();
 
-    // BUG-003 FIX — types API réels : 'info', 'warning', 'error', 'success'
     const notifs = (data.notifications || []).filter(n =>
       ['info', 'warning', 'error', 'success'].includes(n.type)
     );
@@ -111,7 +111,6 @@ async function initBandeauxPaiement() {
 
     container.innerHTML = notifs.map(n => construireBandeau(n)).join('');
 
-    // Badge sur nav abonnement si action requise (type 'error' ou 'warning' avec action)
     const requiresAction = notifs.some(n =>
       n.type === 'error' || (n.type === 'warning' && n.action)
     );
@@ -123,7 +122,6 @@ async function initBandeauxPaiement() {
 }
 
 function construireBandeau(notif) {
-  // BUG-003 FIX — mapping sur les types API réels ('info','warning','error','success')
   const colorMap = {
     info:    'bg-blue-50 border-blue-200 text-blue-800',
     warning: 'bg-yellow-50 border-yellow-200 text-yellow-800',
@@ -155,8 +153,11 @@ function construireBandeau(notif) {
 // ─── Section Abonnement (/dashboard/abonnement) ───────────────────────────────
 
 /**
- * BUG-009 CORRIGÉ — race condition : les plans sont chargés AVANT l'affichage
- * de la section, via await séquentiel dans le DOMContentLoaded.
+ * CYCLE-3 — Gère maintenant l'état 'en_attente_paiement_initial' :
+ *   affiche le récapitulatif du plan choisi + CTA pour soumettre la preuve.
+ * BUG-NOUVEAU-001 CORRIGÉ — les moyens de paiement s'affichent maintenant
+ *   car l'endpoint retourne les vraies colonnes (code, nom, description...).
+ * BUG-009 CORRIGÉ — race condition : plans chargés AVANT l'affichage.
  *
  * @returns {Promise<void>}
  */
@@ -176,10 +177,18 @@ async function initSectionAbonnement() {
     const [statutRes, historiqueRes, plansRes, moyensRes] = await Promise.all([
       apiCallPaiement('/statut'),
       apiCallPaiement('/historique'),
-      fetch(PLANS_API, { credentials: 'include' }),
-      fetch('/api/v1/moyens-paiement', { credentials: 'include' }).catch(() => null)
+      fetch(PLANS_API, {
+        credentials: 'include',
+        headers: { 'X-Requested-With': 'XMLHttpRequest' }
+      }),
+      fetch('/api/v1/moyens-paiement', {
+        credentials: 'include',
+        headers: { 'X-Requested-With': 'XMLHttpRequest' }
+      }).catch(() => null)
     ]);
 
+    // CYCLE-3 : statut 401 → en_attente_paiement_initial peut arriver ici
+    // verifyAuthPaiement() autorise maintenant ce statut
     const statut    = statutRes.ok    ? await statutRes.json()    : null;
     const historique = historiqueRes.ok ? await historiqueRes.json() : null;
     const plansData  = plansRes.ok     ? await plansRes.json()     : null;
@@ -190,24 +199,35 @@ async function initSectionAbonnement() {
 
     container.innerHTML = '';
 
+    // ── Bloc 1 : Statut courant ──
     if (statut) {
       container.appendChild(construireCarteStatut(statut));
     }
 
-    // Bloc instructions moyens de paiement
-    if (moyensData?.moyens?.length || _plansCache.length) {
-      container.appendChild(construireBlocMoyensPaiement(moyensData?.moyens ?? []));
+    // ── Bloc 2 : Moyens de paiement (affiché si données disponibles)
+    // CYCLE-3 : toujours afficher si plans disponibles (même sans moyens DB)
+    const moyens = moyensData?.moyens ?? [];
+    if (moyens.length > 0 || _plansCache.length > 0) {
+      const blocMoyens = construireBlocMoyensPaiement(moyens);
+      if (blocMoyens && blocMoyens.children?.length > 0) {
+        container.appendChild(blocMoyens);
+      } else if (moyens.length > 0) {
+        container.appendChild(blocMoyens);
+      }
     }
 
+    // ── Bloc 3 : Historique ──
     if (historique?.abonnements?.length) {
       container.appendChild(construireHistorique(historique.abonnements));
     }
 
+    // Cas d'erreur réelle uniquement (pas de statut ET pas d'historique)
     if (!statut && !historique?.abonnements?.length) {
       container.innerHTML = `
         <div class="text-center py-12 text-gray-400">
           <i class="fa-solid fa-credit-card text-4xl mb-3 block"></i>
-          <p class="text-sm">Aucun abonnement trouvé.</p>
+          <p class="text-sm font-medium text-gray-600 mb-1">Impossible de charger votre abonnement.</p>
+          <p class="text-xs">Vérifiez votre connexion ou rechargez la page.</p>
           <button onclick="initSectionAbonnement()" class="mt-4 text-red-600 hover:underline text-sm font-medium">Réessayer →</button>
         </div>
       `;
@@ -221,17 +241,15 @@ async function initSectionAbonnement() {
 let _plansCache = [];
 
 /**
- * BUG-002 CORRIGÉ — lecture des champs corrects depuis la réponse API :
- *   s.statut_tenant (pas s.statut_abonnement)
- *   s.abonnement.statut (objet imbriqué)
- *   s.abonnement.delai_confirmation_expire_le (pas s.deadline_confirmation)
- *   s.abonnement.reference_paiement (pas s.reference_active)
+ * CYCLE-3 :
+ *   - Ajout état 'en_attente_paiement_initial' : récapitulatif plan + instructions paiement
+ *   - BUG-002 CORRIGÉ : lecture des champs corrects depuis la réponse API
+ *   - Toggle mensuel/annuel SUPPRIMÉ (CYCLE-3)
  */
 function construireCarteStatut(s) {
   const div = document.createElement('div');
   div.className = 'space-y-4 mb-6';
 
-  // ── BUG-002 FIX : lire depuis s.abonnement (objet imbriqué) ──
   const abonnement = s.abonnement;
   const statutAbonnement = abonnement?.statut ?? null;
   const statutTenant = s.statut_tenant;
@@ -240,7 +258,36 @@ function construireCarteStatut(s) {
   let actionHtml = '';
   let upgradeHtml = '';
 
-  if (statutAbonnement === 'actif') {
+  // ── CYCLE-3 : Nouvel état 'en_attente_paiement_initial' ──
+  if (statutTenant === 'en_attente_paiement_initial') {
+    const planNom = s.plan_initial_nom || '—';
+    const planPrix = s.plan_initial_prix_mensuel;
+    const planPrixStr = planPrix != null ? Number(planPrix).toLocaleString('fr-FR') + ' FCFA/mois' : '—';
+
+    statutHtml = `
+      <div class="bg-amber-50 border border-amber-200 rounded-2xl p-5">
+        <div class="flex items-center gap-3 mb-3">
+          <i class="fa-solid fa-clock text-amber-500 text-xl"></i>
+          <div>
+            <span class="font-bold text-amber-800">En attente de votre premier paiement</span>
+            <p class="text-xs text-amber-600 mt-0.5">Votre compte est créé — soumettez votre preuve pour accéder au dashboard.</p>
+          </div>
+        </div>
+        <div class="bg-white/70 rounded-xl px-4 py-3 mb-3">
+          <p class="text-sm font-semibold text-gray-800 mb-1">
+            <i class="fa-solid fa-tag text-amber-400 mr-1.5"></i>
+            Plan choisi : <span class="text-amber-700">${esc(planNom)}</span>
+          </p>
+          <p class="text-sm text-gray-600">Montant mensuel : <strong>${esc(planPrixStr)}</strong></p>
+        </div>
+        <p class="text-xs text-amber-700">
+          <i class="fa-solid fa-circle-info mr-1"></i>
+          Effectuez le paiement en utilisant la référence ci-dessous et uploadez votre reçu.
+          L'accès complet sera débloqué dès soumission de la preuve.
+        </p>
+      </div>
+    `;
+  } else if (statutAbonnement === 'actif') {
     // Feat D — afficher bouton upgrade/downgrade si plan actif
     upgradeHtml = `
       <div class="mt-3">
@@ -258,14 +305,16 @@ function construireCarteStatut(s) {
           <i class="fa-solid fa-circle-check text-green-500 text-xl"></i>
           <span class="font-bold text-green-800">Abonnement actif</span>
         </div>
-        <p class="text-sm text-green-700">Plan : <strong>${esc(abonnement?.plan_nom || '—')}</strong></p>
+        <p class="text-sm text-green-700">Plan : <strong>${esc(abonnement?.plan_nom || s.plan_initial_nom || '—')}</strong></p>
         <p class="text-sm text-green-700">Expire le : <strong>${formatDate(abonnement?.date_fin)}</strong></p>
+        <p class="text-xs text-green-600 mt-1">
+          <i class="fa-solid fa-rotate mr-1"></i>Périodicité : mensuel
+        </p>
         ${upgradeHtml}
       </div>
     `;
   } else if (statutAbonnement === 'en_attente_confirmation') {
-    // BUG-002 FIX : lire delai_confirmation_expire_le depuis abonnement
-    const deadline = abonnement?.delai_confirmation_expire_le ?? abonnement?.delai_confirmation_expire_le;
+    const deadline = abonnement?.delai_confirmation_expire_le;
     const hR  = deadline ? heuresRestantes(deadline) : null;
     const soumisLe = abonnement?.soumis_le;
     const pct = (soumisLe && deadline) ? progressionDelai(soumisLe, deadline) : 0;
@@ -358,6 +407,41 @@ function construireCarteStatut(s) {
     `;
   }
 
+  // ── Liste des offres disponibles (CYCLE-3 : toujours affichée) ──
+  let offresHtml = '';
+  if (_plansCache.length > 0) {
+    const plansPayants = _plansCache.filter(p => p.actif && p.prix_mensuel > 0);
+    if (plansPayants.length > 0) {
+      offresHtml = `
+        <div class="bg-white border border-gray-200 rounded-2xl p-5">
+          <h3 class="font-bold text-gray-900 mb-3 text-sm flex items-center gap-2">
+            <i class="fa-solid fa-list-ul text-gray-400"></i>
+            Formules disponibles
+          </h3>
+          <div class="space-y-2">
+            ${plansPayants.map(p => {
+              const isActuel = abonnement?.plan_id === p.id || s.plan_initial_id === p.id;
+              return `
+                <div class="border ${isActuel ? 'border-red-300 bg-red-50/40' : 'border-gray-100'} rounded-xl p-3 flex items-center justify-between">
+                  <div>
+                    <span class="font-semibold text-gray-900 text-sm">${esc(p.nom)}</span>
+                    ${isActuel ? '<span class="ml-2 text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full">Votre plan</span>' : ''}
+                    <p class="text-xs text-gray-500 mt-0.5">${Number(p.prix_mensuel).toLocaleString('fr-FR')} FCFA/mois</p>
+                  </div>
+                  ${!isActuel && statutAbonnement !== 'en_attente_confirmation' ? `
+                  <button onclick="preselectPlan('${esc(p.id)}')"
+                    class="text-xs bg-red-600 hover:bg-red-700 text-white px-3 py-1.5 rounded-lg transition-colors font-medium">
+                    Choisir
+                  </button>` : ''}
+                </div>
+              `;
+            }).join('')}
+          </div>
+        </div>
+      `;
+    }
+  }
+
   // ── CTA : soumettre preuve (uniquement si pas déjà en attente) ──
   if (statutAbonnement !== 'en_attente_confirmation') {
     actionHtml = `
@@ -374,10 +458,9 @@ function construireCarteStatut(s) {
     `;
   }
 
-  div.innerHTML = statutHtml + referenceHtml + actionHtml;
+  div.innerHTML = statutHtml + referenceHtml + offresHtml + actionHtml;
 
   // BUG-009 FIX — charger les plans dans le select APRÈS que le DOM est injecté
-  // On utilise setTimeout(0) pour attendre que le div soit dans le DOM
   if (statutAbonnement !== 'en_attente_confirmation') {
     setTimeout(() => {
       const sel = document.getElementById('inp-plan-preuve');
@@ -390,6 +473,20 @@ function construireCarteStatut(s) {
   }
 
   return div;
+}
+
+// ─── Présélection d'un plan dans le formulaire ────────────────────────────────
+
+function preselectPlan(planId) {
+  const sel = document.getElementById('inp-plan-preuve');
+  const bloc = document.getElementById('bloc-soumettre-preuve');
+  if (sel) {
+    sel.value = planId;
+    majAffichagePrix();
+  }
+  if (bloc) {
+    bloc.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
 }
 
 // ─── Bloc Moyens de Paiement ──────────────────────────────────────────────────
@@ -418,7 +515,7 @@ function construireBlocMoyensPaiement(moyens) {
               </button>
             </div>` : ''}
           </div>
-          ${m.nom_compte ? `<p class="text-xs text-gray-500 mb-1">Compte : <strong>${esc(m.nom_compte)}</strong></p>` : ''}
+          ${m.description ? `<p class="text-xs text-gray-500 mb-1">${esc(m.description)}</p>` : ''}
           ${m.instructions ? `<p class="text-xs text-gray-400 leading-relaxed">${esc(m.instructions)}</p>` : ''}
         </div>
       `).join('')}
@@ -430,6 +527,7 @@ function construireBlocMoyensPaiement(moyens) {
 // ─── Formulaire d'upload preuve ───────────────────────────────────────────────
 
 function construireFormUpload() {
+  // CYCLE-3 : toggle mensuel/annuel SUPPRIMÉ — tous les abonnements sont mensuels
   return `
     <div id="upload-zone"
       class="border-2 border-dashed border-gray-200 rounded-2xl p-8 text-center transition-all cursor-pointer hover:border-red-300 hover:bg-red-50/30"
@@ -456,26 +554,9 @@ function construireFormUpload() {
 
     <div class="mt-4">
       <label class="block text-xs font-semibold text-gray-600 mb-1.5">Plan souhaité *</label>
-      <select id="inp-plan-preuve" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200 focus:border-red-400">
+      <select id="inp-plan-preuve" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200 focus:border-red-400" onchange="majAffichagePrix()">
         <option value="">Chargement des plans...</option>
       </select>
-    </div>
-
-    <!-- BUG-006 FIX — Toggle mensuel/annuel ajouté au formulaire -->
-    <div class="mt-3">
-      <label class="block text-xs font-semibold text-gray-600 mb-1.5">Périodicité *</label>
-      <div class="flex gap-3">
-        <label class="flex items-center gap-2 cursor-pointer">
-          <input type="radio" name="periodicite-preuve" id="radio-mensuel" value="mensuel" checked
-            class="text-red-600 focus:ring-red-200" onchange="majAffichagePrix()">
-          <span class="text-sm text-gray-700">Mensuel</span>
-        </label>
-        <label class="flex items-center gap-2 cursor-pointer">
-          <input type="radio" name="periodicite-preuve" id="radio-annuel" value="annuel"
-            class="text-red-600 focus:ring-red-200" onchange="majAffichagePrix()">
-          <span class="text-sm text-gray-700">Annuel <span class="text-xs text-green-600 font-semibold">(économies)</span></span>
-        </label>
-      </div>
       <p id="affichage-prix-plan" class="mt-1.5 text-xs text-gray-400"></p>
     </div>
 
@@ -507,23 +588,20 @@ function construireFormUpload() {
   `;
 }
 
-// ─── Affichage prix selon toggle mensuel/annuel ────────────────────────────────
+// ─── Affichage prix du plan sélectionné ──────────────────────────────────────
+// CYCLE-3 : toggle annuel supprimé — affiche uniquement le prix mensuel
 
 function majAffichagePrix() {
   const sel = document.getElementById('inp-plan-preuve');
-  const radio = document.querySelector('input[name="periodicite-preuve"]:checked');
   const affEl = document.getElementById('affichage-prix-plan');
-  if (!sel || !radio || !affEl) return;
+  if (!sel || !affEl) return;
 
   const planId = sel.value;
-  const periodicite = radio.value;
   const plan = _plansCache.find(p => p.id === planId);
 
   if (plan) {
-    const prix = periodicite === 'annuel' ? plan.prix_annuel : plan.prix_mensuel;
-    const eco = periodicite === 'annuel' ? plan.economie_annuelle : null;
-    affEl.textContent = `Montant : ${Number(prix).toLocaleString('fr-FR')} FCFA/${periodicite === 'annuel' ? 'an' : 'mois'}`
-      + (eco && eco > 0 ? ` — économie de ${Number(eco).toLocaleString('fr-FR')} FCFA/an` : '');
+    // CYCLE-3 : prix mensuel uniquement
+    affEl.textContent = `Montant : ${Number(plan.prix_mensuel).toLocaleString('fr-FR')} FCFA/mois`;
   } else {
     affEl.textContent = '';
   }
@@ -609,14 +687,16 @@ function remplirSelectPlans(sel, plans) {
     plansFiltres.map(p =>
       `<option value="${esc(p.id)}">${esc(p.nom)} — ${Number(p.prix_mensuel).toLocaleString('fr-FR')} FCFA/mois</option>`
     ).join('');
-  sel.addEventListener('change', majAffichagePrix);
 }
 
 async function chargerPlansSelect(selectId) {
   const sel = document.getElementById(selectId);
   if (!sel) return;
   try {
-    const res = await fetch(PLANS_API, { credentials: 'include' });
+    const res = await fetch(PLANS_API, {
+      credentials: 'include',
+      headers: { 'X-Requested-With': 'XMLHttpRequest' }
+    });
     if (!res.ok) return;
     const data = await res.json();
     _plansCache = data.plans ?? [];
@@ -631,10 +711,7 @@ async function soumettrePreuvePaiement() {
   const msg  = document.getElementById('msg-soumettre');
   const planId  = document.getElementById('inp-plan-preuve')?.value;
   const methode = document.getElementById('inp-methode-preuve')?.value;
-
-  // BUG-006 FIX — lire la périodicité depuis les radio buttons
-  const periodiciteEl = document.querySelector('input[name="periodicite-preuve"]:checked');
-  const periodicite = periodiciteEl?.value ?? 'mensuel';
+  // CYCLE-3 : periodicite = 'mensuel' hardcodé — plus de toggle annuel
 
   if (!_preuveFichier) {
     afficherErreurUpload('Veuillez sélectionner une image de votre reçu.');
@@ -666,8 +743,7 @@ async function soumettrePreuvePaiement() {
     formData.append('preuve', _preuveFichier);
     formData.append('plan_id', planId);
     formData.append('methode_paiement', methode);
-    // BUG-006 FIX — transmettre la périodicité sélectionnée
-    formData.append('periodicite', periodicite);
+    // CYCLE-3 : periodicite non transmise (inutile côté serveur, hardcodée à 'mensuel')
 
     const res = await apiCallPaiement('/soumettre', {
       method: 'POST',
@@ -716,9 +792,9 @@ function afficherErreurUpload(msg) {
 }
 
 // ─── Feat D — Modal changement de plan (upgrade/downgrade) ────────────────────
+// CYCLE-3 : toggle annuel SUPPRIMÉ de la modale
 
 function ouvrirModalChangementPlan() {
-  // Supprimer une éventuelle modale existante
   document.getElementById('modal-changement-plan')?.remove();
 
   const plansFiltres = _plansCache.filter(p => p.actif && p.prix_mensuel > 0);
@@ -757,19 +833,10 @@ function ouvrirModalChangementPlan() {
             </label>
           `).join('')}
         </div>
-        <div class="mt-3 mb-4">
-          <label class="block text-xs font-semibold text-gray-600 mb-1.5">Périodicité souhaitée</label>
-          <div class="flex gap-4">
-            <label class="flex items-center gap-2 cursor-pointer">
-              <input type="radio" name="periodicite-changement" value="mensuel" checked class="text-red-600">
-              <span class="text-sm">Mensuel</span>
-            </label>
-            <label class="flex items-center gap-2 cursor-pointer">
-              <input type="radio" name="periodicite-changement" value="annuel" class="text-red-600">
-              <span class="text-sm">Annuel <span class="text-xs text-green-600">(économies)</span></span>
-            </label>
-          </div>
-        </div>
+        <!-- CYCLE-3 : toggle périodicité SUPPRIMÉ — uniquement mensuel -->
+        <p class="text-xs text-gray-400 mb-4">
+          <i class="fa-solid fa-circle-info mr-1"></i>Périodicité : mensuel (uniquement)
+        </p>
         <p id="msg-changement-plan" class="hidden text-xs p-3 rounded-xl mb-3"></p>
         <button onclick="soumettreChangementPlan()"
           class="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 rounded-xl transition-colors">
@@ -783,7 +850,6 @@ function ouvrirModalChangementPlan() {
   `;
   document.body.appendChild(modal);
 
-  // Fermer en cliquant hors de la modale
   modal.addEventListener('click', (e) => {
     if (e.target === modal) modal.remove();
   });
@@ -791,7 +857,6 @@ function ouvrirModalChangementPlan() {
 
 async function soumettreChangementPlan() {
   const planId = document.querySelector('input[name="plan-changement"]:checked')?.value;
-  const periodicite = document.querySelector('input[name="periodicite-changement"]:checked')?.value ?? 'mensuel';
   const msgEl = document.getElementById('msg-changement-plan');
 
   if (!planId) {
@@ -803,37 +868,23 @@ async function soumettreChangementPlan() {
     return;
   }
 
-  // Pré-remplir le formulaire de soumission preuve avec le nouveau plan
   document.getElementById('modal-changement-plan')?.remove();
 
-  // Scroller vers le bloc de soumission preuve
   const blocSoumettre = document.getElementById('bloc-soumettre-preuve');
   if (blocSoumettre) {
     blocSoumettre.scrollIntoView({ behavior: 'smooth', block: 'center' });
 
-    // Pré-sélectionner le plan
     const sel = document.getElementById('inp-plan-preuve');
     if (sel) {
       sel.value = planId;
-      // Déclencher la mise à jour du prix affiché
       majAffichagePrix();
     }
-
-    // Pré-sélectionner la périodicité
-    const radioPerio = document.querySelector(`input[name="periodicite-preuve"][value="${periodicite}"]`);
-    if (radioPerio) {
-      radioPerio.checked = true;
-      majAffichagePrix();
-    }
+    // CYCLE-3 : plus de radio périodicité à pré-sélectionner
   }
 }
 
 // ─── Historique des abonnements ───────────────────────────────────────────────
 
-/**
- * BUG-007 FIX — affiche plan_nom retourné par l'API (enrichi côté serveur)
- * au lieu du plan_id UUID brut.
- */
 function construireHistorique(abonnements) {
   const statutLabels = {
     actif:                  '<span class="bg-green-100 text-green-700 px-2 py-0.5 rounded-full text-xs font-semibold">Actif</span>',
@@ -862,7 +913,6 @@ function construireHistorique(abonnements) {
         <tbody>
           ${abonnements.map(a => `
             <tr class="border-t border-gray-50 hover:bg-gray-50/50">
-              <!-- BUG-007 FIX : afficher plan_nom (enrichi côté serveur) -->
               <td class="px-4 py-3 font-medium text-gray-800">${esc(a.plan_nom || a.plan_id || '—')}</td>
               <td class="px-4 py-3 text-gray-500 hidden md:table-cell text-xs">
                 ${formatDate(a.date_debut)} → ${formatDate(a.date_fin)}
@@ -941,9 +991,12 @@ function copierTexte(texte, btnEl) {
 // PUIS initialiser la section (évite la race condition).
 
 document.addEventListener('DOMContentLoaded', async () => {
-  // Pré-charger les plans en cache (pour éviter la race condition BUG-009)
+  // Pré-charger les plans en cache
   try {
-    const res = await fetch(PLANS_API, { credentials: 'include' });
+    const res = await fetch(PLANS_API, {
+      credentials: 'include',
+      headers: { 'X-Requested-With': 'XMLHttpRequest' }
+    });
     if (res.ok) {
       const data = await res.json();
       _plansCache = data.plans ?? [];
@@ -954,7 +1007,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (window.location.pathname === '/dashboard/abonnement') {
     await initSectionAbonnement();
   }
-  // Sinon, juste remplir le select si présent (page autre avec le module chargé)
   else if (document.getElementById('inp-plan-preuve')) {
     const sel = document.getElementById('inp-plan-preuve');
     if (_plansCache.length) {
@@ -976,3 +1028,4 @@ window.copierTexte     = copierTexte;
 window.ouvrirModalChangementPlan = ouvrirModalChangementPlan;
 window.soumettreChangementPlan   = soumettreChangementPlan;
 window.majAffichagePrix = majAffichagePrix;
+window.preselectPlan    = preselectPlan;

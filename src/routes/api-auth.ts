@@ -177,14 +177,13 @@ authRouter.post('/login', async (c) => {
 
 // POST /api/v1/auth/register — Inscription restaurant
 // Auth Supabase + tenant/utilisateur créés dans Supabase (application)
-// Plan gratuit : nom lu depuis D1 (site web), mais pays_id doit être lu
-// depuis SUPABASE (pas D1) car la contrainte FK tenants_pays_id_fkey
-// pointe vers la table "pays" de Supabase, pas celle de D1. Les deux
-// bases ont des UUID générés indépendamment — un ID D1 ne peut jamais
-// satisfaire une contrainte FK Supabase. (CORRIGÉ — bug identifié le 27/07)
-// BUG-010 FIX — plan_id optionnel transmis depuis la page d'inscription
-// Si plan_id est fourni et valide (actif dans D1), le tenant est créé
-// directement sur ce plan. Sinon, fallback sur le plan Gratuit.
+//
+// CYCLE-3 — Logique plan obligatoire :
+//   - plan_id est OBLIGATOIRE dans le body (plus de fallback silencieux Gratuit)
+//   - Si plan payant (prix_mensuel > 0) → statut tenant = 'en_attente_paiement_initial'
+//     Le client doit d'abord soumettre une preuve de paiement avant d'accéder au dashboard.
+//   - Si plan gratuit (prix_mensuel = 0) → statut tenant = 'essai' (comportement classique)
+//   - plan_initial_id stocké pour affichage dans section abonnement avant première soumission
 authRouter.post('/register', async (c) => {
   setSecurityHeaders(c)
   const ip = c.req.header('CF-Connecting-IP') ?? 'unknown'
@@ -198,7 +197,7 @@ authRouter.post('/register', async (c) => {
   let body: {
     email?: string; password?: string; nom_restaurant?: string
     whatsapp_number?: string; nom_gerant?: string
-    plan_id?: string  // BUG-010 FIX — plan choisi lors de l'inscription (optionnel)
+    plan_id?: string  // OBLIGATOIRE — le client doit choisir un plan explicitement
   }
   try { body = await c.req.json() }
   catch { return c.json({ error: 'JSON invalide.' }, 400) }
@@ -207,6 +206,11 @@ authRouter.post('/register', async (c) => {
 
   if (!email || !password || !nom_restaurant || !whatsapp_number || !nom_gerant) {
     return c.json({ error: 'Tous les champs sont requis.' }, 422)
+  }
+
+  // CYCLE-3 — plan_id obligatoire : plus de fallback silencieux
+  if (!body.plan_id || typeof body.plan_id !== 'string' || body.plan_id.trim().length === 0) {
+    return c.json({ error: 'Veuillez choisir un plan pour continuer.' }, 422)
   }
 
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
@@ -237,6 +241,28 @@ authRouter.post('/register', async (c) => {
     slug = slug + '-' + Date.now().toString(36).slice(-4)
   }
 
+  // Valider le plan choisi depuis D1 — OBLIGATOIRE, pas de fallback silencieux
+  let planChoisi: { id: string; nom: string; prix_mensuel: number } | null = null
+  try {
+    planChoisi = await c.env.DB
+      .prepare('SELECT id, nom, prix_mensuel FROM plans WHERE id = ? AND actif = 1 LIMIT 1')
+      .bind(body.plan_id.trim())
+      .first<{ id: string; nom: string; prix_mensuel: number }>()
+  } catch {
+    return c.json({ error: 'Erreur lors de la vérification du plan.' }, 500)
+  }
+
+  if (!planChoisi) {
+    return c.json({ error: 'Plan invalide ou inactif. Veuillez choisir un plan valide.' }, 422)
+  }
+
+  // CYCLE-3 — Déterminer le statut initial selon le type de plan :
+  //   - plan gratuit (prix_mensuel = 0) → 'essai' : accès direct au dashboard
+  //   - plan payant (prix_mensuel > 0) → 'en_attente_paiement_initial' :
+  //     bloqué jusqu'à soumission de preuve de paiement
+  const estPlanGratuit = planChoisi.prix_mensuel === 0
+  const statutInitial = estPlanGratuit ? 'essai' : 'en_attente_paiement_initial'
+
   // Créer compte Supabase Auth
   const { data: authData, error: authError } = await supabase.auth.signUp({
     email,
@@ -253,30 +279,6 @@ authRouter.post('/register', async (c) => {
     return c.json({ error: authError?.message ?? 'Erreur lors de la création du compte.' }, 500)
   }
 
-  // Récupérer plan gratuit depuis D1 (SITE WEB) — fallback si plan_id absent ou invalide.
-  const planGratuit = await c.env.DB
-    .prepare("SELECT id, nom FROM plans WHERE nom = 'Gratuit' OR ordre_affichage = 0 LIMIT 1")
-    .first<{ id: string; nom: string }>()
-
-  // BUG-010 FIX — Résoudre le plan à utiliser pour ce nouveau tenant.
-  // Si plan_id fourni dans le body ET référence un plan actif dans D1 → utiliser ce plan.
-  // Sinon → fallback sur le plan Gratuit (comportement antérieur).
-  let planChoisi: { id: string; nom: string } | null = planGratuit ?? null
-  if (body.plan_id && typeof body.plan_id === 'string' && body.plan_id.length > 0) {
-    try {
-      const planDemande = await c.env.DB
-        .prepare('SELECT id, nom FROM plans WHERE id = ? AND actif = 1 LIMIT 1')
-        .bind(body.plan_id)
-        .first<{ id: string; nom: string }>()
-      if (planDemande) {
-        planChoisi = planDemande
-      }
-      // Si plan_id invalide/inactif : silencieux — on retombe sur planGratuit
-    } catch {
-      // Erreur D1 non fatale — on retombe sur planGratuit
-    }
-  }
-
   // pays_id lu depuis SUPABASE (pas D1), car c'est la table Supabase "pays"
   // que la contrainte FK tenants_pays_id_fkey vérifie.
   const { data: paysSupabase } = await adminClient
@@ -289,6 +291,11 @@ authRouter.post('/register', async (c) => {
   const now = new Date().toISOString()
 
   // Créer le tenant dans SUPABASE (APPLICATION)
+  // CYCLE-3 :
+  //   - statut selon type plan (essai vs en_attente_paiement_initial)
+  //   - plan_initial_id = plan choisi (pour affichage dans section abonnement)
+  //   - plan_id = null si payant (sera renseigné à la confirmation du paiement)
+  //             = planChoisi.id si gratuit (actif immédiatement)
   const { data: newTenant, error: tenantInsertError } = await adminClient
     .from('tenants')
     .insert({
@@ -298,8 +305,9 @@ authRouter.post('/register', async (c) => {
       whatsapp_number: whatsapp_number.replace(/\s/g, ''),
       couleur_primaire: '#DC2626',
       couleur_secondaire: '#1D4ED8',
-      statut: 'essai',
-      plan_id: planChoisi?.id ?? null,
+      statut: statutInitial,
+      plan_id: estPlanGratuit ? planChoisi.id : null,
+      plan_initial_id: planChoisi.id,  // Toujours stocké pour référence
       metadata: {}
     })
     .select('id, slug')
@@ -341,21 +349,30 @@ authRouter.post('/register', async (c) => {
     setAuthCookies(c, authData.session.access_token, authData.session.refresh_token)
   }
 
+  // CYCLE-3 — redirect_to différent selon le type de plan :
+  //   plan payant → /dashboard/abonnement (soumission preuve obligatoire avant tout)
+  //   plan gratuit → /bienvenue (accès direct)
+  const redirectTo = estPlanGratuit ? '/bienvenue' : '/dashboard/abonnement'
+
   return c.json({
     success: true,
     message: authData.session
-      ? 'Compte créé avec succès. Vous êtes connecté.'
+      ? (estPlanGratuit
+          ? 'Compte créé avec succès. Vous êtes connecté.'
+          : 'Compte créé. Veuillez soumettre votre preuve de paiement pour activer votre compte.')
       : 'Compte créé. Vérifiez votre email pour confirmer votre inscription.',
     slug: newTenant.slug,
     tenant_id: newTenant.id,
     boutique_url: `/${newTenant.slug}`,
-    redirect_to: '/bienvenue',
+    redirect_to: redirectTo,
+    statut_initial: statutInitial,
+    plan_choisi: { id: planChoisi.id, nom: planChoisi.nom, est_gratuit: estPlanGratuit },
     ...(authData.session ? {
       tenant: {
         id: newTenant.id,
         nom: nom_restaurant,
         slug: newTenant.slug,
-        statut: 'essai',
+        statut: statutInitial,
         couleur_primaire: '#DC2626'
       }
     } : {}),

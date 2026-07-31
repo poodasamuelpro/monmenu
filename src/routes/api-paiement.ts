@@ -95,12 +95,15 @@ async function verifyAuthPaiement(c: any): Promise<{
 
     if (!tenant) return null
 
-    // Statuts autorisés : actif, essai
-    // Un tenant 'inactif' avec un paiement en_attente_confirmation récent
-    // reste accessible pendant la fenêtre de 72h (cf. 06-synchronisation §8)
-    const statutsAutorises = ['actif', 'essai']
+    // Statuts autorisés pour accéder aux routes /api/v1/paiement/* :
+    //   'actif'                       → accès normal
+    //   'essai'                       → accès normal (peut changer de plan, soumettre preuve)
+    //   'en_attente_paiement_initial' → AUTORISÉ ici (c'est exactement pour ça que l'on vient :
+    //                                   soumettre la première preuve de paiement)
+    //   'inactif' avec paiement en attente → autorisé pendant la fenêtre de 72h
+    const statutsAutorises = ['actif', 'essai', 'en_attente_paiement_initial']
     if (!statutsAutorises.includes(tenant.statut)) {
-      // Vérifier s'il y a un abonnement en_attente_confirmation valide
+      // Vérifier s'il y a un abonnement en_attente_confirmation valide (fenêtre 72h)
       const { data: abonnementAttente } = await adminClient
         .from('abonnements')
         .select('id, delai_confirmation_expire_le')
@@ -142,10 +145,10 @@ paiementRouter.get('/statut', async (c) => {
 
   const adminClient = createSupabaseAdminClient(c.env)
 
-  // Tenant courant
+  // Tenant courant — inclut plan_initial_id (CYCLE-3)
   const { data: tenant } = await adminClient
     .from('tenants')
-    .select('statut, plan_id, essai_expire_le, paiement_en_attente_depuis, reference_paiement_active')
+    .select('statut, plan_id, plan_initial_id, essai_expire_le, paiement_en_attente_depuis, reference_paiement_active')
     .eq('id', auth.tenant_id)
     .single()
 
@@ -154,7 +157,7 @@ paiementRouter.get('/statut', async (c) => {
   // Abonnement actuel (le plus récent non annulé)
   const { data: abonnement } = await adminClient
     .from('abonnements')
-    .select('id, statut, date_fin, plan_id, soumis_le, delai_confirmation_expire_le, reference_paiement, methode_paiement')
+    .select('id, statut, date_fin, plan_id, soumis_le, delai_confirmation_expire_le, reference_paiement, methode_paiement, periodicite')
     .eq('tenant_id', auth.tenant_id)
     .in('statut', ['actif', 'en_attente_confirmation'])
     .order('created_at', { ascending: false })
@@ -173,13 +176,32 @@ paiementRouter.get('/statut', async (c) => {
     )
   }
 
+  // CYCLE-3 — Enrichir avec le nom du plan initial si tenant en_attente_paiement_initial
+  let planInitialNom: string | null = null
+  let planInitialPrix: number | null = null
+  const planIdAResoudre = tenant.plan_initial_id ?? tenant.plan_id
+  if (planIdAResoudre) {
+    try {
+      const planRow = await c.env.DB
+        .prepare('SELECT nom, prix_mensuel FROM plans WHERE id = ? LIMIT 1')
+        .bind(planIdAResoudre)
+        .first<{ nom: string; prix_mensuel: number }>()
+      planInitialNom = planRow?.nom ?? null
+      planInitialPrix = planRow?.prix_mensuel ?? null
+    } catch {}
+  }
+
   return c.json({
     statut_tenant: tenant.statut,
+    plan_initial_id: tenant.plan_initial_id,
+    plan_initial_nom: planInitialNom,
+    plan_initial_prix_mensuel: planInitialPrix,
     abonnement: abonnement ? {
       id: abonnement.id,
       statut: abonnement.statut,
       date_fin: abonnement.date_fin,
       plan_id: abonnement.plan_id,
+      periodicite: abonnement.periodicite ?? 'mensuel',
       reference_paiement: abonnement.reference_paiement,
       soumis_le: abonnement.soumis_le,
       delai_confirmation_expire_le: abonnement.delai_confirmation_expire_le,
@@ -249,7 +271,7 @@ paiementRouter.get('/reference', async (c) => {
  *   - preuve     : Fichier image (JPEG ou PNG, max 5 Mo)
  *   - plan_id    : UUID du plan Supabase choisi
  *   - methode_paiement : Chaîne (ex: "Mobile Money", "Virement bancaire")
- *   - periodicite : "mensuel" | "annuel" (optionnel, défaut "mensuel")
+ *   (CYCLE-3 : periodicite supprimé — tous les abonnements sont exclusivement mensuels)
  *
  * Sécurité :
  *   - SEC-01 : statut hardcodé à 'en_attente_confirmation', jamais du body
@@ -287,7 +309,8 @@ paiementRouter.post('/soumettre', async (c) => {
   const preuveFile = formData.get('preuve') as File | null
   const planId = formData.get('plan_id') as string | null
   const methodePaiement = formData.get('methode_paiement') as string | null
-  const periodicite = (formData.get('periodicite') as string | null) ?? 'mensuel'
+  // CYCLE-3 : periodicite supprimé — tous les abonnements sont exclusivement mensuels
+  const periodicite = 'mensuel'
 
   if (!preuveFile || !(preuveFile instanceof File)) {
     return c.json({ error: 'Champ "preuve" manquant (fichier image requis).' }, 400)
@@ -298,10 +321,6 @@ paiementRouter.post('/soumettre', async (c) => {
   if (!methodePaiement) {
     return c.json({ error: 'Champ "methode_paiement" manquant.' }, 400)
   }
-  if (!['mensuel', 'annuel'].includes(periodicite)) {
-    return c.json({ error: 'periodicite doit être "mensuel" ou "annuel".' }, 400)
-  }
-
   // SEC-02 Couche 1 : Extension
   if (!validerExtensionImage(preuveFile.name)) {
     return c.json({ error: 'Format non autorisé. JPEG ou PNG uniquement.' }, 400)
@@ -326,13 +345,16 @@ paiementRouter.post('/soumettre', async (c) => {
 
   const adminClient = createSupabaseAdminClient(c.env)
 
-  // Vérifier que le plan_id existe dans Supabase (ne pas faire confiance au client)
-  const { data: plan } = await adminClient
-    .from('plans')
-    .select('id, nom, prix_mensuel, prix_annuel, devise')
-    .eq('id', planId)
-    .eq('actif', true)
-    .maybeSingle()
+  // Vérifier que le plan_id existe dans D1 (les plans vivent dans D1, pas Supabase)
+  let plan: { id: string; nom: string; prix_mensuel: number; devise: string } | null = null
+  try {
+    plan = await c.env.DB
+      .prepare('SELECT id, nom, prix_mensuel, devise FROM plans WHERE id = ? AND actif = 1 LIMIT 1')
+      .bind(planId)
+      .first<{ id: string; nom: string; prix_mensuel: number; devise: string }>()
+  } catch {
+    return c.json({ error: 'Erreur lors de la vérification du plan.' }, 500)
+  }
 
   if (!plan) {
     return c.json({ error: 'Plan introuvable ou inactif.' }, 404)
@@ -389,7 +411,8 @@ paiementRouter.post('/soumettre', async (c) => {
 
   const now = new Date()
   const deadline = calculerDeadlineConfirmation(now)
-  const montantPaye = periodicite === 'annuel' ? plan.prix_annuel : plan.prix_mensuel
+  // CYCLE-3 : montant toujours mensuel — pas de branche annuelle
+  const montantPaye = plan.prix_mensuel
 
   // SEC-01 : statut hardcodé, jamais du body
   const { data: abonnement, error: abError } = await adminClient
@@ -405,6 +428,7 @@ paiementRouter.post('/soumettre', async (c) => {
       methode_paiement: methodePaiement.slice(0, 100),
       montant_paye: montantPaye,
       devise: plan.devise ?? 'XOF',
+      periodicite: 'mensuel',            // CYCLE-3 : toujours mensuel
       date_debut: now.toISOString(),
       created_at: now.toISOString()
     })
@@ -518,9 +542,9 @@ paiementRouter.get('/historique', async (c) => {
       if (!ab.plan_id) return { ...ab, plan_nom: null }
       try {
         const plan = await c.env.DB
-          .prepare('SELECT nom, prix_mensuel, prix_annuel, devise FROM plans WHERE id = ? LIMIT 1')
+          .prepare('SELECT nom, prix_mensuel, devise FROM plans WHERE id = ? LIMIT 1')
           .bind(ab.plan_id)
-          .first<{ nom: string; prix_mensuel: number; prix_annuel: number; devise: string }>()
+          .first<{ nom: string; prix_mensuel: number; devise: string }>()
         return { ...ab, plan_nom: plan?.nom ?? null, plan_prix_mensuel: plan?.prix_mensuel ?? null }
       } catch {
         return { ...ab, plan_nom: null }

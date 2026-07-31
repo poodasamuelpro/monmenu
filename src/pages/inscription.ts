@@ -45,6 +45,13 @@ export function renderInscriptionPage(nomProjet: string): string {
         </div>
       </div>
 
+      <!-- CYCLE-3 : Sélection de plan OBLIGATOIRE — submit bloqué sans plan -->
+      <!-- Badge plan obligatoire affiché quand la grille est visible -->
+      <div id="alerte-plan-requis" class="hidden mb-4 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 flex items-center gap-2">
+        <i class="fa-solid fa-triangle-exclamation text-amber-500 flex-shrink-0"></i>
+        <p class="text-sm text-amber-800">Vous devez choisir un plan pour continuer. Cliquez sur une formule ci-dessous.</p>
+      </div>
+
       <!-- Feat B : Sélection de plan — affiché dynamiquement selon ?plan= et l'API -->
       <div id="section-plans" class="mb-8 hidden">
         <h2 class="text-lg font-bold text-gray-900 mb-1 text-center">Choisissez votre formule</h2>
@@ -57,7 +64,7 @@ export function renderInscriptionPage(nomProjet: string): string {
         </div>
       </div>
 
-      <!-- Badge plan sélectionné (affiché si ?plan= présent et valide) -->
+      <!-- Badge plan sélectionné (affiché après sélection) -->
       <div id="badge-plan-selectionne" class="hidden mb-6 bg-red-50 border border-red-200 rounded-xl px-4 py-3 flex items-center gap-3">
         <i class="fa-solid fa-circle-check text-red-600 text-lg flex-shrink-0"></i>
         <div>
@@ -147,10 +154,12 @@ export function renderInscriptionPage(nomProjet: string): string {
           <p id="reg-error" class="text-xs text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2 hidden"></p>
           <p id="reg-success" class="text-xs text-green-700 bg-green-50 border border-green-100 rounded-lg px-3 py-2 hidden"></p>
 
-          <button type="submit" id="reg-btn"
-            class="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2">
+          <!-- CYCLE-3 : bouton désactivé par défaut — activé uniquement après sélection de plan -->
+          <button type="submit" id="reg-btn" disabled
+            class="w-full bg-gray-300 text-gray-500 cursor-not-allowed font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2"
+            title="Choisissez d&#39;abord un plan ci-dessus">
             <i class="fa-solid fa-store"></i>
-            <span>Créer ma boutique gratuitement</span>
+            <span>Choisissez un plan d&#39;abord</span>
           </button>
         </form>
 
@@ -187,9 +196,27 @@ export function renderInscriptionPage(nomProjet: string): string {
     // Cache plans chargés depuis l'API
     var _inscriptionPlans = []
 
+    // CYCLE-3 : Activer/désactiver le bouton submit selon sélection de plan
+    function mettreAJourBoutonSubmit(planSelectionne) {
+      var btn = document.getElementById('reg-btn')
+      if (planSelectionne) {
+        btn.disabled = false
+        btn.className = 'w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2'
+        btn.innerHTML = '<i class="fa-solid fa-store"></i><span>Créer ma boutique</span>'
+        btn.removeAttribute('title')
+      } else {
+        btn.disabled = true
+        btn.className = 'w-full bg-gray-300 text-gray-500 cursor-not-allowed font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2'
+        btn.innerHTML = '<i class="fa-solid fa-store"></i><span>Choisissez un plan d&#39;abord</span>'
+        btn.title = 'Choisissez d&#39;abord un plan ci-dessus'
+      }
+    }
+
     // Sélectionner un plan dans la grille et mettre à jour le champ caché
     function selectionnerPlan(planId, planNom) {
       document.getElementById('reg-plan-id').value = planId
+      // Masquer l'alerte obligatoire
+      document.getElementById('alerte-plan-requis').classList.add('hidden')
       // Mettre à jour visuellement les cartes
       document.querySelectorAll('.plan-card').forEach(function(card) {
         if (card.dataset.planId === planId) {
@@ -207,6 +234,8 @@ export function renderInscriptionPage(nomProjet: string): string {
       document.getElementById('badge-plan-selectionne').classList.remove('hidden')
       // Masquer la grille après sélection
       document.getElementById('section-plans').classList.add('hidden')
+      // CYCLE-3 : activer le bouton submit
+      mettreAJourBoutonSubmit(true)
     }
 
     // Afficher la grille plans (bouton "Changer" dans le badge)
@@ -214,6 +243,8 @@ export function renderInscriptionPage(nomProjet: string): string {
       document.getElementById('section-plans').classList.remove('hidden')
       document.getElementById('badge-plan-selectionne').classList.add('hidden')
       document.getElementById('reg-plan-id').value = ''
+      // CYCLE-3 : désactiver le bouton tant qu'aucun plan n'est choisi
+      mettreAJourBoutonSubmit(false)
     }
 
     // Construire une carte plan
@@ -228,9 +259,28 @@ export function renderInscriptionPage(nomProjet: string): string {
         ? 'ring-2 ring-red-500 border-red-400 bg-red-50'
         : 'border-gray-200'
       var checkClasses = estSelectionne ? '' : 'hidden'
+      // CYCLE-3 FIX : fonctionnalites est un objet JSON {cle: bool|number|string}
+      // pas un tableau — extraire les clés booléennes à true comme liste de features
       var features = []
-      try { features = typeof plan.fonctionnalites === 'string' ? JSON.parse(plan.fonctionnalites) : (plan.fonctionnalites || []) }
-      catch { features = [] }
+      try {
+        var fonc = typeof plan.fonctionnalites === 'string'
+          ? JSON.parse(plan.fonctionnalites)
+          : (plan.fonctionnalites || {})
+        // Méta-clés à exclure (ne sont pas des fonctionnalités affichables)
+        var excluFonc = ['sous_titre', 'cible', 'recommande', 'produits_max',
+          'categories_max', 'commandes_incluses', 'duree_essai_jours']
+        if (Array.isArray(fonc)) {
+          // Cas rare : tableau de strings (rétrocompatibilité)
+          features = fonc
+        } else if (fonc && typeof fonc === 'object') {
+          features = Object.entries(fonc)
+            .filter(function(e) { return e[1] === true && excluFonc.indexOf(e[0]) === -1 })
+            .map(function(e) {
+              return e[0].replace(/_/g, ' ')
+                         .replace(/\b\w/g, function(l) { return l.toUpperCase() })
+            })
+        }
+      } catch { features = [] }
       var featuresHtml = features.slice(0, 4).map(function(f) {
         return '<li class="flex items-center gap-1.5 text-xs text-gray-600"><i class="fa-solid fa-check text-green-500 text-xs flex-shrink-0"></i>' + String(f).replace(/</g,'&lt;') + '</li>'
       }).join('')
@@ -274,14 +324,22 @@ export function renderInscriptionPage(nomProjet: string): string {
             document.getElementById('badge-plan-nom').textContent = planTrouve.nom
             document.getElementById('badge-plan-selectionne').classList.remove('hidden')
             document.getElementById('section-plans').classList.add('hidden')
+            // CYCLE-3 : activer le bouton submit si plan présélectionné
+            mettreAJourBoutonSubmit(true)
             return
           }
         }
-        // Pas de présélection → afficher la grille
+        // Pas de présélection → afficher la grille, bouton désactivé
         document.getElementById('section-plans').classList.remove('hidden')
+        document.getElementById('alerte-plan-requis').classList.remove('hidden')
+        mettreAJourBoutonSubmit(false)
       } catch(err) {
-        // En cas d'erreur API plans : on continue sans grille (plan Gratuit par défaut côté serveur)
+        // En cas d'erreur API plans : afficher un message d'erreur clair (CYCLE-3 : plus de fallback silencieux)
         console.warn('[inscription] Plans indisponibles:', err.message)
+        document.getElementById('alerte-plan-requis').innerHTML =
+          '<i class="fa-solid fa-triangle-exclamation text-red-500 flex-shrink-0"></i>' +
+          '<p class="text-sm text-red-800">Impossible de charger les formules. Rafraîchissez la page.</p>'
+        document.getElementById('alerte-plan-requis').classList.remove('hidden')
       }
     }
 
@@ -335,10 +393,19 @@ export function renderInscriptionPage(nomProjet: string): string {
         password: document.getElementById('reg-password').value
       };
 
-      // Ajouter plan_id au payload uniquement s'il est renseigné
-      if (planId) {
-        payload.plan_id = planId
+      // CYCLE-3 : plan_id OBLIGATOIRE — le bouton submit est désactivé sans plan
+      // mais on contrôle également ici pour robustesse
+      if (!planId) {
+        var errEl2 = document.getElementById('reg-error')
+        errEl2.textContent = 'Veuillez choisir un plan pour continuer.'
+        errEl2.classList.remove('hidden')
+        document.getElementById('section-plans').classList.remove('hidden')
+        document.getElementById('alerte-plan-requis').classList.remove('hidden')
+        btn.disabled = false
+        btn.innerHTML = '<i class="fa-solid fa-store"></i><span>Créer ma boutique</span>'
+        return
       }
+      payload.plan_id = planId
 
       try {
         // §2 — credentials:'include' pour accepter le cookie httpOnly
@@ -356,10 +423,12 @@ export function renderInscriptionPage(nomProjet: string): string {
         if (res.ok && data.success) {
           if (data.tenant) {
             localStorage.setItem('monmenu_tenant', JSON.stringify(data.tenant));
-            successEl.textContent = data.message || 'Compte créé ! Redirection vers votre tableau de bord...';
+            successEl.textContent = data.message || 'Compte créé ! Redirection...';
             successEl.classList.remove('hidden');
             e.target.reset();
-            setTimeout(function() { window.location.href = '/bienvenue'; }, 2000);
+            // CYCLE-3 : redirect_to vient du serveur selon plan payant/gratuit
+            var redirectUrl = data.redirect_to || '/bienvenue'
+            setTimeout(function() { window.location.href = redirectUrl; }, 2000);
           } else {
             successEl.textContent = 'Compte créé ! Vérifiez votre email pour confirmer, puis connectez-vous.';
             successEl.classList.remove('hidden');
