@@ -1,21 +1,20 @@
-// MonMenu — Dashboard restaurant (v1.6.0 — fix page Abonnement + notif livreur)
+// MonMenu — Dashboard restaurant (v1.7.0 — fix navigation + bouton retour + notifications)
 //
-// CHANGELOG de ce fichier par rapport à la version précédente :
-//   ... (voir historique v1.4.0 / v1.5.0 / v1.5.1, inchangées)
-//   9. FIX Abonnement — la section "/dashboard/abonnement" ne s'affichait
-//      jamais : initDashboard() ne reconnaissait pas cette route (fallback
-//      silencieux vers "commandes") et navigateTo() n'avait pas de "case
-//      'abonnement'". Ajout des deux + création de loadAbonnement() qui
-//      injecte le conteneur attendu par dashboard-paiement.js et délègue à
-//      initSectionAbonnement().
-//   10. AJOUT — Assignation d'un livreur à la commande au moment de cliquer
-//      sur "Préparer" (confirmée → en préparation), via une modale de choix.
-//      Si un livreur est choisi, un message WhatsApp lui est envoyé avec
-//      l'adresse + Maps + Waze du client, sur DEUX canaux (comme pour la
-//      notification client) :
-//        1) API WhatsApp Business officielle (silencieuse, gérée serveur)
-//        2) Redirection wa.me (garantie, ouverte en synchrone dans le clic
-//           pour éviter le blocage popup des navigateurs)
+// CHANGELOG v1.7.0 :
+//   1. FIX Navigation — Les boutons de la sidebar ne faisaient rien : les
+//      liens <a> du menu utilisent href="/dashboard/xxx" mais le handler
+//      click ne parsait que le dernier segment. Corrigé + popstate ajouté
+//      pour que le bouton "Précédent" du navigateur fonctionne.
+//   2. AJOUT — Bouton Retour (#btn-retour) dans le header : visible sur
+//      toutes les sections sauf "commandes" (accueil). Clic → revient à
+//      "commandes" via navigateTo() + history.back() si disponible.
+//   3. FIX — showModal() et closeModal() complétées (fichier tronqué).
+//   4. FIX — escHtml() et escJs() ajoutées si manquantes.
+//   5. AJOUT — Cloche notifications (#btn-notif) + badge (#notif-badge) :
+//      initNotifBadge() appelée au chargement pour compter les non lues.
+//   6. FIX — initDashboard() charge le profil dès le départ pour hydrater
+//      tenantData (données réelles depuis l'API).
+//
 'use strict';
 
 let currentSection = 'commandes';
@@ -44,16 +43,99 @@ const JOURS_LABELS = {
   vendredi: 'Vendredi', samedi: 'Samedi', dimanche: 'Dimanche'
 };
 
-/**
- * §2 — Initialise le client Supabase (clé anon) + abonnement Realtime.
- * Écoute les INSERT et UPDATE sur la table "commandes" filtrés par tenant_id.
- * En cas d'échec de connexion, active un fallback polling toutes les 2 minutes.
- */
+// ==============================
+// UTILITAIRES SÉCURITÉ
+// ==============================
+function escHtml(str) {
+  if (str === null || str === undefined) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+function escJs(str) {
+  if (str === null || str === undefined) return '';
+  return String(str)
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r')
+    .replace(/</g, '\\u003C')
+    .replace(/>/g, '\\u003E');
+}
+
+// ==============================
+// MODAL UTILITAIRES (COMPLÈTE)
+// ==============================
+function showModal(titre, contenu) {
+  let modal = document.getElementById('dash-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'dash-modal';
+    modal.className = 'fixed inset-0 z-50';
+    document.body.appendChild(modal);
+  }
+  modal.innerHTML = `
+    <div class="absolute inset-0 bg-black/50" onclick="closeModal()"></div>
+    <div class="absolute inset-x-4 bottom-0 sm:inset-auto sm:top-1/2 sm:left-1/2 sm:-translate-x-1/2 sm:-translate-y-1/2 bg-white rounded-2xl sm:w-96 shadow-2xl max-h-[90vh] overflow-y-auto">
+      <div class="flex items-center justify-between px-5 py-4 border-b border-gray-100 sticky top-0 bg-white z-10">
+        <h3 class="font-bold text-gray-900">${escHtml(titre)}</h3>
+        <button onclick="closeModal()" class="p-1.5 text-gray-400 hover:text-gray-700 rounded-lg hover:bg-gray-100 transition-colors" aria-label="Fermer">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+      <div class="p-5">${contenu}</div>
+    </div>`;
+  modal.classList.remove('hidden');
+  // Fermer avec Échap
+  document.addEventListener('keydown', _modalEscHandler);
+}
+
+function closeModal() {
+  const modal = document.getElementById('dash-modal');
+  if (modal) {
+    modal.classList.add('hidden');
+    modal.innerHTML = '';
+  }
+  document.removeEventListener('keydown', _modalEscHandler);
+}
+
+function _modalEscHandler(e) {
+  if (e.key === 'Escape') closeModal();
+}
+
+// ==============================
+// GESTION DU BOUTON RETOUR
+// ==============================
+// Sections qui affichent le bouton retour (toutes sauf l'accueil "commandes")
+const SECTIONS_AVEC_RETOUR = ['menu','statistiques','livreurs','qrcode','apparence','parametres','codes-promo','pdv','abonnement'];
+
+function _updateBtnRetour(section) {
+  const btn = document.getElementById('btn-retour');
+  if (!btn) return;
+  if (SECTIONS_AVEC_RETOUR.includes(section)) {
+    btn.classList.remove('hidden');
+  } else {
+    btn.classList.add('hidden');
+  }
+}
+
+function retourAccueil() {
+  navigateTo('commandes');
+  history.pushState({}, '', '/dashboard/commandes');
+}
+
+// ==============================
+// SUPABASE REALTIME
+// ==============================
 function initRealtimeCommandes(tenantId) {
   const supabaseUrl = window.__SUPABASE_URL__;
   const supabaseAnonKey = window.__SUPABASE_ANON_KEY__;
 
-  // Prérequis : bibliothèque Supabase JS chargée et clés disponibles
   if (!supabaseUrl || !supabaseAnonKey || typeof window.supabase === 'undefined') {
     console.warn('[Realtime] Supabase JS ou clés indisponibles — fallback polling activé');
     _startFallbackPolling();
@@ -66,7 +148,6 @@ function initRealtimeCommandes(tenantId) {
     });
   }
 
-  // Nettoyer l'abonnement précédent s'il existe
   if (_realtimeChannel) {
     _supabaseClient.removeChannel(_realtimeChannel);
     _realtimeChannel = null;
@@ -76,12 +157,7 @@ function initRealtimeCommandes(tenantId) {
     .channel('commandes-dashboard-' + tenantId)
     .on(
       'postgres_changes',
-      {
-        event: 'INSERT',
-        schema: 'public',
-        table: 'commandes',
-        filter: `tenant_id=eq.${tenantId}`
-      },
+      { event: 'INSERT', schema: 'public', table: 'commandes', filter: `tenant_id=eq.${tenantId}` },
       (payload) => {
         console.log('[Realtime] Nouvelle commande :', payload.new?.id);
         _onNouvelleCommande(payload.new);
@@ -89,22 +165,15 @@ function initRealtimeCommandes(tenantId) {
     )
     .on(
       'postgres_changes',
-      {
-        event: 'UPDATE',
-        schema: 'public',
-        table: 'commandes',
-        filter: `tenant_id=eq.${tenantId}`
-      },
+      { event: 'UPDATE', schema: 'public', table: 'commandes', filter: `tenant_id=eq.${tenantId}` },
       (payload) => {
         console.log('[Realtime] Commande mise à jour :', payload.new?.id, payload.new?.statut);
-        // Recharger la liste uniquement si on est sur la section commandes
         if (currentSection === 'commandes') fetchCommandes();
       }
     )
     .subscribe((status, err) => {
       if (status === 'SUBSCRIBED') {
         console.log('[Realtime] Abonnement Realtime actif pour tenant', tenantId);
-        // Annuler le fallback si le Realtime fonctionne
         if (_realtimeFallbackInterval) {
           clearInterval(_realtimeFallbackInterval);
           _realtimeFallbackInterval = null;
@@ -116,44 +185,40 @@ function initRealtimeCommandes(tenantId) {
     });
 }
 
-/**
- * §2 — Appelée quand une nouvelle commande arrive via Realtime.
- * Recharge la liste + affiche une notification visuelle/sonore.
- */
 function _onNouvelleCommande(commande) {
-  if (currentSection === 'commandes') {
-    fetchCommandes();
-  }
+  if (currentSection === 'commandes') fetchCommandes();
   _afficherNotificationCommande(commande);
+  // Mettre à jour le badge notifications si le module est chargé
+  if (typeof rafraichirBadgeNotifs === 'function') rafraichirBadgeNotifs();
 }
 
-/**
- * §2 — Notification visuelle en cas de nouvelle commande.
- */
 function _afficherNotificationCommande(commande) {
-  // Notification toast
   const toast = document.createElement('div');
   toast.className = 'fixed top-4 right-4 z-50 bg-green-600 text-white px-5 py-3 rounded-xl shadow-lg flex items-center gap-3 animate-bounce';
   toast.innerHTML = `<i class="fa-solid fa-bell"></i> <span>Nouvelle commande de <strong>${escHtml(commande?.client_nom || 'Client')}</strong> !</span>`;
   document.body.appendChild(toast);
-  // Son natif du navigateur (non bloquant)
-  try { const ctx = new AudioContext(); const osc = ctx.createOscillator(); const gain = ctx.createGain(); osc.connect(gain); gain.connect(ctx.destination); osc.frequency.value = 880; gain.gain.setValueAtTime(0.3, ctx.currentTime); gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4); osc.start(ctx.currentTime); osc.stop(ctx.currentTime + 0.4); } catch {}
+  try {
+    const ctx = new AudioContext();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.frequency.value = 880;
+    gain.gain.setValueAtTime(0.3, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime + 0.4);
+  } catch {}
   setTimeout(() => toast.remove(), 5000);
 }
 
-/**
- * §2 — Fallback polling toutes les 2 minutes (si Realtime échoue).
- */
 function _startFallbackPolling() {
-  if (_realtimeFallbackInterval) return; // Évite les doublons
+  if (_realtimeFallbackInterval) return;
   _realtimeFallbackInterval = setInterval(() => {
     if (currentSection === 'commandes') fetchCommandes();
-  }, 120000); // 2 minutes
+  }, 120000);
 }
 
-/**
- * §2 — Nettoyage Realtime (appelé lors de la déconnexion/navigation).
- */
 function teardownRealtime() {
   if (_realtimeChannel && _supabaseClient) {
     _supabaseClient.removeChannel(_realtimeChannel);
@@ -165,42 +230,108 @@ function teardownRealtime() {
   }
 }
 
-// ---- Init Dashboard ----
+// ==============================
+// INIT DASHBOARD
+// ==============================
 async function initDashboard() {
-  authToken = null; // Toujours null — cookie httpOnly utilisé à la place
+  authToken = null;
 
-  const tenantStr = localStorage.getItem('monmenu_tenant');
-  if (tenantStr) { try { tenantData = JSON.parse(tenantStr); } catch {} }
-  const nameEl = document.getElementById('tenant-name');
-  if (nameEl && tenantData) nameEl.textContent = tenantData.nom || 'Mon Restaurant';
+  // Charger les données tenant depuis l'API (données réelles)
+  try {
+    const res = await fetch('/api/v1/dashboard/profil', { credentials: 'include' });
+    if (res.ok) {
+      const profil = await res.json();
+      tenantData = profil;
+      try {
+        localStorage.setItem('monmenu_tenant', JSON.stringify({
+          id: profil.id, nom: profil.nom, slug: profil.slug,
+          couleur_primaire: profil.couleur_primaire,
+          couleur_secondaire: profil.couleur_secondaire
+        }));
+      } catch {}
+      const nameEl = document.getElementById('tenant-name');
+      if (nameEl) nameEl.textContent = profil.nom || 'Mon Restaurant';
+      const boutiqueLink = document.getElementById('boutique-link');
+      if (boutiqueLink && profil.slug) {
+        boutiqueLink.href = '/' + profil.slug;
+        boutiqueLink.classList.remove('hidden');
+      }
+    }
+  } catch {}
+
+  // Fallback localStorage si API non disponible
+  if (!tenantData) {
+    const tenantStr = localStorage.getItem('monmenu_tenant');
+    if (tenantStr) {
+      try { tenantData = JSON.parse(tenantStr); } catch {}
+    }
+    const nameEl = document.getElementById('tenant-name');
+    if (nameEl && tenantData) nameEl.textContent = tenantData.nom || 'Mon Restaurant';
+  }
+
+  // Déterminer la section à partir du chemin URL
   const path = window.location.pathname;
-  if (path.includes('menu')) navigateTo('menu');
-  else if (path.includes('statistiques')) navigateTo('statistiques');
-  else if (path.includes('livreurs')) navigateTo('livreurs');
-  else if (path.includes('qrcode')) navigateTo('qrcode');
-  else if (path.includes('codes-promo')) navigateTo('codes-promo');
-  else if (path.includes('pdv')) navigateTo('pdv');
-  else if (path.includes('apparence')) navigateTo('apparence');
-  else if (path.includes('abonnement')) navigateTo('abonnement'); // FIX — route manquante
-  else if (path.includes('parametres')) navigateTo('parametres');
-  else navigateTo('commandes');
+  let section = 'commandes';
+  if (path.includes('/menu')) section = 'menu';
+  else if (path.includes('/statistiques')) section = 'statistiques';
+  else if (path.includes('/livreurs')) section = 'livreurs';
+  else if (path.includes('/qrcode')) section = 'qrcode';
+  else if (path.includes('/codes-promo')) section = 'codes-promo';
+  else if (path.includes('/pdv')) section = 'pdv';
+  else if (path.includes('/apparence')) section = 'apparence';
+  else if (path.includes('/abonnement')) section = 'abonnement';
+  else if (path.includes('/parametres')) section = 'parametres';
+
+  navigateTo(section);
+
+  // Gérer les clics sur les liens de navigation
   document.querySelectorAll('.nav-link').forEach(link => {
     link.addEventListener('click', function(e) {
       e.preventDefault();
       const href = this.getAttribute('href') || '';
-      const section = href.split('/').pop() || 'commandes';
-      history.pushState({}, '', href);
-      navigateTo(section);
+      // Extraire la section du chemin complet (ex: /dashboard/menu → menu)
+      const parts = href.replace(/\/$/, '').split('/');
+      const seg = parts[parts.length - 1] || 'commandes';
+      const sectionName = seg === 'dashboard' ? 'commandes' : seg;
+      history.pushState({ section: sectionName }, '', href);
+      navigateTo(sectionName);
+      // Fermer la sidebar mobile
+      const sidebar = document.getElementById('sidebar');
+      const overlay = document.getElementById('sidebar-overlay');
+      if (sidebar) sidebar.classList.add('-translate-x-full');
+      if (overlay) overlay.classList.add('hidden');
     });
   });
+
+  // Écouter le bouton "Précédent/Suivant" du navigateur
+  window.addEventListener('popstate', function(e) {
+    const path = window.location.pathname;
+    let sec = 'commandes';
+    if (path.includes('/menu')) sec = 'menu';
+    else if (path.includes('/statistiques')) sec = 'statistiques';
+    else if (path.includes('/livreurs')) sec = 'livreurs';
+    else if (path.includes('/qrcode')) sec = 'qrcode';
+    else if (path.includes('/codes-promo')) sec = 'codes-promo';
+    else if (path.includes('/pdv')) sec = 'pdv';
+    else if (path.includes('/apparence')) sec = 'apparence';
+    else if (path.includes('/abonnement')) sec = 'abonnement';
+    else if (path.includes('/parametres')) sec = 'parametres';
+    navigateTo(sec);
+  });
+
+  // Initialiser le badge notifications si le module est chargé
+  if (typeof initNotifBadge === 'function') initNotifBadge();
 }
 
 function setActiveNavLink(section) {
   document.querySelectorAll('.nav-link').forEach(link => {
-    link.classList.remove('bg-gray-800','text-white');
+    link.classList.remove('bg-gray-800', 'text-white');
     link.classList.add('text-gray-300');
-    if (link.href && link.href.includes(section)) {
-      link.classList.add('bg-gray-800','text-white');
+    const href = link.getAttribute('href') || '';
+    const parts = href.replace(/\/$/, '').split('/');
+    const seg = parts[parts.length - 1] || '';
+    if (seg === section || (section === 'commandes' && seg === 'commandes')) {
+      link.classList.add('bg-gray-800', 'text-white');
       link.classList.remove('text-gray-300');
     }
   });
@@ -208,20 +339,32 @@ function setActiveNavLink(section) {
 
 function navigateTo(section) {
   if (commandesInterval) { clearInterval(commandesInterval); commandesInterval = null; }
-  // §2 — Nettoyer le Realtime/fallback si on quitte la section commandes
   if (currentSection === 'commandes' && section !== 'commandes') {
     teardownRealtime();
   }
   currentSection = section;
   setActiveNavLink(section);
+
+  // Mettre à jour le titre de la page
   const title = document.getElementById('page-title');
   const titles = {
-    commandes:'Commandes', menu:'Gestion du menu', statistiques:'Statistiques',
-    livreurs:'Livreurs', qrcode:'QR Code', apparence:'Apparence & Médias',
-    parametres:'Paramètres', 'codes-promo':'Codes promo', pdv:'Mon restaurant',
-    abonnement:'Abonnement' // FIX — libellé manquant
+    commandes: 'Commandes',
+    menu: 'Gestion du menu',
+    statistiques: 'Statistiques',
+    livreurs: 'Livreurs',
+    qrcode: 'QR Code',
+    apparence: 'Apparence & Médias',
+    parametres: 'Paramètres',
+    'codes-promo': 'Codes promo',
+    pdv: 'Mon restaurant',
+    abonnement: 'Abonnement'
   };
   if (title) title.textContent = titles[section] || section;
+
+  // Afficher/masquer le bouton retour
+  _updateBtnRetour(section);
+
+  // Charger la section correspondante
   switch (section) {
     case 'commandes':    loadCommandes();    break;
     case 'menu':         loadMenu();         break;
@@ -232,26 +375,30 @@ function navigateTo(section) {
     case 'parametres':   loadParametres();   break;
     case 'codes-promo':  loadCodesPromo();   break;
     case 'pdv':          loadPdv();          break;
-    case 'abonnement':   loadAbonnement();   break; // FIX — case manquant
+    case 'abonnement':   loadAbonnement();   break;
+    default:             loadCommandes();    break;
+  }
+}
+
+function showAuthError() {
+  const content = document.getElementById('dashboard-content');
+  if (content) {
+    content.innerHTML = `<div class="bg-red-50 border border-red-100 rounded-xl p-6 text-center">
+      <i class="fa-solid fa-lock text-2xl text-red-400 mb-3 block"></i>
+      <p class="font-semibold text-red-700">Session expirée</p>
+      <p class="text-sm text-red-500 mt-1">Veuillez vous reconnecter.</p>
+      <a href="/connexion" class="mt-4 inline-block bg-red-600 text-white text-sm font-semibold px-5 py-2.5 rounded-xl hover:bg-red-700">Se connecter</a>
+    </div>`;
   }
 }
 
 // ==============================
-// SECTION ABONNEMENT (FIX — section manquante du routing SPA)
+// SECTION ABONNEMENT
 // ==============================
-// Injecte le conteneur attendu par dashboard-paiement.js
-// (#section-abonnement-content) puis délègue le rendu complet à
-// initSectionAbonnement(), définie dans dashboard-paiement.js.
 function loadAbonnement() {
   const content = document.getElementById('dashboard-content');
   if (!content) return;
   content.innerHTML = `<div id="section-abonnement-content" class="max-w-2xl"></div>`;
-
-  if (typeof chargerPlansSelect === 'function') {
-    // Pré-charge le select de plans si le formulaire d'upload est déjà présent
-    // (no-op silencieux si l'élément n'existe pas encore, chargé à nouveau
-    // dans construireFormUpload une fois le HTML injecté).
-  }
 
   if (typeof initSectionAbonnement === 'function') {
     initSectionAbonnement();
@@ -291,7 +438,7 @@ async function loadCommandes() {
     </div>`;
   await fetchCommandes();
 
-  // §2 — Supabase Realtime remplace le polling 30s (setInterval supprimé)
+  // §2 — Supabase Realtime
   let tenantId = tenantData?.id ?? null;
   if (!tenantId) {
     try {
@@ -303,13 +450,14 @@ async function loadCommandes() {
         try {
           localStorage.setItem('monmenu_tenant', JSON.stringify({
             id: profil.id, nom: profil.nom, slug: profil.slug,
-            couleur_primaire: profil.couleur_primaire, couleur_secondaire: profil.couleur_secondaire
+            couleur_primaire: profil.couleur_primaire,
+            couleur_secondaire: profil.couleur_secondaire
           }));
         } catch {}
         const nameEl = document.getElementById('tenant-name');
         if (nameEl) nameEl.textContent = profil.nom || 'Mon Restaurant';
       }
-    } catch { /* silencieux — fallback polling ci-dessous */ }
+    } catch {}
   }
 
   if (tenantId) {
@@ -338,9 +486,6 @@ async function fetchCommandes() {
 }
 
 function renderCommandes(commandes, container, total) {
-  // §WhatsApp — on garde une référence complète à chaque commande affichée,
-  // pour pouvoir construire le message de confirmation sans requête réseau
-  // supplémentaire (voir changerStatut()).
   _commandeRegistry = {};
   commandes.forEach(cmd => { _commandeRegistry[cmd.id] = cmd; });
 
@@ -353,33 +498,39 @@ function renderCommandes(commandes, container, total) {
     return;
   }
   const STATUTS = {
-    en_attente:     { label:'En attente',    icon:'fa-clock',        cls:'statut-en_attente' },
-    confirmee:      { label:'Confirmée',     icon:'fa-circle-check', cls:'statut-confirmee' },
-    en_preparation: { label:'En préparation',icon:'fa-fire-burner',  cls:'statut-en_preparation' },
-    en_livraison:   { label:'En livraison',  icon:'fa-motorcycle',   cls:'statut-en_livraison' },
-    livree:         { label:'Livrée',        icon:'fa-check-double', cls:'statut-livree' },
-    annulee:        { label:'Annulée',       icon:'fa-xmark',        cls:'statut-annulee' }
+    en_attente:     { label:'En attente',     icon:'fa-clock',        cls:'statut-en_attente' },
+    confirmee:      { label:'Confirmée',      icon:'fa-circle-check', cls:'statut-confirmee' },
+    en_preparation: { label:'En préparation', icon:'fa-fire-burner',  cls:'statut-en_preparation' },
+    en_livraison:   { label:'En livraison',   icon:'fa-motorcycle',   cls:'statut-en_livraison' },
+    livree:         { label:'Livrée',         icon:'fa-check-double', cls:'statut-livree' },
+    annulee:        { label:'Annulée',        icon:'fa-xmark',        cls:'statut-annulee' }
   };
-  const totalBadge = total > commandes.length ? `<p class="text-xs text-gray-400 mb-3">${total} commande(s) au total — 50 premières affichées</p>` : '';
+  const totalBadge = total > commandes.length
+    ? `<p class="text-xs text-gray-400 mb-3">${total} commande(s) au total — 50 premières affichées</p>`
+    : '';
   container.innerHTML = totalBadge + commandes.map(cmd => {
-    const statut = STATUTS[cmd.statut] || { label:cmd.statut, icon:'fa-circle', cls:'' };
+    const statut = STATUTS[cmd.statut] || { label: cmd.statut, icon: 'fa-circle', cls: '' };
     const items = typeof cmd.items_json === 'string' ? JSON.parse(cmd.items_json) : (cmd.items_json || []);
     const dateStr = new Date(cmd.created_at).toLocaleString('fr-FR', { day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' });
     let metadata = {};
     try { if (cmd.metadata) metadata = JSON.parse(cmd.metadata); } catch {}
     const remiseInfo = metadata.remise_promo > 0
-      ? `<span class="text-xs text-green-600 bg-green-50 px-2 py-0.5 rounded">-${(metadata.remise_promo||0).toLocaleString('fr-FR')} FCFA promo</span>` : '';
+      ? `<span class="text-xs text-green-600 bg-green-50 px-2 py-0.5 rounded">-${(metadata.remise_promo||0).toLocaleString('fr-FR')} FCFA promo</span>`
+      : '';
     const actions = [];
     if (cmd.statut === 'en_attente') {
       actions.push(`<button onclick="changerStatut('${cmd.id}','confirmee')" class="bg-blue-600 text-white text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-blue-700"><i class="fa-solid fa-check mr-1"></i>Confirmer</button>`);
       actions.push(`<button onclick="changerStatut('${cmd.id}','annulee')" class="border border-red-200 text-red-600 text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-red-50">Annuler</button>`);
     }
-    // FIX — "Préparer" ouvre désormais une modale de choix du livreur
-    // (choisirLivreurEtPreparer) au lieu d'appeler changerStatut() direct,
-    // pour pouvoir notifier le livreur assigné par WhatsApp.
-    if (cmd.statut === 'confirmee') actions.push(`<button onclick="choisirLivreurEtPreparer('${cmd.id}')" class="bg-orange-500 text-white text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-orange-600"><i class="fa-solid fa-fire-burner mr-1"></i>Préparer</button>`);
-    if (cmd.statut === 'en_preparation') actions.push(`<button onclick="changerStatut('${cmd.id}','en_livraison')" class="bg-purple-600 text-white text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-purple-700"><i class="fa-solid fa-motorcycle mr-1"></i>En livraison</button>`);
-    if (cmd.statut === 'en_livraison') actions.push(`<button onclick="changerStatut('${cmd.id}','livree')" class="bg-green-600 text-white text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-green-700"><i class="fa-solid fa-check-double mr-1"></i>Livrée</button>`);
+    if (cmd.statut === 'confirmee') {
+      actions.push(`<button onclick="choisirLivreurEtPreparer('${cmd.id}')" class="bg-orange-500 text-white text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-orange-600"><i class="fa-solid fa-fire-burner mr-1"></i>Préparer</button>`);
+    }
+    if (cmd.statut === 'en_preparation') {
+      actions.push(`<button onclick="changerStatut('${cmd.id}','en_livraison')" class="bg-purple-600 text-white text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-purple-700"><i class="fa-solid fa-motorcycle mr-1"></i>En livraison</button>`);
+    }
+    if (cmd.statut === 'en_livraison') {
+      actions.push(`<button onclick="changerStatut('${cmd.id}','livree')" class="bg-green-600 text-white text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-green-700"><i class="fa-solid fa-check-double mr-1"></i>Livrée</button>`);
+    }
     return `<div class="bg-white border border-gray-100 rounded-xl p-4 hover:shadow-sm transition-shadow mb-3">
       <div class="flex items-start justify-between gap-3 mb-2">
         <div>
@@ -409,21 +560,13 @@ function renderCommandes(commandes, container, total) {
   }).join('');
 }
 
-// §WhatsApp — Normalise un numéro pour un lien wa.me fiable : retire tout ce
-// qui n'est pas chiffre/+, convertit un préfixe "00" en "+" (convention
-// internationale alternative) avant de le retirer, puis retire le "+" (wa.me
-// n'accepte que des chiffres). Ne peut pas deviner un indicatif pays absent.
+// §WhatsApp
 function formatWhatsAppNumber(numeroRaw) {
   let n = (numeroRaw || '').replace(/[^0-9+]/g, '');
   if (n.startsWith('00')) n = '+' + n.slice(2);
   return n.replace(/\D/g, '');
 }
 
-// §WhatsApp — Construit le message de confirmation envoyé au CLIENT quand le
-// restaurant clique sur "Confirmer" (statut en_attente → confirmee). Inclut
-// le récap de commande et le lien de suivi (domaine dynamique via
-// window.location.origin — s'adapte automatiquement .workers.dev / domaine
-// personnalisé, comme partout ailleurs dans le code).
 function construireMessageConfirmationClient(cmd) {
   const items = typeof cmd.items_json === 'string' ? JSON.parse(cmd.items_json) : (cmd.items_json || []);
   const lignes = items.map(i => `  - ${i.nom} x${i.quantite}`).join('\n');
@@ -439,20 +582,14 @@ function construireMessageConfirmationClient(cmd) {
   return msg;
 }
 
-// §WhatsApp — Construit un lien wa.me vers le numéro du CLIENT (pas celui du
-// restaurant) avec le message pré-rempli.
 function genererLienWhatsAppClient(numero, message) {
   const numeroNettoye = formatWhatsAppNumber(numero);
   return `https://wa.me/${numeroNettoye}?text=${encodeURIComponent(message)}`;
 }
 
 // ==============================
-// AJOUT — Assignation livreur + notification WhatsApp (2 canaux)
+// ASSIGNATION LIVREUR
 // ==============================
-
-// §Livreur — Ouvre une modale de choix de livreur avant de passer la
-// commande en "en_preparation". Si aucun livreur actif n'existe, on passe
-// directement au changement de statut (pas de notification possible).
 async function choisirLivreurEtPreparer(commandeId) {
   let livreurs = [];
   try {
@@ -461,7 +598,7 @@ async function choisirLivreurEtPreparer(commandeId) {
       const d = await res.json();
       livreurs = (d.livreurs || []).filter(l => l.actif);
     }
-  } catch { /* silencieux — on retombe sur le comportement sans livreur */ }
+  } catch {}
 
   if (!livreurs.length) {
     changerStatut(commandeId, 'en_preparation');
@@ -494,25 +631,15 @@ function submitChoixLivreur(e, commandeId) {
   changerStatut(commandeId, 'en_preparation', livreurId);
 }
 
-// FIX WhatsApp confirmation — Lorsqu'une commande passe à "confirmee", un
-// onglet WhatsApp s'ouvre automatiquement vers le CLIENT pour le notifier
-// (récap + lien de suivi). Lorsqu'elle passe à "en_preparation" AVEC un
-// livreur assigné (livreurId fourni), un second onglet s'ouvre vers le
-// LIVREUR (adresse + Maps + Waze + montant à encaisser).
-//
-// Deux canaux TOUJOURS actifs pour chaque notification (client ET livreur) :
-//   1) API WhatsApp Business officielle — gérée côté serveur
-//      (envoyerNotificationWhatsApp dans api-dashboard.ts / api-commandes.ts),
-//      silencieuse, best-effort.
-//   2) Redirection wa.me — c'est ELLE qui doit fonctionner à 100% du temps :
-//      la fenêtre est ouverte de façon SYNCHRONE au moment du clic (avant
-//      tout `await`, pour rester popup-safe), puis redirigée vers le vrai
-//      lien une fois la réponse serveur reçue. Si aucun destinataire
-//      (téléphone client manquant, ou pas de livreur assigné), la fenêtre
-//      est simplement fermée.
 async function changerStatut(commandeId, newStatut, livreurId) {
-  const labels = { confirmee:'Confirmer', en_preparation:'Mettre en préparation', en_livraison:'Marquer en livraison', livree:'Marquer comme livrée', annulee:'Annuler' };
-  if (!confirm((labels[newStatut]||newStatut) + ' cette commande ?')) return;
+  const labels = {
+    confirmee: 'Confirmer',
+    en_preparation: 'Mettre en préparation',
+    en_livraison: 'Marquer en livraison',
+    livree: 'Marquer comme livrée',
+    annulee: 'Annuler'
+  };
+  if (!confirm((labels[newStatut] || newStatut) + ' cette commande ?')) return;
 
   const doitNotifierClient = newStatut === 'confirmee';
   const doitNotifierLivreur = newStatut === 'en_preparation' && !!livreurId;
@@ -528,7 +655,7 @@ async function changerStatut(commandeId, newStatut, livreurId) {
 
     const res = await fetch('/api/v1/dashboard/commandes/' + commandeId + '/statut', {
       method: 'PATCH',
-      headers: { 'Content-Type':'application/json', 'X-Requested-With':'XMLHttpRequest' },
+      headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
       credentials: 'include',
       body: JSON.stringify(body)
     });
@@ -549,10 +676,6 @@ async function changerStatut(commandeId, newStatut, livreurId) {
       }
 
       if (doitNotifierLivreur) {
-        // Le lien wa.me du livreur est construit côté serveur (PATCH
-        // /commandes/:id/statut) car il a besoin du message complet
-        // (adresse + Maps + Waze + montant), renvoyé dans
-        // data.lien_whatsapp_livreur.
         if (data.lien_whatsapp_livreur) {
           if (whatsappWindowLivreur) whatsappWindowLivreur.location.href = data.lien_whatsapp_livreur;
           else window.open(data.lien_whatsapp_livreur, '_blank');
@@ -577,18 +700,21 @@ async function changerStatut(commandeId, newStatut, livreurId) {
 function filtrerCommandes(statut) {
   currentFilter = statut;
   document.querySelectorAll('.statut-filter-btn').forEach(b => {
-    b.classList.remove('bg-red-600','text-white');
-    b.classList.add('border','border-gray-200','text-gray-600');
+    b.classList.remove('bg-red-600', 'text-white');
+    b.classList.add('border', 'border-gray-200', 'text-gray-600');
   });
   const activeBtn = statut
     ? document.querySelector(`[onclick="filtrerCommandes('${statut}')"]`)
     : document.querySelector(`[onclick="filtrerCommandes(null)"]`);
-  if (activeBtn) { activeBtn.classList.add('bg-red-600','text-white'); activeBtn.classList.remove('border','border-gray-200','text-gray-600'); }
+  if (activeBtn) {
+    activeBtn.classList.add('bg-red-600', 'text-white');
+    activeBtn.classList.remove('border', 'border-gray-200', 'text-gray-600');
+  }
   fetchCommandes();
 }
 
 async function exportCommandes() {
-  const dateDebut = new Date(Date.now() - 30*86400000).toISOString().split('T')[0];
+  const dateDebut = new Date(Date.now() - 30 * 86400000).toISOString().split('T')[0];
   const dateFin = new Date().toISOString().split('T')[0];
   try {
     const res = await fetch(`/api/v1/dashboard/commandes/export-csv?date_debut=${dateDebut}&date_fin=${dateFin}`, { credentials: 'include' });
@@ -613,7 +739,9 @@ async function loadMenu() {
     if (!res.ok) throw new Error();
     const data = await res.json();
     renderMenuEditor(data.categories || [], content);
-  } catch { content.innerHTML = '<p class="text-red-500 text-sm p-4">Erreur de chargement du menu.</p>'; }
+  } catch {
+    content.innerHTML = '<p class="text-red-500 text-sm p-4">Erreur de chargement du menu.</p>';
+  }
 }
 
 function renderMenuEditor(categories, container) {
@@ -694,7 +822,7 @@ async function submitAddCategorie(e) {
   const nom = document.getElementById('cat-nom').value.trim();
   try {
     const res = await fetch('/api/v1/dashboard/categories', {
-      method:'POST', headers:{'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials:'include',
+      method: 'POST', headers: {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials: 'include',
       body: JSON.stringify({ nom })
     });
     if (res.ok) { closeModal(); loadMenu(); }
@@ -716,7 +844,7 @@ async function submitEditCategorie(e, catId) {
   const nom = document.getElementById('edit-cat-nom').value.trim();
   try {
     const res = await fetch('/api/v1/dashboard/categories/' + catId, {
-      method:'PATCH', headers:{'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials:'include',
+      method: 'PATCH', headers: {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials: 'include',
       body: JSON.stringify({ nom })
     });
     if (res.ok) { closeModal(); loadMenu(); }
@@ -727,7 +855,7 @@ async function supprimerCategorie(catId) {
   if (!confirm('Supprimer cette catégorie ? Elle doit être vide.')) return;
   try {
     const res = await fetch('/api/v1/dashboard/categories/' + catId, {
-      method:'DELETE', headers:{'X-Requested-With':'XMLHttpRequest'}, credentials:'include'
+      method: 'DELETE', headers: {'X-Requested-With':'XMLHttpRequest'}, credentials: 'include'
     });
     if (res.ok) loadMenu();
     else { const d = await res.json(); alert(d.error||'Impossible de supprimer.'); }
@@ -774,9 +902,11 @@ async function submitAddProduit(e, categorieId) {
       const fd = new FormData();
       fd.append('file', photoInput.files[0]);
       const upRes = await fetch('/api/v1/dashboard/upload-image', {
-        method:'POST', headers:{'X-Requested-With':'XMLHttpRequest'}, credentials:'include', body: fd
+        method: 'POST', headers: {'X-Requested-With':'XMLHttpRequest'}, credentials: 'include', body: fd
       });
-      if (upRes.ok) { const upData = await upRes.json(); photo_url = upData.url;
+      if (upRes.ok) {
+        const upData = await upRes.json();
+        photo_url = upData.url;
         const prev = document.getElementById('photo-preview');
         if (prev) { prev.innerHTML = `<img src="${upData.url}" class="w-16 h-16 rounded-lg object-cover border border-green-200">`; prev.classList.remove('hidden'); }
       } else { const err = await upRes.json(); alert('Erreur upload : '+(err.error||'Échec')); }
@@ -785,8 +915,8 @@ async function submitAddProduit(e, categorieId) {
   }
   try {
     const res = await fetch('/api/v1/dashboard/produits', {
-      method:'POST', headers:{'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials:'include',
-      body: JSON.stringify({ categorie_id: categorieId, nom, description, prix, disponible:true, photo_url })
+      method: 'POST', headers: {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials: 'include',
+      body: JSON.stringify({ categorie_id: categorieId, nom, description, prix, disponible: true, photo_url })
     });
     if (res.ok) { closeModal(); loadMenu(); }
     else { const d = await res.json(); alert(d.error||'Erreur'); }
@@ -835,7 +965,7 @@ async function submitEditProduit(e, prodId) {
       const fd = new FormData();
       fd.append('file', photoInput.files[0]);
       const upRes = await fetch('/api/v1/dashboard/upload-image', {
-        method:'POST', headers:{'X-Requested-With':'XMLHttpRequest'}, credentials:'include', body:fd
+        method: 'POST', headers: {'X-Requested-With':'XMLHttpRequest'}, credentials: 'include', body: fd
       });
       if (upRes.ok) { const upData = await upRes.json(); photo_url = upData.url; }
       else { const err = await upRes.json(); alert('Erreur upload : ' + (err.error || 'Échec')); }
@@ -846,7 +976,7 @@ async function submitEditProduit(e, prodId) {
   if (photo_url !== undefined) payload.photo_url = photo_url;
   try {
     const res = await fetch('/api/v1/dashboard/produits/' + prodId, {
-      method:'PATCH', headers:{'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials:'include',
+      method: 'PATCH', headers: {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials: 'include',
       body: JSON.stringify(payload)
     });
     if (res.ok) { closeModal(); loadMenu(); }
@@ -857,7 +987,7 @@ async function supprimerProduit(prodId) {
   if (!confirm('Supprimer ce produit définitivement ?')) return;
   try {
     const res = await fetch('/api/v1/dashboard/produits/' + prodId, {
-      method:'DELETE', headers:{'X-Requested-With':'XMLHttpRequest'}, credentials:'include'
+      method: 'DELETE', headers: {'X-Requested-With':'XMLHttpRequest'}, credentials: 'include'
     });
     if (res.ok) loadMenu();
     else { const d = await res.json(); alert(d.error||'Erreur'); }
@@ -866,7 +996,7 @@ async function supprimerProduit(prodId) {
 async function toggleDisponible(prodId, currentDisponible) {
   try {
     const res = await fetch('/api/v1/dashboard/produits/' + prodId, {
-      method:'PATCH', headers:{'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials:'include',
+      method: 'PATCH', headers: {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials: 'include',
       body: JSON.stringify({ disponible: !currentDisponible })
     });
     if (!res.ok) { const d = await res.json().catch(()=>({})); alert(d.error || 'Erreur lors du changement de disponibilité.'); return; }
@@ -951,9 +1081,9 @@ async function loadStatistiques() {
       if (statValues.length > 0) {
         const ctxPie = document.getElementById('statuts-chart');
         if (ctxPie) new Chart(ctxPie, {
-          type:'doughnut',
-          data:{ labels:statLabels, datasets:[{ data:statValues, backgroundColor:['#F59E0B','#3B82F6','#F97316','#8B5CF6','#22C55E','#EF4444'] }] },
-          options:{ responsive:true, plugins:{ legend:{ position:'bottom', labels:{ padding:10, font:{ size:11 } } } } }
+          type: 'doughnut',
+          data: { labels: statLabels, datasets: [{ data: statValues, backgroundColor: ['#F59E0B','#3B82F6','#F97316','#8B5CF6','#22C55E','#EF4444'] }] },
+          options: { responsive: true, plugins: { legend: { position: 'bottom', labels: { padding: 10, font: { size: 11 } } } } }
         });
       } else {
         const ctxPie = document.getElementById('statuts-chart');
@@ -971,22 +1101,22 @@ function renderStatsChart(mode) {
   if (!ctx) return;
   const isCA = mode === 'ca';
   window._statsChart = new Chart(ctx, {
-    type:'line',
-    data:{
+    type: 'line',
+    data: {
       labels: data.labels || [],
-      datasets:[{
+      datasets: [{
         label: isCA ? 'CA (FCFA)' : 'Commandes',
         data: isCA ? (data.ca_values||[]) : (data.values||[]),
         borderColor: isCA ? '#22C55E' : '#DC2626',
         backgroundColor: isCA ? 'rgba(34,197,94,0.06)' : 'rgba(220,38,38,0.06)',
-        borderWidth:2, tension:0.4, fill:true,
-        pointBackgroundColor: isCA ? '#22C55E' : '#DC2626', pointRadius:3
+        borderWidth: 2, tension: 0.4, fill: true,
+        pointBackgroundColor: isCA ? '#22C55E' : '#DC2626', pointRadius: 3
       }]
     },
-    options:{
-      responsive:true,
-      plugins:{ legend:{ display:false }, tooltip:{ callbacks:{ label: ctx => isCA ? (ctx.raw||0).toLocaleString('fr-FR')+' FCFA' : ctx.raw+' commande(s)' } } },
-      scales:{ y:{ beginAtZero:true, grid:{ color:'#F3F4F6' }, ticks:{ precision:0 } }, x:{ grid:{ display:false }, ticks:{ maxTicksLimit:10 } } }
+    options: {
+      responsive: true,
+      plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => isCA ? (ctx.raw||0).toLocaleString('fr-FR')+' FCFA' : ctx.raw+' commande(s)' } } },
+      scales: { y: { beginAtZero: true, grid: { color: '#F3F4F6' }, ticks: { precision: 0 } }, x: { grid: { display: false }, ticks: { maxTicksLimit: 10 } } }
     }
   });
 }
@@ -1008,7 +1138,9 @@ async function loadLivreurs() {
     if (!res.ok) throw new Error();
     const data = await res.json();
     renderLivreurs(data.livreurs||[], content);
-  } catch { content.innerHTML = `<div class="text-center py-10"><p class="text-red-500 text-sm">Erreur de chargement.</p><button onclick="loadLivreurs()" class="mt-3 text-xs text-red-600 underline">Réessayer</button></div>`; }
+  } catch {
+    content.innerHTML = `<div class="text-center py-10"><p class="text-red-500 text-sm">Erreur de chargement.</p><button onclick="loadLivreurs()" class="mt-3 text-xs text-red-600 underline">Réessayer</button></div>`;
+  }
 }
 function renderLivreurs(livreurs, container) {
   container.innerHTML = `
@@ -1063,7 +1195,7 @@ async function submitAddLivreur(e) {
   const whatsapp_number = document.getElementById('liv-tel').value.trim();
   try {
     const res = await fetch('/api/v1/dashboard/livreurs', {
-      method:'POST', headers:{'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials:'include',
+      method: 'POST', headers: {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials: 'include',
       body: JSON.stringify({ nom, whatsapp_number })
     });
     if (res.ok) { closeModal(); loadLivreurs(); }
@@ -1073,7 +1205,7 @@ async function submitAddLivreur(e) {
 async function toggleLivreurActif(livId, currentActif) {
   try {
     await fetch('/api/v1/dashboard/livreurs/' + livId, {
-      method:'PATCH', headers:{'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials:'include',
+      method: 'PATCH', headers: {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials: 'include',
       body: JSON.stringify({ actif: currentActif ? 0 : 1 })
     });
     loadLivreurs();
@@ -1083,7 +1215,7 @@ async function supprimerLivreur(livId) {
   if (!confirm('Supprimer ce livreur ?')) return;
   try {
     const res = await fetch('/api/v1/dashboard/livreurs/' + livId, {
-      method:'DELETE', headers:{'X-Requested-With':'XMLHttpRequest'}, credentials:'include'
+      method: 'DELETE', headers: {'X-Requested-With':'XMLHttpRequest'}, credentials: 'include'
     });
     if (res.ok) loadLivreurs();
   } catch { alert('Erreur réseau.'); }
@@ -1147,7 +1279,9 @@ async function loadQRCode() {
           </div>
         </div>
       </div>`;
-  } catch { content.innerHTML = '<p class="text-red-500 text-sm p-4">Erreur de chargement du QR Code.</p>'; }
+  } catch {
+    content.innerHTML = '<p class="text-red-500 text-sm p-4">Erreur de chargement du QR Code.</p>';
+  }
 }
 
 function copyLink(url) {
@@ -1248,7 +1382,7 @@ async function saveApparence(e) {
   };
   try {
     const res = await fetch('/api/v1/dashboard/apparence', {
-      method:'PATCH', headers:{'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials:'include',
+      method: 'PATCH', headers: {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials: 'include',
       body: JSON.stringify(data)
     });
     if (res.ok) {
@@ -1265,7 +1399,7 @@ async function _uploadMedia(fileInputId, progressId) {
   if (prog) prog.classList.remove('hidden');
   try {
     const fd = new FormData(); fd.append('file', fileInput.files[0]);
-    const res = await fetch('/api/v1/dashboard/upload-image', { method:'POST', headers:{'X-Requested-With':'XMLHttpRequest'}, credentials:'include', body:fd });
+    const res = await fetch('/api/v1/dashboard/upload-image', { method: 'POST', headers: {'X-Requested-With':'XMLHttpRequest'}, credentials: 'include', body: fd });
     if (prog) prog.classList.add('hidden');
     if (res.ok) { const d = await res.json(); return d.url; }
     const err = await res.json(); return { error: err.error || 'Échec upload' };
@@ -1280,7 +1414,7 @@ async function saveLogo() {
   else if (upload && upload.error) { fb.textContent = 'Erreur upload : '+upload.error; fb.className = 'text-xs bg-red-50 text-red-600 rounded-lg px-3 py-2'; return; }
   try {
     const res = await fetch('/api/v1/dashboard/apparence', {
-      method:'PATCH', headers:{'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials:'include',
+      method: 'PATCH', headers: {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials: 'include',
       body: JSON.stringify({ logo_url })
     });
     if (res.ok) { fb.textContent = logo_url?'Logo mis à jour.':'Logo supprimé.'; fb.className = 'text-xs bg-green-50 text-green-700 rounded-lg px-3 py-2'; if (logo_url) document.getElementById('app-logo').value = logo_url; }
@@ -1296,7 +1430,7 @@ async function saveBanniere() {
   else if (upload && upload.error) { fb.textContent = 'Erreur upload : '+upload.error; fb.className = 'text-xs bg-red-50 text-red-600 rounded-lg px-3 py-2'; return; }
   try {
     const res = await fetch('/api/v1/dashboard/apparence', {
-      method:'PATCH', headers:{'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials:'include',
+      method: 'PATCH', headers: {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials: 'include',
       body: JSON.stringify({ banniere_url })
     });
     if (res.ok) { fb.textContent = banniere_url?'Bannière mise à jour.':'Bannière supprimée.'; fb.className = 'text-xs bg-green-50 text-green-700 rounded-lg px-3 py-2'; if (banniere_url) document.getElementById('app-banniere').value = banniere_url; }
@@ -1330,7 +1464,7 @@ async function loadParametres() {
               pattern="^\\+[0-9]{8,15}$"
               title="Format international requis, avec indicatif pays. Exemple : +22670000000"
               value="${escHtml(tenant.whatsapp_number||'')}" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200" placeholder="+226 70 00 00 00">
-            <p class="text-xs text-gray-400 mt-1">Indispensable : indicatif pays inclus (ex : +226 pour le Burkina Faso), sinon les liens WhatsApp de votre boutique ne fonctionneront pas.</p>
+            <p class="text-xs text-gray-400 mt-1">Indispensable : indicatif pays inclus (ex : +226 pour le Burkina Faso).</p>
           </div>
           <div>
             <label class="block text-sm font-semibold text-gray-700 mb-1.5">URL de votre boutique</label>
@@ -1360,7 +1494,7 @@ async function loadParametres() {
             </span>
             <p class="text-xs text-gray-500 mt-1">Statut : <strong>${escHtml(tenant.statut||'essai')}</strong> • ${tenant.total_commandes||0} commande(s) total</p>
           </div>
-          <a href="/dashboard/abonnement" class="text-xs text-red-600 font-semibold hover:underline">Gérer l'abonnement →</a>
+          <a href="/dashboard/abonnement" onclick="navigateTo('abonnement');return false;" class="text-xs text-red-600 font-semibold hover:underline">Gérer l'abonnement →</a>
         </div>
       </div>
       <div class="bg-white rounded-2xl border border-gray-100 p-6">
@@ -1389,7 +1523,7 @@ async function saveParametres(e) {
   };
   try {
     const res = await fetch('/api/v1/dashboard/parametres', {
-      method:'PATCH', headers:{'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials:'include',
+      method: 'PATCH', headers: {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials: 'include',
       body: JSON.stringify(data)
     });
     if (res.ok) {
@@ -1401,10 +1535,6 @@ async function saveParametres(e) {
   } catch { fb.textContent = 'Erreur réseau.'; fb.className = 'text-xs bg-red-50 text-red-600 rounded-lg px-3 py-2'; }
 }
 
-// §WhatsApp — Normalise mais CONSERVE le "+" pour le stockage en base (le
-// numéro doit être lisible/rappelable tel quel dans le dashboard), à la
-// différence de formatWhatsAppNumber() utilisée pour les liens wa.me qui
-// exigent des chiffres seuls.
 function formatWhatsAppNumberAvecPlus(numeroRaw) {
   let n = (numeroRaw || '').replace(/[^0-9+]/g, '');
   if (n.startsWith('00')) n = '+' + n.slice(2);
@@ -1428,7 +1558,9 @@ async function loadCodesPromo() {
     if (!res.ok) throw new Error();
     const data = await res.json();
     renderCodesPromo(data.codes||[], content);
-  } catch { content.innerHTML = '<p class="text-red-500 text-sm p-4">Erreur de chargement des codes promo.</p>'; }
+  } catch {
+    content.innerHTML = '<p class="text-red-500 text-sm p-4">Erreur de chargement des codes promo.</p>';
+  }
 }
 function renderCodesPromo(codes, container) {
   const now = new Date();
@@ -1530,7 +1662,7 @@ async function submitAddCodePromo(e) {
   const usage_max = document.getElementById('promo-max').value ? parseInt(document.getElementById('promo-max').value) : null;
   try {
     const res = await fetch('/api/v1/dashboard/codes-promo', {
-      method:'POST', headers:{'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials:'include',
+      method: 'POST', headers: {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials: 'include',
       body: JSON.stringify({ code, type, valeur, date_fin, usage_max })
     });
     if (res.ok) {
@@ -1538,14 +1670,13 @@ async function submitAddCodePromo(e) {
       closeModal();
       loadCodesPromo();
       if (d && d.code) copierCodePromo(d.code, true);
-    }
-    else { const d = await res.json(); alert(d.error||'Erreur'); }
+    } else { const d = await res.json(); alert(d.error||'Erreur'); }
   } catch { alert('Erreur réseau.'); }
 }
 async function supprimerCodePromo(promoId) {
   if (!confirm('Supprimer ce code promo ?')) return;
   try {
-    const res = await fetch('/api/v1/dashboard/codes-promo/' + promoId, { method:'DELETE', headers:{'X-Requested-With':'XMLHttpRequest'}, credentials:'include' });
+    const res = await fetch('/api/v1/dashboard/codes-promo/' + promoId, { method: 'DELETE', headers: {'X-Requested-With':'XMLHttpRequest'}, credentials: 'include' });
     if (res.ok) loadCodesPromo();
   } catch { alert('Erreur réseau.'); }
 }
@@ -1575,7 +1706,7 @@ async function exportCodesPromo() {
 }
 
 // ==============================
-// SECTION PDV — Mon restaurant (horaires enrichis)
+// SECTION PDV — Mon restaurant
 // ==============================
 async function loadPdv() {
   const content = document.getElementById('dashboard-content');
@@ -1585,7 +1716,9 @@ async function loadPdv() {
     if (!res.ok) throw new Error();
     const data = await res.json();
     renderPdvConfig(data.pdv, content);
-  } catch { content.innerHTML = '<p class="text-red-500 text-sm p-4">Erreur de chargement du point de vente.</p>'; }
+  } catch {
+    content.innerHTML = '<p class="text-red-500 text-sm p-4">Erreur de chargement du point de vente.</p>';
+  }
 }
 
 function parsePdvHoraires(raw) {
@@ -1598,7 +1731,7 @@ function renderPdvConfig(pdv, container) {
     <div class="max-w-lg space-y-4">
       <div class="bg-white rounded-2xl border border-gray-100 p-6">
         <h2 class="font-bold text-gray-900 mb-1">Point de vente</h2>
-        <p class="text-sm text-gray-500 mb-5">Configurez l'adresse et les coordonnées GPS. Ceci active le calcul automatique des frais de livraison.</p>
+        <p class="text-sm text-gray-500 mb-5">Configurez l'adresse et les coordonnées GPS.</p>
         <form onsubmit="savePdv(event)" class="space-y-4">
           <div>
             <label class="block text-sm font-semibold text-gray-700 mb-1.5">Nom du point de vente</label>
@@ -1633,13 +1766,11 @@ function renderPdvConfig(pdv, container) {
               <p class="text-xs text-gray-400 mt-1">Frais par km.</p>
             </div>
           </div>
-
           <div>
             <label class="block text-sm font-semibold text-gray-700 mb-2">Horaires d'ouverture</label>
             <div id="pdv-horaires-container" class="bg-gray-50 rounded-xl p-3"></div>
-            <p class="text-xs text-gray-400 mt-1.5">Ces horaires déterminent le badge « Ouvert / Fermé » affiché sur votre boutique publique.</p>
+            <p class="text-xs text-gray-400 mt-1.5">Ces horaires déterminent le badge « Ouvert / Fermé » sur votre boutique.</p>
           </div>
-
           <p id="pdv-feedback" class="text-xs hidden rounded-lg px-3 py-2"></p>
           <button type="submit" class="w-full bg-red-600 text-white font-bold py-3 rounded-xl hover:bg-red-700">
             <i class="fa-solid fa-floppy-disk mr-1.5"></i> Enregistrer
@@ -1653,7 +1784,6 @@ function renderPdvConfig(pdv, container) {
       `<div class="bg-orange-50 border border-orange-100 rounded-2xl p-4 text-sm text-orange-700">
         <i class="fa-solid fa-triangle-exclamation mr-1.5"></i>GPS non configuré. Le calcul des frais de livraison nécessite vos coordonnées GPS.</div>`}
     </div>`;
-
   renderPdvHorairesEditor(parsePdvHoraires(pdv?.horaires));
 }
 
@@ -1725,23 +1855,14 @@ async function savePdv(e) {
   };
   try {
     const res = await fetch('/api/v1/dashboard/pdv', {
-      method:'PATCH', headers:{'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials:'include',
+      method: 'PATCH', headers: {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials: 'include',
       body: JSON.stringify(data)
     });
     const result = await res.json();
     if (res.ok) { fb.textContent = result.created?'Point de vente créé.':'Point de vente mis à jour.'; fb.className = 'text-xs bg-green-50 text-green-700 rounded-lg px-3 py-2'; }
     else { fb.textContent = result.error||'Erreur.'; fb.className = 'text-xs bg-red-50 text-red-600 rounded-lg px-3 py-2'; }
     fb.classList.remove('hidden');
-  } catch { fb.textContent = 'Erreur réseau.'; fb.className = 'text-xs bg-red-50 text-red-600 rounded-lg px-3 py-2'; fb.classList.remove('hidden'); }
+  } catch {
+    fb.textContent = 'Erreur réseau.'; fb.className = 'text-xs bg-red-50 text-red-600 rounded-lg px-3 py-2'; fb.classList.remove('hidden');
+  }
 }
-
-// ==============================
-// MODAL UTILITAIRES
-// ==============================
-function showModal(titre, contenu) {
-  let modal = document.getElementById('dash-modal');
-  if (!modal) { modal = document.createElement('div'); modal.id = 'dash-modal'; modal.className = 'fixed inset-0 z-50'; document.body.appendChild(modal); }
-  modal.innerHTML = `
-    <div class="absolute inset-0 bg-black/50" onclick="closeModal()"></div>
-    <div class="absolute inset-x-4 bottom-0 sm:inset-auto sm:top-1/2 sm:left-1/2 sm:-translate-x-1/2 sm:-translate-y-1/2 bg-white rounded-2xl sm:w-96 shadow-2xl max-h-[90vh] overflow-y-auto">
-      <div class="flex items-center justify-between px-5 py-4 border-b border-gray-100 sticky top-0 bg-w

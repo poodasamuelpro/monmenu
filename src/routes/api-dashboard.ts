@@ -1665,4 +1665,117 @@ dashboardRouter.post('/setup-restaurant', async (c) => {
   })
 })
 
+// ============================================================
+// AJOUT v1.7.0 — Routes notifications restaurant
+// Table attendue : notifications_restaurant
+//   Colonnes : id, tenant_id, type, titre, message, lue, lien, created_at
+// ============================================================
+
+// ---- GET /api/v1/dashboard/notifications/liste ----
+// Retourne la liste paginée des notifications (lues + non lues) du tenant.
+// Query params : page (défaut 1), limit (défaut 10, max 50), non_lues (true/false)
+dashboardRouter.get('/notifications/liste', async (c) => {
+  setSecurityHeaders(c)
+  const auth = await verifyAuth(c)
+  if (!auth) return c.json({ error: 'Non authentifié.' }, 401)
+
+  const page  = Math.max(1, parseInt(c.req.query('page')  || '1'))
+  const limit = Math.min(50, Math.max(1, parseInt(c.req.query('limit') || '10')))
+  const nonLuesSeulement = c.req.query('non_lues') === 'true'
+  const offset = (page - 1) * limit
+
+  const adminClient = createSupabaseAdminClient(c.env)
+
+  let query = adminClient
+    .from('notifications_restaurant')
+    .select('id, type, titre, message, lue, lien, created_at', { count: 'exact' })
+    .eq('tenant_id', auth.tenant_id)
+    .order('created_at', { ascending: false })
+    .range(offset, offset + limit - 1)
+
+  if (nonLuesSeulement) query = query.eq('lue', false)
+
+  const { data: notifications, count, error } = await query
+
+  if (error) return c.json({ error: 'Erreur récupération notifications.', detail: error.message }, 500)
+
+  const nbNonLues = nonLuesSeulement
+    ? (count ?? 0)
+    : await adminClient
+        .from('notifications_restaurant')
+        .select('id', { count: 'exact', head: true })
+        .eq('tenant_id', auth.tenant_id)
+        .eq('lue', false)
+        .then(r => r.count ?? 0)
+
+  return c.json({
+    notifications: notifications ?? [],
+    page,
+    limit,
+    total: count ?? 0,
+    nb_non_lues: nbNonLues,
+    has_more: (offset + limit) < (count ?? 0)
+  })
+})
+
+// ---- PATCH /api/v1/dashboard/notifications/:id ----
+// Marquer une notification spécifique comme lue ou non lue.
+// Body : { lue: boolean }
+dashboardRouter.patch('/notifications/:id', async (c) => {
+  setSecurityHeaders(c)
+  const auth = await verifyAuth(c)
+  if (!auth) return c.json({ error: 'Non authentifié.' }, 401)
+
+  const notifId = c.req.param('id')
+  let body: { lue?: boolean }
+  try { body = await c.req.json() } catch { return c.json({ error: 'JSON invalide.' }, 400) }
+
+  if (body.lue === undefined) {
+    return c.json({ error: 'Champ "lue" requis (true/false).' }, 422)
+  }
+
+  const adminClient = createSupabaseAdminClient(c.env)
+
+  // Vérifier que la notification appartient bien au tenant authentifié
+  const { data: existing } = await adminClient
+    .from('notifications_restaurant')
+    .select('id')
+    .eq('id', notifId)
+    .eq('tenant_id', auth.tenant_id)
+    .maybeSingle()
+
+  if (!existing) return c.json({ error: 'Notification introuvable.' }, 404)
+
+  const { error } = await adminClient
+    .from('notifications_restaurant')
+    .update({ lue: body.lue })
+    .eq('id', notifId)
+    .eq('tenant_id', auth.tenant_id)
+
+  if (error) return c.json({ error: 'Erreur mise à jour notification.', detail: error.message }, 500)
+
+  return c.json({ success: true, lue: body.lue })
+})
+
+// ---- PATCH /api/v1/dashboard/notifications/tout-lire ----
+// Marquer TOUTES les notifications non lues du tenant comme lues.
+dashboardRouter.patch('/notifications/tout-lire', async (c) => {
+  setSecurityHeaders(c)
+  const auth = await verifyAuth(c)
+  if (!auth) return c.json({ error: 'Non authentifié.' }, 401)
+
+  const adminClient = createSupabaseAdminClient(c.env)
+
+  const { error, count } = await adminClient
+    .from('notifications_restaurant')
+    .update({ lue: true })
+    .eq('tenant_id', auth.tenant_id)
+    .eq('lue', false)
+    .select('id', { count: 'exact' })
+
+  if (error) return c.json({ error: 'Erreur mise à jour notifications.', detail: error.message }, 500)
+
+  return c.json({ success: true, nb_mises_a_jour: count ?? 0 })
+})
+
 export { dashboardRouter }

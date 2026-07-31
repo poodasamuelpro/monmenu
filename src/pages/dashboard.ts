@@ -1,4 +1,5 @@
 // src/pages/dashboard.ts
+// v1.7.0 — AJOUT bouton retour (#btn-retour) + cloche notifications (#btn-notif)
 import { renderHead } from '../components/head'
 
 export function renderDashboardPage(
@@ -58,7 +59,7 @@ export function renderDashboardPage(
         <a href="/dashboard/parametres" class="nav-link flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-gray-300 hover:bg-gray-800 hover:text-white transition-colors">
           <i class="fa-solid fa-gear w-4 text-center"></i> Paramètres
         </a>
-        <!-- Abonnement — ajouté (audit 04-plan-implementation.md §B) -->
+        <!-- Abonnement -->
         <a href="/dashboard/abonnement" id="nav-abonnement" class="nav-link flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-gray-300 hover:bg-gray-800 hover:text-white transition-colors">
           <i class="fa-solid fa-credit-card w-4 text-center"></i> Abonnement
           <span id="badge-abonnement" class="hidden ml-auto bg-orange-500 text-white text-xs px-1.5 py-0.5 rounded-full">!</span>
@@ -75,27 +76,84 @@ export function renderDashboardPage(
     <!-- Main content -->
     <div class="lg:pl-60 min-h-screen">
       <header class="bg-white border-b border-gray-100 sticky top-0 z-30">
-        <div class="px-4 py-3 flex items-center gap-4">
+        <div class="px-4 py-3 flex items-center gap-3">
+          <!-- Bouton menu sidebar mobile -->
           <button onclick="toggleSidebar()" class="lg:hidden p-2 rounded-lg hover:bg-gray-100 text-gray-600" aria-label="Menu">
             <i class="fa-solid fa-bars"></i>
           </button>
+
+          <!-- AJOUT v1.7.0 — Bouton Retour (masqué sur la section commandes = accueil) -->
+          <button id="btn-retour" onclick="retourAccueil()"
+            class="hidden items-center gap-1.5 text-sm text-gray-600 hover:text-gray-900 p-2 rounded-lg hover:bg-gray-100 transition-colors"
+            aria-label="Retour aux commandes"
+            title="Retour aux commandes">
+            <i class="fa-solid fa-arrow-left text-sm"></i>
+          </button>
+
           <h1 id="page-title" class="font-bold text-gray-900 text-lg flex-1">Commandes</h1>
+
           <div class="flex items-center gap-3">
+            <!-- Indicateur Realtime -->
             <span id="realtime-indicator" class="flex items-center gap-1.5 text-xs text-green-600">
               <i class="fa-solid fa-circle text-xs animate-pulse"></i>
               <span class="hidden sm:inline">Temps réel</span>
             </span>
+
+            <!-- Lien boutique -->
             <a id="boutique-link" href="#" target="_blank"
               class="hidden sm:inline-flex items-center gap-1.5 text-xs font-medium text-gray-600 hover:text-red-600 border border-gray-200 hover:border-red-200 px-3 py-1.5 rounded-lg transition-colors">
               <i class="fa-solid fa-store text-xs"></i>
               Ma boutique
             </a>
+
+            <!-- AJOUT v1.7.0 — Cloche notifications -->
+            <div class="relative">
+              <button id="btn-notif"
+                onclick="toggleNotifPanel()"
+                class="relative p-2 rounded-lg hover:bg-gray-100 text-gray-600 hover:text-gray-900 transition-colors"
+                aria-label="Notifications">
+                <i class="fa-solid fa-bell text-sm"></i>
+                <!-- Badge compteur non lues -->
+                <span id="notif-badge"
+                  class="hidden absolute -top-0.5 -right-0.5 min-w-[1.1rem] h-[1.1rem] bg-red-600 text-white text-[10px] font-bold rounded-full flex items-center justify-center px-0.5">
+                  0
+                </span>
+              </button>
+
+              <!-- Panneau notifications (géré par notifications.js) -->
+              <div id="notif-panel"
+                class="hidden absolute right-0 top-full mt-2 w-80 bg-white border border-gray-200 rounded-2xl shadow-xl z-50 overflow-hidden">
+                <!-- Entête panneau -->
+                <div class="flex items-center justify-between px-4 py-3 border-b border-gray-100">
+                  <span class="font-bold text-gray-900 text-sm">Notifications</span>
+                  <button onclick="toutMarquerLu()" class="text-xs text-red-600 hover:underline font-medium">
+                    Tout marquer comme lu
+                  </button>
+                </div>
+                <!-- Liste notifications — remplie par notifications.js -->
+                <div id="notif-liste" class="divide-y divide-gray-50 max-h-80 overflow-y-auto">
+                  <div class="text-center py-8 text-gray-400 text-sm">
+                    <i class="fa-solid fa-bell-slash mb-2 block text-xl opacity-40"></i>
+                    Aucune notification
+                  </div>
+                </div>
+                <!-- Pied panneau — pagination -->
+                <div id="notif-footer" class="hidden px-4 py-2.5 border-t border-gray-100 flex items-center justify-between">
+                  <button id="notif-prev" onclick="notifPagePrev()" class="text-xs text-gray-500 hover:text-gray-700 disabled:opacity-40" disabled>
+                    <i class="fa-solid fa-chevron-left mr-0.5"></i> Précédent
+                  </button>
+                  <span id="notif-page-info" class="text-xs text-gray-400"></span>
+                  <button id="notif-next" onclick="notifPageNext()" class="text-xs text-gray-500 hover:text-gray-700 disabled:opacity-40">
+                    Suivant <i class="fa-solid fa-chevron-right ml-0.5"></i>
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </header>
 
       <!-- Zone bandeau notifications paiement (audit 04 §B — chargée par dashboard-paiement.js) -->
-      <!-- Affiche : alerte essai expirant, paiement en attente de confirmation, blocage imminent -->
       <div id="notification-bandeaux" class="bg-white"></div>
 
       <main class="p-4 lg:p-6" id="dashboard-content">
@@ -131,8 +189,10 @@ export function renderDashboardPage(
   <script src="/static/js/dashboard.js"></script>
   <!-- Module paiement : bandeau + section abonnement (audit 04-plan-implementation.md §B) -->
   <script src="/static/js/dashboard-paiement.js"></script>
+  <!-- AJOUT v1.7.0 — Module notifications : cloche, liste, pagination, son, marquer lu -->
+  <script src="/static/js/notifications.js"></script>
   <script>
-    // Afficher nom du tenant dans la sidebar
+    // Afficher nom du tenant dans la sidebar (fallback avant que initDashboard charge l'API)
     try {
       const tenant = JSON.parse(localStorage.getItem('monmenu_tenant') || '{}');
       if (tenant.nom) {
@@ -153,9 +213,6 @@ export function renderDashboardPage(
     }
 
     // §2 — logout() : appel serveur OBLIGATOIRE pour supprimer le cookie httpOnly.
-    // Un simple localStorage.removeItem() ne suffirait pas : le cookie httpOnly
-    // n'est pas accessible en JS, seul le serveur peut le supprimer via Set-Cookie.
-    // credentials:'include' envoie le cookie → le serveur appelle clearAuthCookies().
     async function logout() {
       if (!confirm('Se déconnecter ?')) return;
       try {
@@ -165,14 +222,22 @@ export function renderDashboardPage(
           headers: { 'X-Requested-With': 'XMLHttpRequest' }
         });
       } catch {}
-      // Supprimer uniquement les données d'affichage non sensibles du localStorage.
-      // Le token JWT n'a jamais été stocké ici depuis la migration §2.
       localStorage.removeItem('monmenu_tenant');
       window.location.href = '/dashboard';
     }
 
+    // Fermer le panneau notifications si clic en dehors
+    document.addEventListener('click', function(e) {
+      const panel = document.getElementById('notif-panel');
+      const btn = document.getElementById('btn-notif');
+      if (panel && !panel.classList.contains('hidden') && btn) {
+        if (!panel.contains(e.target) && !btn.contains(e.target)) {
+          panel.classList.add('hidden');
+        }
+      }
+    });
+
     if (typeof initDashboard === 'function') initDashboard();
-    // Initialiser les bandeaux de notification paiement au chargement
     if (typeof initBandeauxPaiement === 'function') initBandeauxPaiement();
   </script>
 </body>
