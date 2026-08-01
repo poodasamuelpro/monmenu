@@ -7,10 +7,32 @@
 //      (clients API/mobile), avec le cookie prioritaire.
 // §2.CSRF — Protection CSRF sur les routes d'écriture (POST/PATCH/DELETE).
 //
-// FIX (statut essai/actif) — verifyAuth() bloquait uniquement 'suspendu'
-// (.neq). Un tenant 'inactif' (essai expiré sans paiement) pouvait encore
-// appeler l'API dashboard. Remplacé par une liste blanche .in(['actif',
-// 'essai']) : plus sûr, un nouveau statut futur sera bloqué par défaut.
+// CORRECTIONS CYCLE-4 :
+//   FIX-A — verifyAuth() n'utilise plus sa propre liste blanche de statuts
+//   ('actif','essai' uniquement). Elle délègue désormais à
+//   verifierAccesTenant() (src/lib/acces-tenant.ts), LOGIQUE UNIQUE partagée
+//   avec api-paiement.ts et index.ts. Conséquence concrète : un tenant dont
+//   l'essai est expiré MAIS dont une preuve de paiement est en cours de
+//   vérification (fenêtre de 72h) garde désormais un accès COMPLET au
+//   dashboard (commandes, menu, stats...), pas seulement à la page
+//   Abonnement — c'est la règle métier demandée : "il a droit à tout sans
+//   souci" pendant cette fenêtre.
+//   Le mode 'paiement_initial' (jamais payé) reste volontairement exclu de
+//   verifyAuth() : ce tenant n'a accès qu'aux routes /api/v1/paiement/*.
+//
+//   FIX-B — GET /profil : bug corrigé — cette route utilisait verifyAuth()
+//   qui bloque (401) un tenant en 'en_attente_paiement_initial'. Résultat :
+//   le nom du restaurant n'apparaissait jamais dans la sidebar sur la page
+//   /dashboard/abonnement elle-même (bug purement cosmétique mais gênant).
+//   /profil a maintenant sa propre vérification, plus permissive (autorise
+//   tous les modes d'accès valides, y compris 'paiement_initial'), tout en
+//   restant strictement en lecture seule et sans exposer plus de données
+//   qu'avant.
+//
+//   FIX-C — GET /profil : résolution du plan corrigée. tenant.plan_id est
+//   un UUID Supabase, pas un id D1 — la requête D1 échouait toujours
+//   silencieusement avant. Utilise désormais chargerPlanDepuisIdSupabase()
+//   (src/lib/plans.ts).
 //
 // FIX (2026-07-28) — 3 occurrences du bug d'URL media corrigées.
 // FIX (correctif QR code) — QR toujours noir sur blanc.
@@ -37,6 +59,8 @@ import type { Env } from '../types/database'
 import { createSupabaseClient, createSupabaseClientWithToken, createSupabaseAdminClient } from '../lib/supabase'
 import { setSecurityHeaders, checkRateLimit } from '../lib/security'
 import { genererMessageLivreur, genererLienWhatsApp, envoyerNotificationWhatsApp } from '../lib/whatsapp'
+import { verifierAccesTenant } from '../lib/acces-tenant'
+import { chargerPlanDepuisIdSupabase } from '../lib/plans'
 
 const dashboardRouter = new Hono<{ Bindings: Env }>()
 
@@ -82,16 +106,12 @@ function checkCsrfProtection(c: any): boolean {
 }
 
 // ---- Middleware d'authentification ----
-// CYCLE-3 — Logique de blocage par statut tenant :
-//   'actif'                        → accès complet dashboard
-//   'essai'                        → accès complet dashboard (essai en cours)
-//   'en_attente_paiement_initial'  → BLOQUÉ ici (doit aller soumettre preuve d'abord)
-//   'inactif'                      → BLOQUÉ
-//   'suspendu'                     → BLOQUÉ
-//
-// Le statut 'en_attente_paiement_initial' est autorisé UNIQUEMENT par verifyAuthPaiement()
-// dans api-paiement.ts, qui expose /api/v1/paiement/* (pour soumettre la preuve).
-// Toutes les routes /api/v1/dashboard/* utilisent verifyAuth() qui bloque ce statut.
+// CYCLE-4 — FIX-A : délègue la décision d'accès à verifierAccesTenant()
+// (src/lib/acces-tenant.ts), seule source de vérité, partagée avec
+// api-paiement.ts et index.ts. Modes acceptés ici : 'actif', 'essai',
+// 'grace_confirmation' (fenêtre 72h après soumission d'une preuve).
+// Mode REFUSÉ ici : 'paiement_initial' (jamais payé — seules les routes
+// /api/v1/paiement/* et /api/v1/dashboard/profil lui sont ouvertes).
 async function verifyAuth(c: any): Promise<{ user_id: string; tenant_id: string; tenant_slug: string; token: string } | null> {
   const token = extractToken(c)
   if (!token) return null
@@ -101,21 +121,21 @@ async function verifyAuth(c: any): Promise<{ user_id: string; tenant_id: string;
     const { data: { user }, error } = await supabase.auth.getUser(token)
     if (error || !user) return null
 
-    const supabaseToken = createSupabaseClientWithToken(c.env, token)
-    const { data: utData, error: utError } = await supabaseToken
+    const adminClient = createSupabaseAdminClient(c.env)
+    const { data: utData, error: utError } = await adminClient
       .from('utilisateurs_tenant')
-      .select('tenant_id, tenants!inner(id, slug, statut, deleted_at)')
+      .select('tenant_id, tenants!inner(id, slug, deleted_at)')
       .eq('auth_user_id', user.id)
       .is('tenants.deleted_at', null)
-      // Liste blanche stricte : seuls 'actif' et 'essai' ont accès au dashboard complet.
-      // 'en_attente_paiement_initial' → redirigé vers /dashboard/abonnement (géré côté client)
-      // 'inactif', 'suspendu' → bloqués
-      .in('tenants.statut', ['actif', 'essai'])
       .single()
 
     if (utError || !utData) return null
 
     const tenant = utData.tenants as any
+
+    const resultat = await verifierAccesTenant(c.env, utData.tenant_id)
+    if (!resultat.acces || resultat.mode === 'paiement_initial') return null
+
     return { user_id: user.id, tenant_id: utData.tenant_id, tenant_slug: tenant.slug, token }
   } catch { return null }
 }
@@ -164,7 +184,7 @@ dashboardRouter.get('/notifications', async (c) => {
         id: 'paiement-attente',
         type: 'info',
         titre: 'Paiement en cours de vérification',
-        message: 'Votre preuve de paiement est en cours d\'examen. Confirmation sous 38h max.',
+        message: 'Votre preuve de paiement est en cours d\'examen. Confirmation sous 48h max (accès maintenu 72h).',
         action: { label: 'Suivre', href: '/dashboard/abonnement' },
         created_at: tenant.paiement_en_attente_depuis
       })
@@ -247,9 +267,6 @@ dashboardRouter.patch('/commandes/:id/statut', async (c) => {
 
   const supabase = createSupabaseClientWithToken(c.env, auth.token)
 
-  // FIX — select élargi : on a besoin de toutes les infos de la commande
-  // pour pouvoir construire le message WhatsApp du livreur (adresse, GPS,
-  // items, montant), pas seulement id/statut comme avant.
   const { data: commande, error: fetchError } = await supabase
     .from('commandes')
     .select('id, statut, client_nom, client_telephone, client_adresse, client_latitude, client_longitude, items_json, montant_total, frais_livraison, token_suivi, livreur_id')
@@ -286,9 +303,6 @@ dashboardRouter.patch('/commandes/:id/statut', async (c) => {
       note: body.note ?? null
     })
 
-  // AJOUT — Notification livreur : uniquement quand on assigne/confirme un
-  // livreur au moment du passage en "en_preparation" (le cas d'usage
-  // "restaurant lance la préparation et prévient son livreur").
   let lienWhatsappLivreur: string | null = null
   const livreurIdCible = body.livreur_id ?? null
   if (livreurIdCible && body.statut === 'en_preparation') {
@@ -310,12 +324,10 @@ dashboardRouter.patch('/commandes/:id/statut', async (c) => {
         const origin = new URL(c.req.url).origin
         const messageLivreur = genererMessageLivreur(commande as any, tenantInfo as any, origin)
 
-        // Canal 1 — API WhatsApp officielle (best-effort, ne bloque jamais la réponse)
         c.executionCtx.waitUntil(
           envoyerNotificationWhatsApp(livreur.whatsapp_number, messageLivreur, c.env).catch(() => {})
         )
 
-        // Canal 2 — lien de redirection, TOUJOURS renvoyé au dashboard
         lienWhatsappLivreur = genererLienWhatsApp(livreur.whatsapp_number, messageLivreur)
       }
     } catch {
@@ -1061,12 +1073,10 @@ dashboardRouter.patch('/parametres', async (c) => {
       .single()
 
     if (tenantInfo?.plan_id) {
-      const planInfo = await c.env.DB
-        .prepare('SELECT nom FROM plans WHERE id = ?')
-        .bind(tenantInfo.plan_id)
-        .first<{ nom: string }>()
-
-      const planNom = (planInfo?.nom ?? '').toLowerCase()
+      // tenantInfo.plan_id est un UUID Supabase → résolution vers l'id D1
+      // avant lookup du nom du plan (même bug que /profil, corrigé ici).
+      const planD1 = await chargerPlanDepuisIdSupabase(c.env, tenantInfo.plan_id)
+      const planNom = (planD1?.nom ?? '').toLowerCase()
       if (!planNom.includes('mogho')) {
         return c.json({
           error: 'Le domaine personnalisé est réservé au plan Mogho.',
@@ -1093,62 +1103,89 @@ dashboardRouter.patch('/parametres', async (c) => {
 })
 
 // ---- GET /api/v1/dashboard/profil ----
-// FIX (pré-remplissage bienvenue) — pdv_horaires ajouté à la réponse afin
-// que la page /bienvenue puisse restaurer l'étape 2 (horaires) si
-// l'utilisateur y revient après un premier passage.
+// CYCLE-4 — FIX-B + FIX-C :
+//   - N'utilise plus verifyAuth() (qui bloque 'en_attente_paiement_initial').
+//     Vérification dédiée, plus permissive : tous les modes d'accès valides
+//     de verifierAccesTenant() y ont droit, y compris 'paiement_initial'
+//     (nécessaire pour afficher le nom du resto dans la sidebar de la page
+//     /dashboard/abonnement avant tout paiement).
+//   - Résolution du plan corrigée via chargerPlanDepuisIdSupabase()
+//     (tenant.plan_id est un UUID Supabase, pas un id D1).
 dashboardRouter.get('/profil', async (c) => {
   setSecurityHeaders(c)
-  const auth = await verifyAuth(c)
-  if (!auth) return c.json({ error: 'Non authentifié.' }, 401)
 
-  const supabase = createSupabaseClientWithToken(c.env, auth.token)
+  const token = extractToken(c)
+  if (!token) return c.json({ error: 'Non authentifié.' }, 401)
 
-  const { data: tenant, error: tenantError } = await supabase
-    .from('tenants')
-    .select('id, nom, slug, logo_url, banniere_url, couleur_primaire, couleur_secondaire, whatsapp_number, domaine_perso, statut, created_at, plan_id')
-    .eq('id', auth.tenant_id)
+  const supabase = createSupabaseClient(c.env)
+  const { data: { user }, error: userError } = await supabase.auth.getUser(token)
+  if (userError || !user) return c.json({ error: 'Non authentifié.' }, 401)
+
+  const adminClient = createSupabaseAdminClient(c.env)
+  const { data: utData, error: utError } = await adminClient
+    .from('utilisateurs_tenant')
+    .select('tenant_id, tenants!inner(slug, deleted_at)')
+    .eq('auth_user_id', user.id)
+    .is('tenants.deleted_at', null)
     .single()
 
-  if (tenantError || !tenant) return c.json({ error: 'Restaurant introuvable.' }, 404)
+  if (utError || !utData) return c.json({ error: 'Restaurant introuvable.' }, 404)
 
-  let planInfo: any = null
-  if (tenant.plan_id) {
-    try {
-      planInfo = await c.env.DB
-        .prepare('SELECT nom, fonctionnalites, commandes_incluses, prix_mensuel FROM plans WHERE id = ?')
-        .bind(tenant.plan_id)
-        .first()
-    } catch { /* plans table may not exist yet */ }
-  }
+  const resultat = await verifierAccesTenant(c.env, utData.tenant_id)
+  if (!resultat.acces) return c.json({ error: 'Compte inactif.' }, 403)
 
-  const { data: pdv } = await supabase
+  const tenantId = utData.tenant_id
+  const supabaseToken = createSupabaseClientWithToken(c.env, token)
+
+  const { data: tenant, error: tenantError } = await supabaseToken
+    .from('tenants')
+    .select('id, nom, slug, logo_url, banniere_url, couleur_primaire, couleur_secondaire, whatsapp_number, domaine_perso, statut, created_at, plan_id')
+    .eq('id', tenantId)
+    .maybeSingle()
+
+  // Si le token utilisateur n'a pas encore les droits RLS nécessaires
+  // (rare, juste après inscription), on retombe sur l'admin client pour ne
+  // jamais faire échouer l'affichage du nom du restaurant.
+  const tenantFinal = tenant ?? (await adminClient
+    .from('tenants')
+    .select('id, nom, slug, logo_url, banniere_url, couleur_primaire, couleur_secondaire, whatsapp_number, domaine_perso, statut, created_at, plan_id')
+    .eq('id', tenantId)
+    .maybeSingle()).data
+
+  if (!tenantFinal) return c.json({ error: 'Restaurant introuvable.' }, 404)
+
+  // FIX-C : résolution correcte UUID Supabase → id D1 → ligne D1
+  const planD1 = await chargerPlanDepuisIdSupabase(c.env, tenantFinal.plan_id)
+
+  const { data: pdv } = await adminClient
     .from('points_de_vente')
     .select('id, nom, adresse, latitude, longitude, horaires')
-    .eq('tenant_id', auth.tenant_id)
+    .eq('tenant_id', tenantId)
     .eq('actif', true)
     .limit(1)
     .maybeSingle()
 
-  const { count: totalCommandes } = await supabase
+  const { count: totalCommandes } = await adminClient
     .from('commandes')
     .select('id', { count: 'exact', head: true })
-    .eq('tenant_id', auth.tenant_id)
+    .eq('tenant_id', tenantId)
     .is('deleted_at', null)
 
   return c.json({
-    ...tenant,
-    plan_nom: planInfo?.nom ?? null,
-    plan_features: planInfo?.fonctionnalites ?? null,
-    commandes_incluses: planInfo?.commandes_incluses ?? null,
-    prix_mensuel: planInfo?.prix_mensuel ?? null,
+    ...tenantFinal,
+    plan_nom: planD1?.nom ?? null,
+    plan_features: planD1?.fonctionnalites ?? null,
+    commandes_incluses: planD1?.commandes_incluses ?? null,
+    prix_mensuel: planD1?.prix_mensuel ?? null,
     pdv_id: pdv?.id ?? null,
     pdv_nom: pdv?.nom ?? null,
     pdv_adresse: pdv?.adresse ?? null,
     pdv_latitude: pdv?.latitude ?? null,
     pdv_longitude: pdv?.longitude ?? null,
     horaires: pdv?.horaires ?? null,
-    boutique_url: `/${tenant.slug}`,
-    total_commandes: totalCommandes ?? 0
+    boutique_url: `/${tenantFinal.slug}`,
+    total_commandes: totalCommandes ?? 0,
+    mode_acces: resultat.mode
   })
 })
 
@@ -1382,7 +1419,6 @@ dashboardRouter.post('/upload-image', async (c) => {
     return c.json({ error: 'Stockage médias non configuré.' }, 503)
   }
 
-  // BUG-005 FIX — passer c.env.KV_CACHE pour le rate limiting distribué
   const rateLimit = await checkRateLimit(`upload:${auth.tenant_id}`, 25, 3600000, c.env.KV_CACHE)
   if (!rateLimit.allowed) {
     const secsRemaining = Math.ceil((rateLimit.resetAt - Date.now()) / 1000)
@@ -1537,15 +1573,6 @@ dashboardRouter.get('/stats-journalieres', async (c) => {
 })
 
 // ---- POST /api/v1/dashboard/setup-restaurant — Onboarding bienvenue ----
-// FIX (cache + localisation) — Deux bugs corrigés :
-//  1. Le cache KV `tenant:${slug}` n'était jamais invalidé après cette
-//     route, contrairement à /apparence, /pdv et /parametres. La boutique
-//     publique et le dashboard continuaient donc d'afficher les anciennes
-//     données (vides) tant que le cache n'expirait pas naturellement,
-//     donnant l'impression qu'il fallait "ressaisir" dans le dashboard.
-//  2. latitude/longitude n'étaient jamais reçus ni enregistrés ici, alors
-//     que /pdv (dashboard) les gère. La page bienvenue capture désormais
-//     la géolocalisation (avec consentement navigateur) et l'envoie.
 dashboardRouter.post('/setup-restaurant', async (c) => {
   setSecurityHeaders(c)
   const auth = await verifyAuth(c)
@@ -1568,9 +1595,6 @@ dashboardRouter.post('/setup-restaurant', async (c) => {
   const couleurSec   = (formData.get('couleur_secondaire') as string | null)?.trim() || '#1D4ED8'
   const horairesRaw  = (formData.get('horaires') as string | null) || null
 
-  // FIX (localisation) — latitude/longitude optionnels, envoyés par le
-  // bouton "Localiser mon restaurant" de la page bienvenue (géolocalisation
-  // navigateur). Validés dans la même plage que /pdv.
   let latitude: number | null = null
   let longitude: number | null = null
   const latRaw = (formData.get('latitude') as string | null)?.trim()
@@ -1622,15 +1646,6 @@ dashboardRouter.post('/setup-restaurant', async (c) => {
   if (nom) tenantUpdate.nom = nom
   if (logoUrl) tenantUpdate.logo_url = logoUrl
   if (banniereUrl) tenantUpdate.banniere_url = banniereUrl
-  // FIX (bug critique adresse/horaires non enregistrés) — le téléphone doit
-  // être écrit dans tenants.whatsapp_number, PAS dans points_de_vente. La
-  // table points_de_vente n'a pas de colonne "telephone" (voir GET/PATCH
-  // /pdv ci-dessus qui ne l'exposent jamais). L'ancien code tentait
-  // d'écrire pdvUpdate.telephone dans la MÊME requête .update() que adresse
-  // et horaires : Supabase rejette alors la requête entière (colonne
-  // inexistante), donc adresse et horaires n'étaient JAMAIS enregistrés,
-  // silencieusement (l'erreur n'était que loguée, jamais renvoyée au client
-  // qui recevait quand même success:true).
   if (telephone) tenantUpdate.whatsapp_number = telephone
 
   const { error: errTenant } = await supabase
@@ -1674,14 +1689,12 @@ dashboardRouter.post('/setup-restaurant', async (c) => {
 })
 
 // ============================================================
-// AJOUT v1.7.0 — Routes notifications restaurant
+// Routes notifications restaurant
 // Table attendue : notifications_restaurant
 //   Colonnes : id, tenant_id, type, titre, message, lue, lien, created_at
 // ============================================================
 
 // ---- GET /api/v1/dashboard/notifications/liste ----
-// Retourne la liste paginée des notifications (lues + non lues) du tenant.
-// Query params : page (défaut 1), limit (défaut 10, max 50), non_lues (true/false)
 dashboardRouter.get('/notifications/liste', async (c) => {
   setSecurityHeaders(c)
   const auth = await verifyAuth(c)
@@ -1727,8 +1740,6 @@ dashboardRouter.get('/notifications/liste', async (c) => {
 })
 
 // ---- PATCH /api/v1/dashboard/notifications/:id ----
-// Marquer une notification spécifique comme lue ou non lue.
-// Body : { lue: boolean }
 dashboardRouter.patch('/notifications/:id', async (c) => {
   setSecurityHeaders(c)
   const auth = await verifyAuth(c)
@@ -1744,7 +1755,6 @@ dashboardRouter.patch('/notifications/:id', async (c) => {
 
   const adminClient = createSupabaseAdminClient(c.env)
 
-  // Vérifier que la notification appartient bien au tenant authentifié
   const { data: existing } = await adminClient
     .from('notifications_restaurant')
     .select('id')
@@ -1766,7 +1776,6 @@ dashboardRouter.patch('/notifications/:id', async (c) => {
 })
 
 // ---- PATCH /api/v1/dashboard/notifications/tout-lire ----
-// Marquer TOUTES les notifications non lues du tenant comme lues.
 dashboardRouter.patch('/notifications/tout-lire', async (c) => {
   setSecurityHeaders(c)
   const auth = await verifyAuth(c)
