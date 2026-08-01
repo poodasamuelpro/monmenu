@@ -76,10 +76,18 @@ const RATE_LIMIT_WINDOW = 3600000        // 1 heure en ms
 /**
  * Extrait et vérifie le token JWT depuis les cookies httpOnly ou le header
  * Authorization, puis délègue la décision d'accès à verifierAccesTenant()
- * (src/lib/acces-tenant.ts) — LOGIQUE UNIQUE partagée avec le reste de
- * l'app (FIX-A). Les routes /api/v1/paiement/* doivent rester accessibles
- * dans TOUS les modes d'accès valides : actif, essai, paiement_initial
- * (1ère preuve) et grace_confirmation (fenêtre de 72h).
+ * (src/lib/acces-tenant.ts).
+ *
+ * CYCLE-6 — FIX CRITIQUE : les routes /api/v1/paiement/* acceptent
+ * désormais TOUT tenant authentifié dont l'accès n'est pas explicitement
+ * 'suspendu' ou 'introuvable' — y compris le mode 'bloque' (inactif, sans
+ * abonnement en attente). Avant cette correction, un tenant inactif ayant
+ * épuisé son essai sans jamais payer se voyait refuser jusqu'à la
+ * consultation de son propre statut d'abonnement (401 "session expirée"
+ * trompeur), et ne pouvait donc plus JAMAIS soumettre de nouveau paiement
+ * pour réactiver son compte — verrouillage définitif. Ces routes existent
+ * PRÉCISÉMENT pour permettre de sortir de cet état, elles ne doivent donc
+ * jamais être gatées par le même critère que l'accès au dashboard complet.
  *
  * SEC-03 : le tenant_id retourné vient TOUJOURS du JWT, jamais du body/params.
  */
@@ -89,6 +97,7 @@ async function verifyAuthPaiement(c: any): Promise<{
   tenant_slug: string
   tenant_nom: string
   tenant_statut: string
+  mode_acces: string
   token: string
 } | null> {
   const cookieToken = getCookie(c, ACCESS_TOKEN_COOKIE)
@@ -102,12 +111,22 @@ async function verifyAuthPaiement(c: any): Promise<{
     if (error || !user) return null
 
     const adminClient = createSupabaseAdminClient(c.env)
+    // CYCLE-7 — FIX CRITIQUE : le filtre .is('deleted_at' as any, null)
+    // ci-dessous a été RETIRÉ. Il portait sur `utilisateurs_tenant`, une
+    // table de liaison qui n'a très probablement pas de colonne
+    // `deleted_at` (le `as any` était le signe qu'on avait forcé
+    // TypeScript à laisser passer un filtre invalide plutôt que de vérifier
+    // le schéma). Si la colonne n'existe pas, PostgREST rejette TOUTE la
+    // requête avec une erreur → `lien` restait `null` → verifyAuthPaiement()
+    // renvoyait 401 pour absolument tous les tenants, essai ou pas,
+    // bloqué ou pas. Le soft-delete du tenant lui-même reste vérifié
+    // correctement juste en dessous, sur la vraie colonne
+    // `tenants.deleted_at` — rien n'est perdu en sécurité.
     const { data: lien } = await adminClient
       .from('utilisateurs_tenant')
       .select('tenant_id')
       .eq('auth_user_id', user.id)
-      .is('deleted_at' as any, null)
-      .single()
+      .maybeSingle()
 
     if (!lien?.tenant_id) return null
 
@@ -120,12 +139,10 @@ async function verifyAuthPaiement(c: any): Promise<{
 
     if (!tenant) return null
 
-    // FIX-A : logique d'accès unique. Toutes les routes paiement acceptent
-    // les 4 modes valides (paiement_initial inclus, puisque c'est
-    // précisément le mode qui a besoin de ces routes pour soumettre la
-    // première preuve).
+    // CYCLE-6 : accès autorisé si accesComplet OU accesAbonnementSeul.
+    // Seuls 'suspendu' et 'introuvable' refusent l'accès ici.
     const resultat = await verifierAccesTenant(c.env, tenant.id)
-    if (!resultat.acces) return null
+    if (!resultat.accesComplet && !resultat.accesAbonnementSeul) return null
 
     return {
       user_id: user.id,
@@ -133,6 +150,7 @@ async function verifyAuthPaiement(c: any): Promise<{
       tenant_slug: tenant.slug,
       tenant_nom: tenant.nom,
       tenant_statut: tenant.statut,
+      mode_acces: resultat.mode,
       token
     }
   } catch {
@@ -223,7 +241,8 @@ paiementRouter.get('/statut', async (c) => {
     jours_essai_restants: joursEssaiRestants,
     reference_active: tenant.reference_paiement_active,
     sla_admin_heures: SLA_ADMIN_HEURES,
-    fenetre_acces_heures: FENETRE_ACCES_HEURES
+    fenetre_acces_heures: FENETRE_ACCES_HEURES,
+    mode_acces: auth.mode_acces
   })
 })
 
