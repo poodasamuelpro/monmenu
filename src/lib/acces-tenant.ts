@@ -1,42 +1,52 @@
 // src/lib/acces-tenant.ts
 // ─────────────────────────────────────────────────────────────────────────
-// LOGIQUE UNIQUE ET UNIFIÉE de résolution d'accès au dashboard.
-// Utilisée par :
-//   - src/index.ts                 (middleware de rendu /dashboard/*)
-//   - src/routes/api-dashboard.ts  (verifyAuth — API du dashboard restaurant)
-//   - src/routes/api-paiement.ts   (verifyAuthPaiement — API paiement)
+// CYCLE-6 — REFONTE : le contrat de cette fonction change.
 //
-// AVANT cette correction, ces 3 endroits avaient CHACUN leur propre logique,
-// légèrement différente → incohérences (ex: accès complet autorisé sur
-// /api/v1/paiement/* pendant la fenêtre de 72h, mais refusé sur
-// /api/v1/dashboard/* pendant cette même fenêtre).
+// BUG TROUVÉ (le vrai responsable de "session expirée" affiché en boucle
+// sur /dashboard/abonnement) : la version CYCLE-4 renvoyait un simple
+// booléen `acces`, utilisé TEL QUEL par verifyAuthPaiement() (paiement) et
+// verifyAuth() (dashboard complet) pour la MÊME décision. Résultat : un
+// tenant 'inactif' (essai expiré, jamais payé, aucun abonnement en attente)
+// se voyait refuser jusqu'aux routes /api/v1/paiement/* — alors que ce sont
+// PRÉCISÉMENT les routes qui doivent lui permettre de sortir du blocage en
+// soumettant un paiement. Un tenant bloqué ne pouvait donc plus jamais
+// revoir le détail de son abonnement ni payer : verrouillage définitif
+// (déjà repéré comme "Bug 2" dans l'audit initial, mais seule la
+// redirection de PAGE avait été corrigée, pas l'accès à l'API elle-même).
 //
-// RÈGLES MÉTIER (source unique de vérité) :
-//   1. tenant.statut = 'actif'                        → accès complet.
-//   2. tenant.statut = 'essai'                         → accès complet
-//      (le cron gère la bascule actif/inactif à J+14, mais l'accès réel
-//      est de toute façon revérifié en direct ici, donc aucune dépendance
-//      de timing avec le cron n'est nécessaire pour la SÉCURITÉ de l'accès).
-//   3. tenant.statut = 'en_attente_paiement_initial'   → accès LIMITÉ,
-//      uniquement à la page/API de soumission de preuve (mode
-//      'paiement_initial'). Le tenant n'a encore jamais payé.
-//   4. Il existe un abonnement avec statut='en_attente_confirmation' ET
-//      delai_confirmation_expire_le > maintenant → accès COMPLET maintenu
-//      (mode 'grace_confirmation'), quel que soit le statut du tenant par
-//      ailleurs (y compris un essai déjà expiré). C'est la fenêtre de 72h.
-//      → L'admin dispose de 48h annoncées au client (SLA), mais la coupure
-//        technique réelle se fait à 72h (calculerDeadlineConfirmation()).
-//   5. Sinon → accès bloqué (mode 'bloque').
+// NOUVEAU CONTRAT — deux niveaux d'accès distincts, plus un statut
+// explicite pour les comptes suspendus (qui eux restent un vrai mur, non
+// contournable par un paiement) :
 //
-// IMPORTANT — pourquoi un rejet admin coupe l'accès IMMÉDIATEMENT :
-//   Cette fonction ne considère QUE les abonnements dont le statut est
-//   ENCORE 'en_attente_confirmation'. Dès que l'admin confirme ou rejette
-//   (api-admin-paiements.ts DOIT changer le statut de l'abonnement en
-//   'actif' ou 'rejete'/'annule' à ce moment-là), cette fonction cesse de
-//   trouver un abonnement en attente valide → l'accès est réévalué à la
-//   requête suivante, sans dépendre du cron. Le cron ne sert donc plus qu'à
-//   la notification/nettoyage à l'expiration des 72h, pas à la sécurité
-//   d'accès elle-même.
+//   accesComplet        → dashboard entier (commandes, menu, stats...)
+//   accesAbonnementSeul  → uniquement /dashboard/abonnement (page ET API
+//                          /api/v1/paiement/*) : consulter le statut,
+//                          l'historique, ET soumettre une nouvelle preuve.
+//
+// RÈGLES MÉTIER :
+//   1. tenant.statut = 'actif'                      → accesComplet
+//   2. tenant.statut = 'essai' (non expiré)          → accesComplet
+//   3. tenant.statut = 'en_attente_paiement_initial' → accesAbonnementSeul
+//      (jamais payé — doit soumettre sa 1ère preuve)
+//   4. Abonnement 'en_attente_confirmation' valide (< 72h) existe          → accesComplet
+//      (fenêtre de grâce, quel que soit le statut tenant par ailleurs,
+//      SAUF 'suspendu' — voir règle 6)
+//   5. tenant.statut = 'inactif' (ou autre statut non reconnu), SANS
+//      fenêtre de grâce valide → accesAbonnementSeul (peut revoir son
+//      statut et soumettre un NOUVEAU paiement à tout moment — c'est le
+//      seul moyen de sortir de cet état)
+//   6. tenant.statut = 'suspendu' → AUCUN accès, ni complet ni abonnement.
+//      Un blocage manuel par un admin n'est jamais contournable par un
+//      simple paiement — nécessite une action admin explicite.
+//
+// Les routes /api/v1/paiement/* (src/routes/api-paiement.ts) doivent
+// accepter accesComplet OU accesAbonnementSeul. Seul le mode 'suspendu'
+// (ou 'introuvable') les bloque.
+// Les routes /api/v1/dashboard/* (src/routes/api-dashboard.ts, sauf
+// /profil) exigent accesComplet strictement.
+// Le middleware de page /dashboard/* (src/index.ts) redirige vers
+// /dashboard/abonnement si accesAbonnementSeul, vers
+// /dashboard/compte-inactif si ni l'un ni l'autre.
 // ─────────────────────────────────────────────────────────────────────────
 
 import { createSupabaseAdminClient } from './supabase'
@@ -45,15 +55,17 @@ import type { Env } from '../types/database'
 export type ModeAcces =
   | 'actif'
   | 'essai'
-  | 'paiement_initial'     // limité à la soumission de preuve
+  | 'paiement_initial'     // jamais payé — limité à la page/API abonnement
   | 'grace_confirmation'   // accès complet, fenêtre 72h en cours
-  | 'bloque'
+  | 'bloque'                // inactif, récupérable en soumettant un paiement
+  | 'suspendu'              // bloqué dur par un admin, non récupérable seul
+  | 'introuvable'           // tenant supprimé/inexistant
 
 export interface ResultatAcces {
-  acces: boolean
+  accesComplet: boolean
+  accesAbonnementSeul: boolean
   mode: ModeAcces
   tenant_statut: string | null
-  // Rempli uniquement si mode === 'grace_confirmation'
   abonnement_en_attente_id?: string
   delai_confirmation_expire_le?: string
 }
@@ -69,30 +81,27 @@ export async function verifierAccesTenant(env: Env, tenantId: string): Promise<R
     .maybeSingle()
 
   if (!tenant) {
-    return { acces: false, mode: 'bloque', tenant_statut: null }
+    return { accesComplet: false, accesAbonnementSeul: false, mode: 'introuvable', tenant_statut: null }
   }
 
   if (tenant.statut === 'actif') {
-    return { acces: true, mode: 'actif', tenant_statut: tenant.statut }
+    return { accesComplet: true, accesAbonnementSeul: false, mode: 'actif', tenant_statut: tenant.statut }
   }
 
   if (tenant.statut === 'essai') {
-    return { acces: true, mode: 'essai', tenant_statut: tenant.statut }
+    return { accesComplet: true, accesAbonnementSeul: false, mode: 'essai', tenant_statut: tenant.statut }
   }
 
   if (tenant.statut === 'en_attente_paiement_initial') {
-    return { acces: true, mode: 'paiement_initial', tenant_statut: tenant.statut }
+    return { accesComplet: false, accesAbonnementSeul: true, mode: 'paiement_initial', tenant_statut: tenant.statut }
   }
 
-  // Tout autre statut ('inactif', 'suspendu', ou futur statut inconnu) :
-  // vérifier s'il existe une fenêtre de grâce de 72h en cours.
-  // 'suspendu' reste volontairement exclu de la grâce : un compte suspendu
-  // par un admin ne doit jamais être réactivé automatiquement par une
-  // simple preuve de paiement en attente.
   if (tenant.statut === 'suspendu') {
-    return { acces: false, mode: 'bloque', tenant_statut: tenant.statut }
+    return { accesComplet: false, accesAbonnementSeul: false, mode: 'suspendu', tenant_statut: tenant.statut }
   }
 
+  // Ici : 'inactif' ou tout autre statut non reconnu — vérifier la fenêtre
+  // de grâce de 72h AVANT de conclure au blocage simple.
   const { data: abonnementAttente } = await adminClient
     .from('abonnements')
     .select('id, delai_confirmation_expire_le')
@@ -104,7 +113,8 @@ export async function verifierAccesTenant(env: Env, tenantId: string): Promise<R
 
   if (abonnementAttente) {
     return {
-      acces: true,
+      accesComplet: true,
+      accesAbonnementSeul: false,
       mode: 'grace_confirmation',
       tenant_statut: tenant.statut,
       abonnement_en_attente_id: abonnementAttente.id,
@@ -112,5 +122,7 @@ export async function verifierAccesTenant(env: Env, tenantId: string): Promise<R
     }
   }
 
-  return { acces: false, mode: 'bloque', tenant_statut: tenant.statut }
+  // CYCLE-6 : plus de blocage total ici. Un tenant inactif garde le droit
+  // de consulter /dashboard/abonnement et de soumettre un nouveau paiement.
+  return { accesComplet: false, accesAbonnementSeul: true, mode: 'bloque', tenant_statut: tenant.statut }
 }
