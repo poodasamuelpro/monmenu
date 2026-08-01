@@ -375,12 +375,20 @@ paiementRouter.post('/soumettre', async (c) => {
     return c.json({ error: 'Plan introuvable ou inactif.' }, 404)
   }
 
-  // SEC-08 : Idempotence — vérifier qu'il n'y a pas déjà un paiement en attente
+  // SEC-08 : Idempotence — vérifier qu'il n'y a pas déjà un paiement en attente.
+  // CYCLE-5 FIX : on ignore désormais un abonnement 'en_attente_confirmation'
+  // dont la deadline (delai_confirmation_expire_le) est déjà dépassée. Sans
+  // ce filtre, un tenant bloqué par sa fenêtre de 72h expirée (accès déjà
+  // coupé via verifierAccesTenant) recevait quand même un 409 "paiement déjà
+  // en cours" en tentant de soumettre une NOUVELLE preuve — alors que le
+  // cron api-cron.ts (bloquerPaiementsExpires, toutes les 6h) n'avait pas
+  // encore eu le temps de basculer la ligne en statut 'expire'.
   const { data: abonnementExistant } = await adminClient
     .from('abonnements')
     .select('id, soumis_le, reference_paiement')
     .eq('tenant_id', auth.tenant_id)
     .eq('statut', 'en_attente_confirmation')
+    .gt('delai_confirmation_expire_le', new Date().toISOString())
     .maybeSingle()
 
   if (abonnementExistant) {
