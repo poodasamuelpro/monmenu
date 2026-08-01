@@ -72,3 +72,37 @@ export async function chargerPlanDepuisIdSupabase(env: Env, planIdSupabase: stri
   const idD1 = await resoudreIdD1DepuisPlanSupabase(env, planIdSupabase)
   return chargerPlanD1(env, idD1)
 }
+
+/**
+ * CYCLE-5 — Résolution INVERSE : id D1 → UUID Supabase.
+ *
+ * Nécessaire dans src/routes/api-admin-paiements.ts au moment de confirmer
+ * un paiement : abonnements.plan_id est un id D1 (stocké tel quel par
+ * POST /api/v1/paiement/soumettre, cohérent avec le front qui peuple son
+ * select depuis /api/v1/plans → D1), mais tenants.plan_id attend l'UUID
+ * Supabase (c'est ce que /profil et /statut résolvent ensuite via
+ * resoudreIdD1DepuisPlanSupabase ci-dessus).
+ *
+ * AVANT CETTE CORRECTION : l'endpoint de confirmation écrivait
+ * directement l'id D1 dans tenants.plan_id → cassait à nouveau la
+ * résolution du plan pour un tenant fraîchement activé (le nom du plan
+ * actif aurait été introuvable dans /profil et /statut, même après tous
+ * les autres correctifs CYCLE-4).
+ */
+export async function resoudreIdSupabaseDepuisPlanD1(
+  env: Env,
+  idD1: string | null | undefined
+): Promise<string | null> {
+  if (!idD1) return null
+  try {
+    const adminClient = createSupabaseAdminClient(env)
+    const { data } = await adminClient
+      .from('plans')
+      .select('id')
+      .eq('d1_plan_id', idD1)
+      .maybeSingle()
+    return data?.id ?? null
+  } catch {
+    return null
+  }
+}
