@@ -1,8 +1,25 @@
 /**
  * src/routes/api-paiement.ts — Routes du module paiement manuel MonMenu
  *
- * Ce router gère toutes les interactions paiement côté restaurant (dashboard).
- * Il est monté dans src/index.ts sous le préfixe /api/v1/paiement.
+ * CORRECTIONS CYCLE-4 :
+ *   FIX-A — verifyAuthPaiement() remplacé par l'appel à la logique unique
+ *           verifierAccesTenant() (src/lib/acces-tenant.ts), partagée avec
+ *           api-dashboard.ts et index.ts. Avant : logique dupliquée et
+ *           légèrement différente à 3 endroits → incohérences d'accès.
+ *   FIX-B — Résolution du plan corrigée : tenant.plan_id / plan_initial_id
+ *           sont des UUID Supabase, pas des id D1. On les résout désormais
+ *           via resoudreIdD1DepuisPlanSupabase() avant d'interroger D1
+ *           (voir src/lib/plans.ts). Avant, la requête D1 échouait toujours
+ *           silencieusement (aucune ligne trouvée) → plan_initial_nom / prix
+ *           toujours null côté client.
+ *   FIX-C — /statut renvoie désormais `plan_initial_id_d1` (id D1) pour que
+ *           le front puisse comparer correctement le plan "actuel" dans la
+ *           grille de formules (avant : comparaison UUID Supabase vs id D1,
+ *           qui ne matchait jamais).
+ *   FIX-D — Tous les messages "38h" corrigés en "48h" (SLA admin annoncé),
+ *           la fenêtre technique de 72h reste inchangée et clairement
+ *           distinguée (voir src/lib/paiement.ts : SLA_ADMIN_HEURES / 
+ *           FENETRE_ACCES_HEURES).
  *
  * Routes exposées :
  *   GET  /api/v1/paiement/statut        — Statut abonnement actuel + référence + délai
@@ -28,6 +45,8 @@ import { getCookie } from 'hono/cookie'
 import type { Env } from '../types/database'
 import { createSupabaseClient, createSupabaseAdminClient } from '../lib/supabase'
 import { setSecurityHeaders, checkRateLimit } from '../lib/security'
+import { verifierAccesTenant } from '../lib/acces-tenant'
+import { resoudreIdD1DepuisPlanSupabase, chargerPlanD1 } from '../lib/plans'
 import {
   genererReferencePaiement,
   calculerDeadlineConfirmation,
@@ -36,7 +55,11 @@ import {
   validerExtensionImage,
   validerContentTypeImage,
   construireCleR2Preuve,
-  formaterDate
+  formaterDate,
+  SLA_ADMIN_HEURES,
+  FENETRE_ACCES_HEURES,
+  messagePreuveRecue,
+  messageEnAttenteConfirmation
 } from '../lib/paiement'
 import { notifierBlocageAutomatique } from '../lib/whatsapp'
 
@@ -51,12 +74,14 @@ const RATE_LIMIT_WINDOW = 3600000        // 1 heure en ms
 // -----------------------------------------------------------------------
 
 /**
- * Extrait et vérifie le token JWT depuis les cookies httpOnly ou le header Authorization.
- * Filtre par statuts autorisés : 'actif', 'essai', et tenants avec paiement en attente.
+ * Extrait et vérifie le token JWT depuis les cookies httpOnly ou le header
+ * Authorization, puis délègue la décision d'accès à verifierAccesTenant()
+ * (src/lib/acces-tenant.ts) — LOGIQUE UNIQUE partagée avec le reste de
+ * l'app (FIX-A). Les routes /api/v1/paiement/* doivent rester accessibles
+ * dans TOUS les modes d'accès valides : actif, essai, paiement_initial
+ * (1ère preuve) et grace_confirmation (fenêtre de 72h).
  *
  * SEC-03 : le tenant_id retourné vient TOUJOURS du JWT, jamais du body/params.
- *
- * @returns Objet auth { user_id, tenant_id, tenant_slug, token } ou null
  */
 async function verifyAuthPaiement(c: any): Promise<{
   user_id: string
@@ -88,32 +113,19 @@ async function verifyAuthPaiement(c: any): Promise<{
 
     const { data: tenant } = await adminClient
       .from('tenants')
-      .select('id, slug, nom, statut, paiement_en_attente_depuis')
+      .select('id, slug, nom, statut')
       .eq('id', lien.tenant_id)
       .is('deleted_at', null)
       .single()
 
     if (!tenant) return null
 
-    // Statuts autorisés pour accéder aux routes /api/v1/paiement/* :
-    //   'actif'                       → accès normal
-    //   'essai'                       → accès normal (peut changer de plan, soumettre preuve)
-    //   'en_attente_paiement_initial' → AUTORISÉ ici (c'est exactement pour ça que l'on vient :
-    //                                   soumettre la première preuve de paiement)
-    //   'inactif' avec paiement en attente → autorisé pendant la fenêtre de 72h
-    const statutsAutorises = ['actif', 'essai', 'en_attente_paiement_initial']
-    if (!statutsAutorises.includes(tenant.statut)) {
-      // Vérifier s'il y a un abonnement en_attente_confirmation valide (fenêtre 72h)
-      const { data: abonnementAttente } = await adminClient
-        .from('abonnements')
-        .select('id, delai_confirmation_expire_le')
-        .eq('tenant_id', tenant.id)
-        .eq('statut', 'en_attente_confirmation')
-        .gt('delai_confirmation_expire_le', new Date().toISOString())
-        .maybeSingle()
-
-      if (!abonnementAttente) return null
-    }
+    // FIX-A : logique d'accès unique. Toutes les routes paiement acceptent
+    // les 4 modes valides (paiement_initial inclus, puisque c'est
+    // précisément le mode qui a besoin de ces routes pour soumettre la
+    // première preuve).
+    const resultat = await verifierAccesTenant(c.env, tenant.id)
+    if (!resultat.acces) return null
 
     return {
       user_id: user.id,
@@ -176,26 +188,22 @@ paiementRouter.get('/statut', async (c) => {
     )
   }
 
-  // CYCLE-3 — Enrichir avec le nom du plan initial si tenant en_attente_paiement_initial
-  let planInitialNom: string | null = null
-  let planInitialPrix: number | null = null
-  const planIdAResoudre = tenant.plan_initial_id ?? tenant.plan_id
-  if (planIdAResoudre) {
-    try {
-      const planRow = await c.env.DB
-        .prepare('SELECT nom, prix_mensuel FROM plans WHERE id = ? LIMIT 1')
-        .bind(planIdAResoudre)
-        .first<{ nom: string; prix_mensuel: number }>()
-      planInitialNom = planRow?.nom ?? null
-      planInitialPrix = planRow?.prix_mensuel ?? null
-    } catch {}
-  }
+  // FIX-B — Résolution correcte UUID Supabase → id D1 → ligne D1.
+  // tenant.plan_initial_id est prioritaire sur tenant.plan_id pour
+  // l'affichage "plan choisi" avant confirmation (CYCLE-3).
+  const idD1PlanInitial = await resoudreIdD1DepuisPlanSupabase(c.env, tenant.plan_initial_id)
+  const idD1PlanActuel = await resoudreIdD1DepuisPlanSupabase(c.env, tenant.plan_id)
+  const idD1AResoudre = idD1PlanInitial ?? idD1PlanActuel
+  const planRow = await chargerPlanD1(c.env, idD1AResoudre)
 
   return c.json({
     statut_tenant: tenant.statut,
     plan_initial_id: tenant.plan_initial_id,
-    plan_initial_nom: planInitialNom,
-    plan_initial_prix_mensuel: planInitialPrix,
+    // FIX-C : id D1 exposé pour que le front compare correctement le plan
+    // "actuel" dans la grille de formules (voir dashboard-paiement.js).
+    plan_initial_id_d1: idD1AResoudre,
+    plan_initial_nom: planRow?.nom ?? null,
+    plan_initial_prix_mensuel: planRow?.prix_mensuel ?? null,
     abonnement: abonnement ? {
       id: abonnement.id,
       statut: abonnement.statut,
@@ -206,13 +214,16 @@ paiementRouter.get('/statut', async (c) => {
       soumis_le: abonnement.soumis_le,
       delai_confirmation_expire_le: abonnement.delai_confirmation_expire_le,
       heures_restantes_confirmation: heuresRestantes,
-      message_38h: abonnement.statut === 'en_attente_confirmation'
-        ? 'Votre paiement est en cours de vérification. L\'admin dispose de 38h pour confirmer.'
+      // FIX-D : message unifié 48h (SLA) / 72h (fenêtre technique)
+      message_confirmation: abonnement.statut === 'en_attente_confirmation'
+        ? messageEnAttenteConfirmation()
         : null
     } : null,
     essai_expire_le: tenant.essai_expire_le,
     jours_essai_restants: joursEssaiRestants,
-    reference_active: tenant.reference_paiement_active
+    reference_active: tenant.reference_paiement_active,
+    sla_admin_heures: SLA_ADMIN_HEURES,
+    fenetre_acces_heures: FENETRE_ACCES_HEURES
   })
 })
 
@@ -269,7 +280,7 @@ paiementRouter.get('/reference', async (c) => {
  *
  * Corps attendu : multipart/form-data avec :
  *   - preuve     : Fichier image (JPEG ou PNG, max 5 Mo)
- *   - plan_id    : UUID du plan Supabase choisi
+ *   - plan_id    : id D1 du plan choisi (cohérent avec /api/v1/plans, D1)
  *   - methode_paiement : Chaîne (ex: "Mobile Money", "Virement bancaire")
  *   (CYCLE-3 : periodicite supprimé — tous les abonnements sont exclusivement mensuels)
  *
@@ -345,7 +356,11 @@ paiementRouter.post('/soumettre', async (c) => {
 
   const adminClient = createSupabaseAdminClient(c.env)
 
-  // Vérifier que le plan_id existe dans D1 (les plans vivent dans D1, pas Supabase)
+  // planId reçu du front est un id D1 (le select du formulaire est peuplé
+  // depuis /api/v1/plans, qui lit D1) — cohérent avec la vérification D1
+  // ci-dessous. Ce plan_id (D1) est celui qui sera stocké dans
+  // abonnements.plan_id, PAS l'UUID Supabase (voir src/lib/plans.ts pour
+  // le pourquoi de cette distinction).
   let plan: { id: string; nom: string; prix_mensuel: number; devise: string } | null = null
   try {
     plan = await c.env.DB
@@ -419,7 +434,7 @@ paiementRouter.post('/soumettre', async (c) => {
     .from('abonnements')
     .insert({
       tenant_id: auth.tenant_id,        // SEC-03 : du JWT, jamais du body
-      plan_id: planId,
+      plan_id: planId,                  // id D1 — cohérent avec /historique
       statut: 'en_attente_confirmation', // SEC-01 : hardcodé
       preuve_paiement_url: cleR2,        // Clé R2 (pas l'URL publique — SEC-06)
       reference_paiement: reference,
@@ -463,7 +478,7 @@ paiementRouter.post('/soumettre', async (c) => {
     .insert({
       type: 'warning',
       titre: `Nouveau paiement à confirmer — ${auth.tenant_nom}`,
-      message: `Plan ${plan.nom} — Soumis le ${formaterDate(now.toISOString())}. Délai : 72h.`,
+      message: `Plan ${plan.nom} — Soumis le ${formaterDate(now.toISOString())}. SLA : ${SLA_ADMIN_HEURES}h (fenêtre technique ${FENETRE_ACCES_HEURES}h).`,
       lien: '#paiements',
       payload: {
         tenant_id: auth.tenant_id,
@@ -481,7 +496,7 @@ paiementRouter.post('/soumettre', async (c) => {
       tenant_id: auth.tenant_id,
       type: 'info',
       titre: 'Preuve de paiement reçue',
-      message: `Votre preuve de paiement pour le plan ${plan.nom} a bien été reçue. Confirmation sous 38h maximum.`,
+      message: `Votre preuve de paiement pour le plan ${plan.nom} a bien été reçue. ${messagePreuveRecue()}`,
       lien: '/dashboard/abonnement',
       payload: { abonnement_id: abonnement.id, reference }
     })
@@ -495,8 +510,9 @@ paiementRouter.post('/soumettre', async (c) => {
     abonnement_id: abonnement.id,
     reference,
     delai_confirmation: deadline.toISOString(),
-    heures_delai: 72,
-    message_38h: 'Votre paiement est en cours de vérification. L\'admin s\'engage à confirmer sous 38h maximum.',
+    heures_delai: FENETRE_ACCES_HEURES,
+    sla_admin_heures: SLA_ADMIN_HEURES,
+    message: messagePreuveRecue(),
     plan: { nom: plan.nom, montant: montantPaye, devise: plan.devise ?? 'XOF' }
   })
 })
@@ -534,21 +550,13 @@ paiementRouter.get('/historique', async (c) => {
     return c.json({ error: 'Erreur lors de la récupération de l\'historique.' }, 500)
   }
 
-  // BUG-007 FIX — enrichir chaque abonnement avec le nom du plan depuis D1
-  // La table abonnements (Supabase) stocke plan_id (UUID D1).
-  // On résout les noms en batch pour éviter N requêtes individuelles.
+  // abonnements.plan_id est un id D1 (stocké tel quel par /soumettre) —
+  // résolution directe, sans passer par resoudreIdD1DepuisPlanSupabase().
   const abonnementsAvecNomPlan = await Promise.all(
     (abonnements ?? []).map(async (ab: any) => {
       if (!ab.plan_id) return { ...ab, plan_nom: null }
-      try {
-        const plan = await c.env.DB
-          .prepare('SELECT nom, prix_mensuel, devise FROM plans WHERE id = ? LIMIT 1')
-          .bind(ab.plan_id)
-          .first<{ nom: string; prix_mensuel: number; devise: string }>()
-        return { ...ab, plan_nom: plan?.nom ?? null, plan_prix_mensuel: plan?.prix_mensuel ?? null }
-      } catch {
-        return { ...ab, plan_nom: null }
-      }
+      const plan = await chargerPlanD1(c.env, ab.plan_id)
+      return { ...ab, plan_nom: plan?.nom ?? null, plan_prix_mensuel: plan?.prix_mensuel ?? null }
     })
   )
 
@@ -630,7 +638,7 @@ paiementRouter.get('/notifications', async (c) => {
           id: 'paiement-attente',
           type: heuresRestantes !== null && heuresRestantes < 10 ? 'warning' : 'info',
           titre: 'Paiement en cours de vérification',
-          message: `Votre preuve de paiement est en cours d'examen. Confirmation sous 38h maximum.${heuresRestantes !== null ? ` (${heuresRestantes}h restantes avant délai limite)` : ''}`,
+          message: `${messageEnAttenteConfirmation()}${heuresRestantes !== null ? ` (${heuresRestantes}h restantes avant coupure automatique)` : ''}`,
           action: { label: 'Voir le suivi', href: '/dashboard/abonnement' },
           created_at: tenant.paiement_en_attente_depuis
         })
