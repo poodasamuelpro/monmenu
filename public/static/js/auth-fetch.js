@@ -68,3 +68,4 @@ async function fetchAvecSession(url, opts = {}) {
 }
 
 window.fetchAvecSession = fetchAvecSession;
+
