@@ -485,13 +485,16 @@ app.get('/dashboard/*', async (c) => {
 
       const resultat = await verifierAccesTenant(c.env, ut.tenant_id)
 
-      if (resultat.mode === 'paiement_initial') {
-        // Tenant jamais payé : seule la page Abonnement (soumission de la
-        // 1ère preuve) est accessible.
+      // CYCLE-6 : 'bloque' (inactif, récupérable) redirige désormais vers
+      // /dashboard/abonnement au même titre que 'paiement_initial' — un
+      // tenant inactif doit TOUJOURS pouvoir revoir son statut et payer.
+      // Seul 'suspendu' (et 'introuvable') va vers compte-inactif, un vrai
+      // mur non contournable sans intervention admin.
+      if (resultat.mode === 'paiement_initial' || resultat.mode === 'bloque') {
         if (!c.req.path.startsWith('/dashboard/abonnement')) {
           return c.redirect('/dashboard/abonnement', 302)
         }
-      } else if (!resultat.acces) {
+      } else if (!resultat.accesComplet) {
         return c.redirect('/dashboard/compte-inactif', 302)
       }
       // 'actif' / 'essai' / 'grace_confirmation' → accès complet au dashboard
