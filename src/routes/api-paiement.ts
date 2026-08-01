@@ -187,7 +187,7 @@ paiementRouter.get('/statut', async (c) => {
   // Abonnement actuel (le plus récent non annulé)
   const { data: abonnement } = await adminClient
     .from('abonnements')
-    .select('id, statut, date_fin, plan_id, soumis_le, delai_confirmation_expire_le, reference_paiement, methode_paiement, periodicite')
+    .select('id, statut, date_fin, plan_id, soumis_le, delai_confirmation_expire_le, reference_paiement, methode_paiement, numero_expediteur, periodicite')
     .eq('tenant_id', auth.tenant_id)
     .in('statut', ['actif', 'en_attente_confirmation'])
     .order('created_at', { ascending: false })
@@ -229,6 +229,8 @@ paiementRouter.get('/statut', async (c) => {
       plan_id: abonnement.plan_id,
       periodicite: abonnement.periodicite ?? 'mensuel',
       reference_paiement: abonnement.reference_paiement,
+      methode_paiement: abonnement.methode_paiement,
+      numero_expediteur: abonnement.numero_expediteur,
       soumis_le: abonnement.soumis_le,
       delai_confirmation_expire_le: abonnement.delai_confirmation_expire_le,
       heures_restantes_confirmation: heuresRestantes,
@@ -339,6 +341,9 @@ paiementRouter.post('/soumettre', async (c) => {
   const preuveFile = formData.get('preuve') as File | null
   const planId = formData.get('plan_id') as string | null
   const methodePaiement = formData.get('methode_paiement') as string | null
+  // FIX-3 : numéro utilisé pour effectuer le paiement — obligatoire, pour
+  // tarification/traçabilité et rapprochement manuel par l'admin.
+  const numeroExpediteurBrut = formData.get('numero_expediteur') as string | null
   // CYCLE-3 : periodicite supprimé — tous les abonnements sont exclusivement mensuels
   const periodicite = 'mensuel'
 
@@ -350,6 +355,13 @@ paiementRouter.post('/soumettre', async (c) => {
   }
   if (!methodePaiement) {
     return c.json({ error: 'Champ "methode_paiement" manquant.' }, 400)
+  }
+  // FIX-3 : validation numéro expéditeur — même tolérance de format que le
+  // numéro WhatsApp du restaurant ailleurs dans l'app (espaces/tirets
+  // acceptés en saisie, nettoyés avant stockage).
+  const numeroExpediteur = (numeroExpediteurBrut ?? '').replace(/[^0-9+]/g, '')
+  if (!numeroExpediteur || numeroExpediteur.replace(/\D/g, '').length < 8) {
+    return c.json({ error: 'Le numéro utilisé pour le paiement est requis (8 chiffres minimum).' }, 400)
   }
   // SEC-02 Couche 1 : Extension
   if (!validerExtensionImage(preuveFile.name)) {
@@ -468,6 +480,7 @@ paiementRouter.post('/soumettre', async (c) => {
       soumis_le: now.toISOString(),
       delai_confirmation_expire_le: deadline.toISOString(),
       methode_paiement: methodePaiement.slice(0, 100),
+      numero_expediteur: numeroExpediteur, // FIX-3 : traçabilité/rapprochement
       montant_paye: montantPaye,
       devise: plan.devise ?? 'XOF',
       periodicite: 'mensuel',            // CYCLE-3 : toujours mensuel
@@ -567,7 +580,7 @@ paiementRouter.get('/historique', async (c) => {
 
   const { data: abonnements, error, count } = await adminClient
     .from('abonnements')
-    .select('id, statut, plan_id, date_debut, date_fin, montant_paye, devise, methode_paiement, reference_paiement, soumis_le, confirme_le, rejete_le, motif_rejet, created_at', { count: 'exact' })
+    .select('id, statut, plan_id, date_debut, date_fin, montant_paye, devise, methode_paiement, numero_expediteur, reference_paiement, soumis_le, confirme_le, rejete_le, motif_rejet, created_at', { count: 'exact' })
     .eq('tenant_id', auth.tenant_id) // SEC-03 : toujours filtrer par tenant_id du JWT
     .order('created_at', { ascending: false })
     .range(offset, offset + limit - 1)
@@ -701,4 +714,3 @@ paiementRouter.get('/notifications', async (c) => {
 })
 
 export { paiementRouter }
-
