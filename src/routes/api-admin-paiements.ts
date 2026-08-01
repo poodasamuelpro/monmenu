@@ -87,7 +87,7 @@ adminPaiementsRouter.get('/', async (c) => {
     .from('abonnements')
     .select(`
       id, statut, plan_id, tenant_id, montant_paye, devise,
-      methode_paiement, reference_paiement, soumis_le,
+      methode_paiement, numero_expediteur, reference_paiement, soumis_le,
       delai_confirmation_expire_le, preuve_paiement_url, created_at,
       confirme_le, rejete_le, motif_rejet,
       tenants!inner ( id, nom, slug, whatsapp_number, statut )
