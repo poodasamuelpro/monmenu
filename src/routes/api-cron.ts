@@ -1,22 +1,37 @@
 // src/routes/api-cron.ts — Handler Cron Cloudflare Workers (§1.8)
 //
-// AJOUT (fiabilité) — les 3 tâches nocturnes tournaient auparavant dans
-// la même invocation via ctx.waitUntil(). Séparées en 3 déclenchements
+// CORRECTIONS CYCLE-5 :
+//   FIX-G — Messages harmonisés avec SLA_ADMIN_HEURES (48h, engagement
+//           annoncé au client) / FENETRE_ACCES_HEURES (72h, coupure
+//           technique réelle), importés depuis src/lib/paiement.ts.
+//   FIX-H — verifierEssaisExpires() : le filtre qui protège un tenant
+//           ayant un abonnement 'en_attente_confirmation' encore valide
+//           vérifie désormais AUSSI que la deadline n'est pas déjà
+//           dépassée (.gt('delai_confirmation_expire_le', nowIso)),
+//           cohérent avec la même vérification faite par
+//           verifierAccesTenant() (src/lib/acces-tenant.ts). Avant, un
+//           tenant dont la fenêtre de 72h était techniquement expirée
+//           (mais pas encore traité par bloquerPaiementsExpires, qui ne
+//           tourne que toutes les 6h) pouvait être compté comme "protégé"
+//           par erreur pendant que verifierAccesTenant() lui refusait déjà
+//           l'accès — pas un problème de sécurité (l'accès réel reste
+//           strictement déterminé par verifierAccesTenant à chaque
+//           requête), mais une incohérence d'affichage/timing à corriger.
+//
+// NOTE — Pourquoi bloquerPaiementsExpires() reste nécessaire malgré le
+// calcul d'accès "live" de verifierAccesTenant() :
+//   1. Sans le passage à statut='expire', la ligne resterait visible comme
+//      "en attente" dans le panel admin (GET /api/v1/admin/paiements)
+//      indéfiniment.
+//   2. Sans ce passage, POST /api/v1/paiement/soumettre bloquerait à tort
+//      une NOUVELLE soumission avec un 409 "déjà en cours" — CYCLE-5 a
+//      corrigé ce cas précis côté /soumettre (filtre .gt() ajouté), donc
+//      ce n'est plus un problème bloquant même si le cron a du retard,
+//      mais le nettoyage explicite reste la bonne pratique.
+//
+// AJOUT (fiabilité) — les tâches nocturnes tournent en 4 déclenchements
 // cron distincts (voir wrangler.jsonc "crons") pour que chacune ait son
-// propre budget de temps et ses propres logs — une tâche lente ou en
-// échec n'affecte plus les deux autres, et si Cloudflare interrompt une
-// exécution on sait immédiatement laquelle (event.cron identifie le
-// déclencheur exact qui a démarré l'invocation).
-//
-// AJOUT 2026-07-29 — 4e tâche : blocage automatique des paiements expirés
-// (délai de confirmation 72h dépassé). Déclenchement : "30 */6 * * *"
-// (toutes les 6h) pour réduire au maximum le délai d'application.
-// Référence : audit 04-plan-implementation.md §Phase 2 / 06-sync §6.1.
-//
-// AJOUT 2026-07-30 — capturerScreenshotsQuotidiens est désormais exportée
-// (elle était privée au module) afin de pouvoir être déclenchée à la
-// demande depuis la nouvelle route admin protégée (voir
-// api-admin-tasks.ts), sans attendre l'horaire du cron nocturne.
+// propre budget de temps et ses propres logs.
 //
 // Déclenchements (wrangler.jsonc, heures UTC) :
 //   "0 2 * * *"    → stats journalières
@@ -28,12 +43,8 @@ import type { Env } from '../types/database'
 import { createSupabaseAdminClient } from '../lib/supabase'
 import { capturerScreenshotBoutique } from '../lib/screenshot'
 import { notifierBlocageAutomatique } from '../lib/whatsapp'
+import { SLA_ADMIN_HEURES, FENETRE_ACCES_HEURES } from '../lib/paiement'
 
-// Plafond de sécurité : borne la durée max de l'exécution de capture
-// ET protège le quota de l'API de capture (thum.io), même si le nombre
-// de restaurants actifs grandit beaucoup. Au-delà de ce nombre, les
-// tenants excédentaires ne sont pas ignorés définitivement : voir la
-// rotation par paquets plus bas (capturerScreenshotsQuotidiens).
 const MAX_SCREENSHOTS_PAR_EXECUTION = 30
 
 export async function handleScheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
@@ -48,7 +59,6 @@ export async function handleScheduled(event: ScheduledEvent, env: Env, ctx: Exec
       ctx.waitUntil(capturerScreenshotsQuotidiens(env))
       break
     case '30 */6 * * *':
-      // AJOUT 2026-07-29 — Blocage automatique des paiements expirés (72h dépassées)
       ctx.waitUntil(bloquerPaiementsExpires(env))
       break
     default:
@@ -161,10 +171,6 @@ async function calculerStatsUnTenant(
 }
 
 // §5 — passage automatique essai → inactif
-// CORRECTION 2026-07-29 (audit 06-synchronisation §6.1) :
-// La vérification ne portait que sur statut='actif'. Un tenant en
-// 'en_attente_confirmation' ne doit PAS être bloqué par ce cron :
-// il a soumis une preuve et attend la confirmation dans les 72h.
 async function verifierEssaisExpires(env: Env): Promise<void> {
   const adminClient = createSupabaseAdminClient(env)
   const nowIso = new Date().toISOString()
@@ -190,22 +196,33 @@ async function verifierEssaisExpires(env: Env): Promise<void> {
 
   for (const tenant of essaisExpires) {
     try {
-      // CORRECTION — vérifier AUSSI 'en_attente_confirmation' (audit 06-sync §6.1)
-      // Un tenant qui a soumis une preuve ne doit pas être bloqué avant les 72h
-      const { data: abonnementActifOuAttente } = await adminClient
+      // FIX-H — CYCLE-5 : on vérifie maintenant aussi que la deadline de
+      // l'abonnement 'en_attente_confirmation' n'est pas déjà dépassée
+      // (.gt(...)), cohérent avec verifierAccesTenant(). Un abonnement
+      // 'actif' n'a pas cette contrainte de deadline (date_fin gère sa
+      // propre expiration, déjà couvert par le .or() ci-dessous).
+      const { data: abonnementActif } = await adminClient
         .from('abonnements')
         .select('id, statut')
         .eq('tenant_id', tenant.id)
-        .in('statut', ['actif', 'en_attente_confirmation'])
+        .eq('statut', 'actif')
         .or(`date_fin.is.null,date_fin.gt.${nowIso}`)
         .maybeSingle()
 
-      if (abonnementActifOuAttente) {
-        if (abonnementActifOuAttente.statut === 'en_attente_confirmation') {
-          console.log(`[CRON:essais] Tenant ${tenant.id} a un paiement en attente — non bloqué (72h window).`)
-        } else {
-          console.warn(`[CRON:essais] Tenant ${tenant.id} a un abonnement actif mais statut=essai expiré. Mise à jour manquante côté paiement ?`)
-        }
+      const { data: abonnementEnAttenteValide } = await adminClient
+        .from('abonnements')
+        .select('id, statut')
+        .eq('tenant_id', tenant.id)
+        .eq('statut', 'en_attente_confirmation')
+        .gt('delai_confirmation_expire_le', nowIso)
+        .maybeSingle()
+
+      if (abonnementActif) {
+        console.warn(`[CRON:essais] Tenant ${tenant.id} a un abonnement actif mais statut=essai expiré. Mise à jour manquante côté paiement ?`)
+        continue
+      }
+      if (abonnementEnAttenteValide) {
+        console.log(`[CRON:essais] Tenant ${tenant.id} a un paiement en attente valide — non bloqué (fenêtre ${FENETRE_ACCES_HEURES}h en cours).`)
         continue
       }
 
@@ -230,13 +247,12 @@ async function verifierEssaisExpires(env: Env): Promise<void> {
 }
 
 // -----------------------------------------------------------------------
-// AJOUT 2026-07-29 — Blocage automatique des paiements expirés (72h)
-// Référence : audit 04-plan-implementation.md §Phase 2 (api-cron.ts)
+// Blocage automatique des paiements expirés (72h)
 // -----------------------------------------------------------------------
 
 /**
  * Bloque automatiquement les paiements 'en_attente_confirmation' dont la
- * deadline de 72h est dépassée.
+ * deadline de FENETRE_ACCES_HEURES (72h) est dépassée.
  *
  * Pour chaque abonnement expiré :
  * 1. Passe abonnement.statut → 'expire'
@@ -248,12 +264,17 @@ async function verifierEssaisExpires(env: Env): Promise<void> {
  *
  * Le cron est idempotent : une double exécution ne crée pas de doublons
  * (le filtre .eq('statut', 'en_attente_confirmation') exclut les déjà traités).
+ *
+ * NOTE — un tenant en 'en_attente_paiement_initial' n'est jamais démoté
+ * ici (le guard .eq('statut', 'essai') plus bas l'exclut) : c'est
+ * intentionnel. Ce statut limite déjà l'accès à la seule page Abonnement
+ * quelle que soit la deadline (voir verifierAccesTenant()), donc rien à
+ * couper de plus — et /soumettre reste ouvert pour une nouvelle tentative.
  */
 async function bloquerPaiementsExpires(env: Env): Promise<void> {
   const adminClient = createSupabaseAdminClient(env)
   const nowIso = new Date().toISOString()
 
-  // Trouver les abonnements en_attente_confirmation dont le délai est dépassé
   const { data: abonnementsExpires, error } = await adminClient
     .from('abonnements')
     .select('id, tenant_id, plan_id, reference_paiement, delai_confirmation_expire_le')
@@ -270,11 +291,10 @@ async function bloquerPaiementsExpires(env: Env): Promise<void> {
     return
   }
 
-  console.log(`[CRON:paiements] ${abonnementsExpires.length} paiement(s) à bloquer.`)
+  console.log(`[CRON:paiements] ${abonnementsExpires.length} paiement(s) à bloquer (fenêtre ${FENETRE_ACCES_HEURES}h dépassée, SLA annoncé ${SLA_ADMIN_HEURES}h).`)
 
   for (const abonnement of abonnementsExpires) {
     try {
-      // 1. Passer l'abonnement en 'expire'
       const { error: abError } = await adminClient
         .from('abonnements')
         .update({ statut: 'expire', updated_at: nowIso })
@@ -286,7 +306,6 @@ async function bloquerPaiementsExpires(env: Env): Promise<void> {
         continue
       }
 
-      // 2. Récupérer tenant pour vérification + notification
       const { data: tenant } = await adminClient
         .from('tenants')
         .select('id, slug, nom, statut, whatsapp_number')
@@ -296,7 +315,6 @@ async function bloquerPaiementsExpires(env: Env): Promise<void> {
 
       if (!tenant) continue
 
-      // Vérifier s'il existe un autre abonnement actif (ne pas bloquer dans ce cas)
       const { data: autreActif } = await adminClient
         .from('abonnements')
         .select('id')
@@ -306,7 +324,6 @@ async function bloquerPaiementsExpires(env: Env): Promise<void> {
         .maybeSingle()
 
       if (!autreActif) {
-        // 3. Passer tenant en inactif
         await adminClient
           .from('tenants')
           .update({
@@ -315,18 +332,13 @@ async function bloquerPaiementsExpires(env: Env): Promise<void> {
             updated_at: nowIso
           })
           .eq('id', tenant.id)
-          .eq('statut', 'essai') // Ne toucher que les tenants en essai (pas actif)
+          .eq('statut', 'essai') // Ne toucher que les tenants en essai (pas actif, pas paiement_initial — voir note ci-dessus)
 
-        // Invalider cache KV
         if (env.KV_CACHE) {
           try { await env.KV_CACHE.delete(`tenant:${tenant.slug}`) } catch {}
         }
       }
 
-      // 4. Notification WhatsApp au restaurant
-      // BUG-013 FIX — appel non-bloquant : ne pas await pour éviter que
-      // l'échec ou la lenteur de l'API WhatsApp bloque le cron.
-      // L'appel est best-effort ; le cron continue même si WhatsApp échoue.
       if (tenant.whatsapp_number) {
         notifierBlocageAutomatique(env, {
           nom: tenant.nom,
@@ -336,26 +348,24 @@ async function bloquerPaiementsExpires(env: Env): Promise<void> {
         })
       }
 
-      // 5. Notification in-app restaurant
       await adminClient
         .from('notifications_restaurant')
         .insert({
           tenant_id: tenant.id,
           type: 'error',
-          titre: 'Accès bloqué — délai de confirmation dépassé',
-          message: 'Votre paiement n\'a pas été confirmé dans les 72h. Votre accès est suspendu. Contactez le support.',
+          titre: 'Accès bloqué — délai de vérification dépassé',
+          message: `Votre paiement n'a pas été confirmé dans les ${FENETRE_ACCES_HEURES}h. Votre accès est suspendu. Vous pouvez soumettre une nouvelle preuve à tout moment, ou contacter le support.`,
           lien: '/dashboard/abonnement',
           payload: { abonnement_id: abonnement.id }
         })
         .catch(() => {})
 
-      // 6. Notification admin
       await adminClient
         .from('notifications_admin')
         .insert({
           type: 'error',
           titre: `Paiement bloqué automatiquement — ${tenant.nom}`,
-          message: `Le délai de 72h est dépassé sans confirmation. Tenant passé en inactif.`,
+          message: `Le délai de ${FENETRE_ACCES_HEURES}h est dépassé sans confirmation (SLA annoncé : ${SLA_ADMIN_HEURES}h). Tenant passé en inactif.`,
           lien: '#paiements',
           payload: {
             tenant_id: tenant.id,
@@ -364,7 +374,6 @@ async function bloquerPaiementsExpires(env: Env): Promise<void> {
         })
         .catch(() => {})
 
-      // SEC-09 : log minimaliste
       console.log(`[CRON:paiements] Paiement bloqué — tenant: ${tenant.id.slice(0, 8)}...`)
     } catch (err) {
       console.error(`[CRON:paiements] Erreur traitement abonnement ${abonnement.id}:`, err)
@@ -375,24 +384,7 @@ async function bloquerPaiementsExpires(env: Env): Promise<void> {
 }
 
 // =====================================================================
-// AJOUT — Capture nocturne des screenshots boutique (format mobile),
-// via thum.io (lib/screenshot.ts). Un screenshot par tenant actif/essai
-// avec logo, stocké dans R2 sous screenshots/{slug}.jpg. Consommé par
-// GET /api/v1/screenshots/:slug (api-screenshots.ts) et affiché dans le
-// carrousel iPhone de la page d'accueil (home.ts).
-//
-// AJOUT (rotation) — plafonné à MAX_SCREENSHOTS_PAR_EXECUTION (30) pour
-// borner la durée ET préserver le quota de l'API de capture. Si le
-// nombre de restaurants éligibles dépasse ce plafond, on ne prend plus
-// toujours les mêmes : la liste complète est découpée en paquets de 30
-// (ordre stable par "id"), et chaque nuit on avance d'un paquet, en
-// bouclant automatiquement une fois le dernier atteint. Aucun état à
-// stocker : le numéro du jour (depuis l'epoch) modulo le nombre de
-// paquets détermine seul quel paquet est traité ce soir.
-//
-// CORRECTION 2026-07-30 — passée de "async function" (privée) à
-// "export async function" pour permettre son déclenchement manuel via
-// la route admin api-admin-tasks.ts, sans dupliquer la logique.
+// Capture nocturne des screenshots boutique (inchangé)
 // =====================================================================
 export async function capturerScreenshotsQuotidiens(env: Env): Promise<{ reussies: number; total: number }> {
   if (!env.R2_MEDIA) {
@@ -402,16 +394,13 @@ export async function capturerScreenshotsQuotidiens(env: Env): Promise<{ reussie
 
   const adminClient = createSupabaseAdminClient(env)
 
-  // Requête légère (id + slug seulement) sur TOUS les tenants éligibles,
-  // pas seulement les 30 premiers : la rotation a besoin du total pour
-  // savoir sur combien de paquets répartir.
   const { data: tousTenants, error } = await adminClient
     .from('tenants')
     .select('id, slug')
     .in('statut', ['actif', 'essai'])
     .is('deleted_at', null)
     .not('logo_url', 'is', null)
-    .order('id', { ascending: true }) // ordre stable, indispensable pour une rotation cohérente d'une nuit à l'autre
+    .order('id', { ascending: true })
 
   if (error || !tousTenants) {
     console.error('[CRON:screenshots] Erreur récupération tenants:', error?.message)
@@ -424,7 +413,7 @@ export async function capturerScreenshotsQuotidiens(env: Env): Promise<{ reussie
   }
 
   const nbPaquets = Math.ceil(tousTenants.length / MAX_SCREENSHOTS_PAR_EXECUTION)
-  const jourEpoch = Math.floor(Date.now() / 86_400_000) // jour absolu, stable pour toute la journée
+  const jourEpoch = Math.floor(Date.now() / 86_400_000)
   const paquetIndex = jourEpoch % nbPaquets
   const debut = paquetIndex * MAX_SCREENSHOTS_PAR_EXECUTION
   const tenants = tousTenants.slice(debut, debut + MAX_SCREENSHOTS_PAR_EXECUTION)
