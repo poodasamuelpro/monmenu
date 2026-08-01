@@ -701,3 +701,4 @@ paiementRouter.get('/notifications', async (c) => {
 })
 
 export { paiementRouter }
+
