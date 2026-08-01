@@ -133,8 +133,12 @@ async function verifyAuth(c: any): Promise<{ user_id: string; tenant_id: string;
 
     const tenant = utData.tenants as any
 
+    // CYCLE-6 : accesComplet strictement requis ici (commandes, menu,
+    // stats...). 'bloque' et 'paiement_initial' donnent accès à
+    // /dashboard/abonnement et à /api/v1/paiement/* uniquement — jamais
+    // à ces routes-ci.
     const resultat = await verifierAccesTenant(c.env, utData.tenant_id)
-    if (!resultat.acces || resultat.mode === 'paiement_initial') return null
+    if (!resultat.accesComplet) return null
 
     return { user_id: user.id, tenant_id: utData.tenant_id, tenant_slug: tenant.slug, token }
   } catch { return null }
@@ -1131,8 +1135,12 @@ dashboardRouter.get('/profil', async (c) => {
 
   if (utError || !utData) return c.json({ error: 'Restaurant introuvable.' }, 404)
 
+  // CYCLE-6 : /profil est une lecture inoffensive (nom, couleurs, logo) —
+  // accessible dans TOUS les cas où le tenant est résolu, y compris
+  // 'bloque' et 'suspendu', pour que la sidebar affiche toujours le nom du
+  // restaurant, quelle que soit la page où l'utilisateur atterrit.
   const resultat = await verifierAccesTenant(c.env, utData.tenant_id)
-  if (!resultat.acces) return c.json({ error: 'Compte inactif.' }, 403)
+  if (resultat.mode === 'introuvable') return c.json({ error: 'Compte inactif.' }, 403)
 
   const tenantId = utData.tenant_id
   const supabaseToken = createSupabaseClientWithToken(c.env, token)
