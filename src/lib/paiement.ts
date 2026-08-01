@@ -1,9 +1,24 @@
 /**
  * src/lib/paiement.ts — Utilitaires du module paiement manuel MonMenu
  *
+ * CORRECTION CYCLE-4 — Unification des délais (avant : le texte annonçait
+ * "38h" un peu partout alors que la deadline réellement calculée était de
+ * 72h — incohérence corrigée ici en clarifiant les DEUX délais distincts :
+ *
+ *   - SLA_ADMIN_HEURES (48h)      : délai ANNONCÉ AU CLIENT pour que l'admin
+ *                                   traite sa preuve de paiement. C'est un
+ *                                   engagement de service, pas une coupure
+ *                                   technique.
+ *   - FENETRE_ACCES_HEURES (72h)  : délai TECHNIQUE réel après lequel,
+ *                                   si l'admin n'a pas statué, l'accès est
+ *                                   coupé automatiquement (cf. cron +
+ *                                   src/lib/acces-tenant.ts qui revérifie
+ *                                   cette deadline à chaque requête).
+ *
  * Ce module regroupe les fonctions pures utilisées par :
  *   - src/routes/api-paiement.ts (génération référence, upload preuve)
  *   - src/routes/api-cron.ts (vérification deadline 72h)
+ *   - src/lib/acces-tenant.ts (fenêtre de grâce)
  *
  * SÉCURITÉ :
  *   - SEC-01 : le statut n'est jamais fourni par le client, toujours hardcodé
@@ -12,6 +27,16 @@
  *
  * @module paiement
  */
+
+// -----------------------------------------------------------------------
+// 0. Délais (SOURCE UNIQUE — ne plus dupliquer ces valeurs ailleurs)
+// -----------------------------------------------------------------------
+
+/** Délai annoncé au client pour la vérification admin (message uniquement). */
+export const SLA_ADMIN_HEURES = 48
+
+/** Fenêtre technique réelle d'accès / coupure automatique. */
+export const FENETRE_ACCES_HEURES = 72
 
 // -----------------------------------------------------------------------
 // 1. Génération de la référence de paiement unique
@@ -46,20 +71,21 @@ export function genererReferencePaiement(tenantSlug: string): string {
 }
 
 // -----------------------------------------------------------------------
-// 2. Calcul de la deadline de confirmation (72h)
+// 2. Calcul de la deadline de confirmation (72h — fenêtre technique)
 // -----------------------------------------------------------------------
 
 /**
  * Calcule la deadline de confirmation à partir du moment de soumission.
  *
- * L'admin dispose de 38h (délai engagé) mais la fenêtre de tolérance
- * est de 72h avant blocage automatique du tenant par le cron.
+ * L'admin dispose de SLA_ADMIN_HEURES (48h, engagement annoncé au client)
+ * mais la fenêtre technique réelle avant coupure automatique de l'accès
+ * est FENETRE_ACCES_HEURES (72h).
  *
  * @param soumisLe - Date/heure de soumission de la preuve
  * @returns Date/heure limite de confirmation (soumisLe + 72h)
  */
 export function calculerDeadlineConfirmation(soumisLe: Date): Date {
-  return new Date(soumisLe.getTime() + 72 * 3600 * 1000)
+  return new Date(soumisLe.getTime() + FENETRE_ACCES_HEURES * 3600 * 1000)
 }
 
 /**
@@ -187,4 +213,16 @@ export function formaterDate(dateIso: string): string {
  */
 export function formaterMontant(montant: number, devise = 'FCFA'): string {
   return `${montant.toLocaleString('fr-FR')} ${devise}`
+}
+
+// -----------------------------------------------------------------------
+// 6. Messages standardisés (une seule source de vérité pour le texte)
+// -----------------------------------------------------------------------
+
+export function messagePreuveRecue(): string {
+  return `Votre preuve de paiement a bien été reçue. Notre équipe la vérifie sous ${SLA_ADMIN_HEURES}h maximum. Votre accès complet est maintenu pendant ${FENETRE_ACCES_HEURES}h le temps de la vérification.`
+}
+
+export function messageEnAttenteConfirmation(): string {
+  return `Votre paiement est en cours de vérification. Notre équipe s'engage à confirmer sous ${SLA_ADMIN_HEURES}h. Votre accès reste actif pendant ${FENETRE_ACCES_HEURES}h à partir de la soumission.`
 }
