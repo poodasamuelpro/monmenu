@@ -14,13 +14,12 @@ import { blogRouter } from './routes/api-blog'
 import { newsletterRouter } from './routes/api-newsletter'
 import { screenshotsRouter } from './routes/api-screenshots'
 import { paiementRouter } from './routes/api-paiement'
-// AJOUT 2026-07-30 — route admin pour déclencher manuellement les tâches
-// cron (ex: relancer la capture des screenshots sans attendre 2h20 UTC).
 import { adminTasksRouter } from './routes/api-admin-tasks'
-// FEAT-E 2026-07-31 — endpoints admin paiements (confirmer/rejeter/preuve/moyens)
 import { adminPaiementsRouter } from './routes/api-admin-paiements'
 import { setSecurityHeaders } from './lib/security'
 import { getNomProjet, getWhatsAppSupport, createSupabaseAdminClient, createSupabaseClient } from './lib/supabase'
+// CYCLE-4 — logique d'accès unifiée (voir src/lib/acces-tenant.ts)
+import { verifierAccesTenant } from './lib/acces-tenant'
 
 // ---- Imports composants & pages ----
 import { renderHomePage } from './pages/home'
@@ -29,11 +28,6 @@ import { renderBlogPage } from './pages/blog'
 import { renderArticlePage } from './pages/article'
 import { renderInscriptionPage } from './pages/inscription'
 import { renderLegalPage } from './pages/legal'
-// CORRECTION 2026-07-31 — renderCreerComptePage retiré de l'import : la page
-// /creer-compte ne rend plus son propre formulaire (voir route plus bas),
-// elle redirige désormais vers /inscription (seule page avec sélection de
-// plan, obligatoire côté serveur). La fonction reste dans pages/auth.ts au
-// cas où, mais n'est plus utilisée ici.
 import { renderConnexionPage } from './pages/auth'
 import { renderForgotPasswordPage } from './pages/forgot-password'
 import { renderDashboardPage } from './pages/dashboard'
@@ -49,11 +43,6 @@ const app = new Hono<{ Bindings: Env }>()
 // Nom du cookie httpOnly — doit rester identique à celui posé dans api-auth.ts
 const ACCESS_TOKEN_COOKIE = 'sb-access-token'
 
-// FIX (2026-07-28) — Récupération d'un tenant + son PDV actif via un vrai join
-// sur points_de_vente (les colonnes pdv_nom/pdv_adresse/... N'EXISTENT PAS sur
-// la table tenants — elles vivent dans points_de_vente). Factorisé ici pour que
-// la route /:slug ET le middleware domaine personnalisé utilisent EXACTEMENT
-// la même logique.
 async function fetchTenantAvecPdv(env: Env, filtre: { colonne: 'slug' | 'domaine_perso'; valeur: string }): Promise<TenantBoutique | null> {
   const adminClient = createSupabaseAdminClient(env)
   const { data: tenantRaw } = await adminClient
@@ -94,7 +83,6 @@ async function fetchTenantAvecPdv(env: Env, filtre: { colonne: 'slug' | 'domaine
 // ---- Middleware globaux ----
 app.use('*', logger())
 
-// Domaines/sous-domaines autorisés à appeler l'API
 function originAutorisee(origin: string): string | null {
   const domainesRacines = ['monmenu.app', 'monmenu.com', 'monmenu.bf']
   const localhosts = ['http://localhost:5173', 'http://localhost:3000']
@@ -128,7 +116,7 @@ app.use('/api/*', cors({
 app.use('/static/*', serveStatic({ root: './' }))
 app.use('/favicon.ico', serveStatic({ path: './favicon.ico' }))
 
-// ---- §1.11 — Middleware custom domain : résolution de domaine_perso vers boutique ----
+// ---- Middleware custom domain : résolution de domaine_perso vers boutique ----
 app.use('*', async (c, next) => {
   const host = c.req.header('host') ?? ''
   const domainesPlateforme = ['monmenu.app', 'monmenu.com', 'monmenu.bf', 'workers.dev', 'localhost']
@@ -156,27 +144,14 @@ app.route('/api/v1/dashboard', dashboardRouter)
 app.route('/api/v1/blog', blogRouter)
 app.route('/api/v1/newsletter', newsletterRouter)
 app.route('/api/v1/screenshots', screenshotsRouter)
-// Module paiement manuel — audit 04-plan-implementation.md §B
 app.route('/api/v1/paiement', paiementRouter)
-// AJOUT 2026-07-30 — déclenchement manuel des tâches cron (ex: screenshots)
 app.route('/api/v1/admin/tasks', adminTasksRouter)
-// FEAT-E 2026-07-31 — administration des paiements manuels
 app.route('/api/v1/admin/paiements', adminPaiementsRouter)
 
-// ─── Feat F — Endpoint PUBLIC GET /api/v1/moyens-paiement ──────────────────
-// Retourne les moyens de paiement actifs pour affichage dans le dashboard
-// restaurant et la page de soumission de preuve. Accès public (pas d'auth)
-// car ces infos (numéros de dépôt) doivent être visibles sans être connecté.
-// Sécurité : lecture seule, RLS Supabase = service_role pour l'admin,
-// ici on lit directement la table moyens_paiement avec le client anon (lecture publique).
+// ─── Endpoint PUBLIC GET /api/v1/moyens-paiement ──────────────────
 app.get('/api/v1/moyens-paiement', async (c) => {
   setSecurityHeaders(c)
   try {
-    // BUG-NOUVEAU-001 FIX (CYCLE-3) : import dynamique redondant supprimé —
-    // createSupabaseClient est importé statiquement ligne 23.
-    // Colonne 'type' inexistante remplacée par les vraies colonnes de la table
-    // moyens_paiement (migration 012) : code, nom, description, instructions,
-    // numero, logo_url, actif.
     const supabase = createSupabaseClient(c.env)
     const { data, error } = await supabase
       .from('moyens_paiement')
@@ -337,9 +312,6 @@ app.get('/', async (c) => {
 })
 
 // ---- Pages institutionnelles ----
-// IMPORTANT : ces routes DOIVENT être définies AVANT /:slug
-// sinon Hono capture tout avec le paramètre générique
-
 app.get('/contact', async (c) => {
   setSecurityHeaders(c)
   const [nomProjet, whatsappSupport] = await Promise.all([
@@ -460,16 +432,6 @@ app.get('/connexion', async (c) => {
   return c.html(renderConnexionPage(nomProjet))
 })
 
-// CORRECTION 2026-07-31 — /creer-compte redirige désormais vers /inscription
-// au lieu de rendre son propre formulaire. Raison : cette page envoyait
-// POST /api/v1/auth/register SANS plan_id, alors que ce champ est
-// obligatoire côté serveur (CYCLE-3) → toute tentative échouait avec
-// 422 "Veuillez choisir un plan pour continuer." Plutôt que de dupliquer
-// la grille de plans ici (double logique = double surface à bug), on
-// redirige vers la seule page qui gère correctement la sélection de plan.
-// 301 (redirection permanente) : si un lien externe ou un ancien favori
-// pointe encore vers /creer-compte, il continuera de fonctionner et
-// atterrira sur la bonne page.
 app.get('/creer-compte', async (c) => {
   return c.redirect('/inscription', 301)
 })
@@ -487,6 +449,13 @@ app.get('/dashboard/compte-inactif', async (c) => {
   return c.html(renderCompteInactifPage(nomProjet))
 })
 
+// CYCLE-4 — FIX : le middleware utilisait tenants.statut === 'en_attente_confirmation',
+// un statut qui n'existe en réalité que sur la table `abonnements`, jamais
+// sur `tenants` → cette branche ne se déclenchait donc jamais, ce qui
+// coupait l'accès complet pendant la fenêtre de 72h de vérification d'un
+// paiement (alors même que verifyAuthPaiement() l'autorisait déjà côté API).
+// Remplacé par verifierAccesTenant(), LOGIQUE UNIQUE partagée avec
+// api-dashboard.ts et api-paiement.ts.
 app.get('/dashboard/*', async (c) => {
   setSecurityHeaders(c)
 
@@ -506,22 +475,26 @@ app.get('/dashboard/*', async (c) => {
       const adminClient = createSupabaseAdminClient(c.env)
       const { data: ut } = await adminClient
         .from('utilisateurs_tenant')
-        .select('tenants!inner(statut)')
+        .select('tenant_id')
         .eq('auth_user_id', user.id)
         .single()
 
-      const statutTenant = (ut?.tenants as any)?.statut
-      // CYCLE-3 : en_attente_paiement_initial → redirigé vers /dashboard/abonnement
-      // (tenant avec plan payant choisi mais preuve non encore soumise)
-      if (statutTenant === 'en_attente_paiement_initial') {
-        // Autoriser l'accès uniquement à /dashboard/abonnement pour soumettre la preuve
+      if (!ut?.tenant_id) {
+        return c.redirect('/dashboard/compte-inactif', 302)
+      }
+
+      const resultat = await verifierAccesTenant(c.env, ut.tenant_id)
+
+      if (resultat.mode === 'paiement_initial') {
+        // Tenant jamais payé : seule la page Abonnement (soumission de la
+        // 1ère preuve) est accessible.
         if (!c.req.path.startsWith('/dashboard/abonnement')) {
           return c.redirect('/dashboard/abonnement', 302)
         }
-      } else if (!statutTenant || !['actif', 'essai', 'en_attente_confirmation'].includes(statutTenant)) {
-        // en_attente_confirmation : fenêtre de 72h — le tenant reste accessible (audit 06-sync §8)
+      } else if (!resultat.acces) {
         return c.redirect('/dashboard/compte-inactif', 302)
       }
+      // 'actif' / 'essai' / 'grace_confirmation' → accès complet au dashboard
     }
   } catch {
     return c.redirect('/dashboard', 302)
@@ -584,7 +557,6 @@ app.onError((err, c) => {
   return c.json({ error: 'Erreur interne du serveur.' }, 500)
 })
 
-// §1.8 — Export objet Worker complet avec handler scheduled (Cron Triggers)
 import { handleScheduled } from './routes/api-cron'
 
 export default {
