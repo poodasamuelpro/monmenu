@@ -83,7 +83,8 @@ function heuresRestantes(isoFin) {
 }
 
 function apiCallPaiement(path, opts = {}) {
-  return fetch(PAIEMENT_API + path, {
+  const fetchFn = window.fetchAvecSession || fetch; // fallback si auth-fetch.js absent
+  return fetchFn(PAIEMENT_API + path, {
     credentials: 'include',
     headers: {
       'X-Requested-With': 'XMLHttpRequest',
