@@ -1,21 +1,30 @@
 /**
  * public/static/js/dashboard-paiement.js — Module UI paiement manuel (côté restaurant)
  *
+ * CORRECTIONS CYCLE-4 :
+ *   FIX-1 — Messages harmonisés : SLA admin annoncé = 48h (avant : "38h",
+ *           incohérent avec la deadline technique réelle de 72h côté
+ *           serveur). La fenêtre technique de coupure reste 72h, mais est
+ *           désormais clairement présentée comme distincte du SLA.
+ *   FIX-2 — Classes Tailwind dynamiques (`bg-${couleur}-50`, etc.)
+ *           remplacées par un mapping explicite de classes complètes :
+ *           Tailwind JIT ne détecte pas les classes construites par
+ *           concaténation de variable → le bandeau "essai" n'avait aucun
+ *           fond coloré en production.
+ *   FIX-3 — Comparaison "Votre plan" corrigée : comparait
+ *           s.plan_initial_id (UUID Supabase) à p.id (id D1) → ne
+ *           matchait jamais. Utilise désormais s.plan_initial_id_d1
+ *           (renvoyé par /api/v1/paiement/statut après correction
+ *           serveur, voir src/routes/api-paiement.ts).
+ *   FIX-4 — Si /statut échoue (401) mais que moyens/plans sont dispo, on
+ *           affiche désormais un bandeau "reconnectez-vous" au lieu de ne
+ *           rien afficher à la place de la carte de statut.
+ *
  * Ce module gère :
  *   - Les bandeaux de notification paiement dans le header du dashboard
  *   - La section /dashboard/abonnement complète (statut, référence, upload preuve,
  *     historique, progression délai, upgrade/downgrade)
  *   - L'upload avec drag-and-drop et validation 4 couches côté client
- *
- * CORRECTIONS CYCLE-3 :
- *   BUG-002 — construireCarteStatut() lit désormais s.abonnement.statut (pas s.statut_abonnement)
- *   BUG-003 — initBandeauxPaiement() filtre sur types API réels : 'info','warning','error','success'
- *   BUG-006 — toggle mensuel/annuel SUPPRIMÉ (tous les abonnements sont mensuels — CYCLE-3)
- *   BUG-009 — race condition DOMContentLoaded corrigée : chargerPlansSelect + initSection séquentiels
- *   BUG-NOUVEAU-001 — /api/v1/moyens-paiement retournait [] (colonne 'type' inexistante) → corrigé
- *   CYCLE-3 — Ajout état 'en_attente_paiement_initial' : affichage récapitulatif plan + CTA paiement
- *   Feat C  — Section abonnement complète : statut, référence, moyens de paiement, historique enrichi
- *   Feat D  — Bouton upgrade/downgrade plan dans la section abonnement
  *
  * SÉCURITÉ CÔTÉ CLIENT :
  *   - Toutes les requêtes ajoutent X-Requested-With: XMLHttpRequest (SEC-05 CSRF)
@@ -34,8 +43,9 @@ const PLANS_API    = '/api/v1/plans';
 const MAX_TAILLE_FICHIER = 5 * 1024 * 1024; // 5 Mo
 const EXTENSIONS_VALIDES = ['.jpg', '.jpeg', '.png'];
 const MIME_VALIDES = ['image/jpeg', 'image/png'];
-const DELAI_CONFIRMATION_H = 38;    // Délai engagé par l'admin
-const FENETRE_TOLERANCE_H  = 72;    // Fenêtre de blocage automatique
+// FIX-1 : SLA annoncé au client (48h) distinct de la fenêtre technique (72h)
+const SLA_ADMIN_H = 48;
+const FENETRE_TOLERANCE_H = 72;
 
 // ─── Utilitaires ─────────────────────────────────────────────────────────────
 
@@ -88,12 +98,6 @@ function apiCallPaiement(path, opts = {}) {
 
 // ─── Bandeaux notifications (header dashboard) ────────────────────────────────
 
-/**
- * BUG-003 CORRIGÉ — filtre sur les types réels retournés par l'API :
- * 'info', 'warning', 'error', 'success'
- *
- * @returns {Promise<void>}
- */
 async function initBandeauxPaiement() {
   const container = document.getElementById('notification-bandeaux');
   if (!container) return;
@@ -152,15 +156,6 @@ function construireBandeau(notif) {
 
 // ─── Section Abonnement (/dashboard/abonnement) ───────────────────────────────
 
-/**
- * CYCLE-3 — Gère maintenant l'état 'en_attente_paiement_initial' :
- *   affiche le récapitulatif du plan choisi + CTA pour soumettre la preuve.
- * BUG-NOUVEAU-001 CORRIGÉ — les moyens de paiement s'affichent maintenant
- *   car l'endpoint retourne les vraies colonnes (code, nom, description...).
- * BUG-009 CORRIGÉ — race condition : plans chargés AVANT l'affichage.
- *
- * @returns {Promise<void>}
- */
 async function initSectionAbonnement() {
   const container = document.getElementById('section-abonnement-content');
   if (!container) return;
@@ -173,7 +168,6 @@ async function initSectionAbonnement() {
   `;
 
   try {
-    // Charger en parallèle : statut + historique + plans + moyens paiement
     const [statutRes, historiqueRes, plansRes, moyensRes] = await Promise.all([
       apiCallPaiement('/statut'),
       apiCallPaiement('/historique'),
@@ -187,14 +181,11 @@ async function initSectionAbonnement() {
       }).catch(() => null)
     ]);
 
-    // CYCLE-3 : statut 401 → en_attente_paiement_initial peut arriver ici
-    // verifyAuthPaiement() autorise maintenant ce statut
-    const statut    = statutRes.ok    ? await statutRes.json()    : null;
-    const historique = historiqueRes.ok ? await historiqueRes.json() : null;
-    const plansData  = plansRes.ok     ? await plansRes.json()     : null;
-    const moyensData = moyensRes?.ok   ? await moyensRes.json()    : null;
+    const statut     = statutRes.ok     ? await statutRes.json()     : null;
+    const historique  = historiqueRes.ok ? await historiqueRes.json() : null;
+    const plansData   = plansRes.ok      ? await plansRes.json()      : null;
+    const moyensData  = moyensRes?.ok    ? await moyensRes.json()     : null;
 
-    // Mettre les plans dans le cache module pour le formulaire
     _plansCache = plansData?.plans ?? [];
 
     container.innerHTML = '';
@@ -202,10 +193,20 @@ async function initSectionAbonnement() {
     // ── Bloc 1 : Statut courant ──
     if (statut) {
       container.appendChild(construireCarteStatut(statut));
+    } else if (statutRes.status === 401) {
+      // FIX-4 : le 401 est le cas le plus fréquent (session expirée) — on
+      // le distingue clairement d'une vraie absence de données, au lieu de
+      // simplement ne rien afficher pendant que moyens/plans s'affichent.
+      const div = document.createElement('div');
+      div.className = 'bg-orange-50 border border-orange-200 rounded-2xl p-5 mb-4 text-sm text-orange-700';
+      div.innerHTML = `
+        <i class="fa-solid fa-lock mr-1.5"></i>
+        Votre session a expiré. <a href="/connexion" class="underline font-semibold">Reconnectez-vous</a> pour voir le détail de votre abonnement.
+      `;
+      container.appendChild(div);
     }
 
     // ── Bloc 2 : Moyens de paiement (affiché si données disponibles)
-    // CYCLE-3 : toujours afficher si plans disponibles (même sans moyens DB)
     const moyens = moyensData?.moyens ?? [];
     if (moyens.length > 0 || _plansCache.length > 0) {
       const blocMoyens = construireBlocMoyensPaiement(moyens);
@@ -221,8 +222,8 @@ async function initSectionAbonnement() {
       container.appendChild(construireHistorique(historique.abonnements));
     }
 
-    // Cas d'erreur réelle uniquement (pas de statut ET pas d'historique)
-    if (!statut && !historique?.abonnements?.length) {
+    // Cas d'erreur réelle uniquement (pas de statut ET pas d'historique ET pas de plans)
+    if (!statut && !historique?.abonnements?.length && !_plansCache.length && statutRes.status !== 401) {
       container.innerHTML = `
         <div class="text-center py-12 text-gray-400">
           <i class="fa-solid fa-credit-card text-4xl mb-3 block"></i>
@@ -240,12 +241,26 @@ async function initSectionAbonnement() {
 // Cache des plans pour éviter de recharger
 let _plansCache = [];
 
-/**
- * CYCLE-3 :
- *   - Ajout état 'en_attente_paiement_initial' : récapitulatif plan + instructions paiement
- *   - BUG-002 CORRIGÉ : lecture des champs corrects depuis la réponse API
- *   - Toggle mensuel/annuel SUPPRIMÉ (CYCLE-3)
- */
+// FIX-2 : mapping explicite de classes Tailwind complètes (les classes
+// construites par concaténation `bg-${couleur}-50` ne sont PAS détectées
+// par le compilateur JIT de Tailwind en production).
+const PALETTE_ESSAI = {
+  orange: {
+    bg: 'bg-orange-50 border-orange-200',
+    icone: 'text-orange-500',
+    titre: 'text-orange-800',
+    texte: 'text-orange-700',
+    texteSecondaire: 'text-orange-600'
+  },
+  blue: {
+    bg: 'bg-blue-50 border-blue-200',
+    icone: 'text-blue-500',
+    titre: 'text-blue-800',
+    texte: 'text-blue-700',
+    texteSecondaire: 'text-blue-600'
+  }
+};
+
 function construireCarteStatut(s) {
   const div = document.createElement('div');
   div.className = 'space-y-4 mb-6';
@@ -258,7 +273,7 @@ function construireCarteStatut(s) {
   let actionHtml = '';
   let upgradeHtml = '';
 
-  // ── CYCLE-3 : Nouvel état 'en_attente_paiement_initial' ──
+  // ── État 'en_attente_paiement_initial' ──
   if (statutTenant === 'en_attente_paiement_initial') {
     const planNom = s.plan_initial_nom || '—';
     const planPrix = s.plan_initial_prix_mensuel;
@@ -283,12 +298,11 @@ function construireCarteStatut(s) {
         <p class="text-xs text-amber-700">
           <i class="fa-solid fa-circle-info mr-1"></i>
           Effectuez le paiement en utilisant la référence ci-dessous et uploadez votre reçu.
-          L'accès complet sera débloqué dès soumission de la preuve.
+          Votre accès complet sera débloqué et maintenu pendant ${FENETRE_TOLERANCE_H}h le temps de la vérification.
         </p>
       </div>
     `;
   } else if (statutAbonnement === 'actif') {
-    // Feat D — afficher bouton upgrade/downgrade si plan actif
     upgradeHtml = `
       <div class="mt-3">
         <button onclick="ouvrirModalChangementPlan()"
@@ -332,7 +346,7 @@ function construireCarteStatut(s) {
         ${hR !== null ? `
         <div class="mb-3">
           <div class="flex items-center justify-between text-xs text-blue-600 mb-1">
-            <span>Délai de confirmation (${DELAI_CONFIRMATION_H}h max)</span>
+            <span>Fenêtre d'accès (${FENETRE_TOLERANCE_H}h max)</span>
             <span class="${urgent ? 'text-orange-600 font-bold' : ''}">${hR > 0 ? `${hR}h restantes` : 'Délai dépassé'}</span>
           </div>
           <div class="h-2 bg-blue-100 rounded-full overflow-hidden">
@@ -341,8 +355,9 @@ function construireCarteStatut(s) {
         </div>` : ''}
         <p class="text-xs text-blue-600">
           <i class="fa-solid fa-circle-info mr-1"></i>
-          Votre accès est maintenu pendant les ${FENETRE_TOLERANCE_H}h suivant la soumission.
-          Notre équipe confirme sous ${DELAI_CONFIRMATION_H}h.
+          Notre équipe s'engage à confirmer votre paiement sous ${SLA_ADMIN_H}h.
+          Votre accès complet reste actif pendant ${FENETRE_TOLERANCE_H}h à partir de la soumission,
+          le temps que la vérification se termine.
         </p>
         ${abonnement?.reference_paiement ? `
         <p class="text-xs text-blue-500 mt-2">
@@ -353,19 +368,20 @@ function construireCarteStatut(s) {
     `;
   } else if (statutTenant === 'essai' && s.jours_essai_restants !== null) {
     const jours = s.jours_essai_restants;
-    const couleur = jours <= 2 ? 'orange' : 'blue';
+    // FIX-2 : palette figée (classes Tailwind complètes), plus de concaténation dynamique
+    const p = jours <= 2 ? PALETTE_ESSAI.orange : PALETTE_ESSAI.blue;
     statutHtml = `
-      <div class="bg-${couleur}-50 border border-${couleur}-200 rounded-2xl p-5">
+      <div class="${p.bg} rounded-2xl p-5">
         <div class="flex items-center gap-3 mb-2">
-          <i class="fa-solid fa-hourglass-half text-${couleur}-500 text-xl"></i>
-          <span class="font-bold text-${couleur}-800">Période d'essai</span>
+          <i class="fa-solid fa-hourglass-half ${p.icone} text-xl"></i>
+          <span class="font-bold ${p.titre}">Période d'essai</span>
         </div>
-        <p class="text-sm text-${couleur}-700">
+        <p class="text-sm ${p.texte}">
           ${jours > 0
             ? `Il vous reste <strong>${jours} jour(s)</strong> d'essai gratuit.`
             : '<strong>Votre période d\'essai est terminée.</strong>'}
         </p>
-        <p class="text-sm text-${couleur}-600 mt-1">
+        <p class="text-sm ${p.texteSecondaire} mt-1">
           Soumettez une preuve de paiement pour activer votre abonnement.
         </p>
       </div>
@@ -407,7 +423,7 @@ function construireCarteStatut(s) {
     `;
   }
 
-  // ── Liste des offres disponibles (CYCLE-3 : toujours affichée) ──
+  // ── Liste des offres disponibles ──
   let offresHtml = '';
   if (_plansCache.length > 0) {
     const plansPayants = _plansCache.filter(p => p.actif && p.prix_mensuel > 0);
@@ -420,7 +436,10 @@ function construireCarteStatut(s) {
           </h3>
           <div class="space-y-2">
             ${plansPayants.map(p => {
-              const isActuel = abonnement?.plan_id === p.id || s.plan_initial_id === p.id;
+              // FIX-3 : comparaison contre l'id D1 résolu côté serveur
+              // (avant : s.plan_initial_id, un UUID Supabase, ne matchait
+              // jamais un id D1).
+              const isActuel = abonnement?.plan_id === p.id || s.plan_initial_id_d1 === p.id;
               return `
                 <div class="border ${isActuel ? 'border-red-300 bg-red-50/40' : 'border-gray-100'} rounded-xl p-3 flex items-center justify-between">
                   <div>
@@ -460,7 +479,6 @@ function construireCarteStatut(s) {
 
   div.innerHTML = statutHtml + referenceHtml + offresHtml + actionHtml;
 
-  // BUG-009 FIX — charger les plans dans le select APRÈS que le DOM est injecté
   if (statutAbonnement !== 'en_attente_confirmation') {
     setTimeout(() => {
       const sel = document.getElementById('inp-plan-preuve');
@@ -527,7 +545,6 @@ function construireBlocMoyensPaiement(moyens) {
 // ─── Formulaire d'upload preuve ───────────────────────────────────────────────
 
 function construireFormUpload() {
-  // CYCLE-3 : toggle mensuel/annuel SUPPRIMÉ — tous les abonnements sont mensuels
   return `
     <div id="upload-zone"
       class="border-2 border-dashed border-gray-200 rounded-2xl p-8 text-center transition-all cursor-pointer hover:border-red-300 hover:bg-red-50/30"
@@ -589,7 +606,6 @@ function construireFormUpload() {
 }
 
 // ─── Affichage prix du plan sélectionné ──────────────────────────────────────
-// CYCLE-3 : toggle annuel supprimé — affiche uniquement le prix mensuel
 
 function majAffichagePrix() {
   const sel = document.getElementById('inp-plan-preuve');
@@ -600,7 +616,6 @@ function majAffichagePrix() {
   const plan = _plansCache.find(p => p.id === planId);
 
   if (plan) {
-    // CYCLE-3 : prix mensuel uniquement
     affEl.textContent = `Montant : ${Number(plan.prix_mensuel).toLocaleString('fr-FR')} FCFA/mois`;
   } else {
     affEl.textContent = '';
@@ -711,7 +726,6 @@ async function soumettrePreuvePaiement() {
   const msg  = document.getElementById('msg-soumettre');
   const planId  = document.getElementById('inp-plan-preuve')?.value;
   const methode = document.getElementById('inp-methode-preuve')?.value;
-  // CYCLE-3 : periodicite = 'mensuel' hardcodé — plus de toggle annuel
 
   if (!_preuveFichier) {
     afficherErreurUpload('Veuillez sélectionner une image de votre reçu.');
@@ -743,7 +757,6 @@ async function soumettrePreuvePaiement() {
     formData.append('preuve', _preuveFichier);
     formData.append('plan_id', planId);
     formData.append('methode_paiement', methode);
-    // CYCLE-3 : periodicite non transmise (inutile côté serveur, hardcodée à 'mensuel')
 
     const res = await apiCallPaiement('/soumettre', {
       method: 'POST',
@@ -758,7 +771,7 @@ async function soumettrePreuvePaiement() {
 
     if (res.ok) {
       msg.className = 'mt-3 text-sm text-center font-medium rounded-xl p-3 bg-green-50 text-green-700 border border-green-200';
-      msg.textContent = data.message || '✓ Preuve soumise ! Notre équipe vérifiera sous 38h.';
+      msg.textContent = data.message || `✓ Preuve soumise ! Notre équipe vérifiera sous ${SLA_ADMIN_H}h.`;
       msg.classList.remove('hidden');
       btn.innerHTML = '<i class="fa-solid fa-check mr-2"></i>Preuve envoyée';
 
@@ -791,8 +804,7 @@ function afficherErreurUpload(msg) {
   }
 }
 
-// ─── Feat D — Modal changement de plan (upgrade/downgrade) ────────────────────
-// CYCLE-3 : toggle annuel SUPPRIMÉ de la modale
+// ─── Modal changement de plan (upgrade/downgrade) ────────────────────
 
 function ouvrirModalChangementPlan() {
   document.getElementById('modal-changement-plan')?.remove();
@@ -833,7 +845,6 @@ function ouvrirModalChangementPlan() {
             </label>
           `).join('')}
         </div>
-        <!-- CYCLE-3 : toggle périodicité SUPPRIMÉ — uniquement mensuel -->
         <p class="text-xs text-gray-400 mb-4">
           <i class="fa-solid fa-circle-info mr-1"></i>Périodicité : mensuel (uniquement)
         </p>
@@ -879,7 +890,6 @@ async function soumettreChangementPlan() {
       sel.value = planId;
       majAffichagePrix();
     }
-    // CYCLE-3 : plus de radio périodicité à pré-sélectionner
   }
 }
 
@@ -891,6 +901,7 @@ function construireHistorique(abonnements) {
     en_attente_confirmation:'<span class="bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full text-xs font-semibold">En attente</span>',
     expire:                 '<span class="bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full text-xs font-semibold">Expiré</span>',
     annule:                 '<span class="bg-red-100 text-red-500 px-2 py-0.5 rounded-full text-xs font-semibold">Annulé</span>',
+    rejete:                 '<span class="bg-red-100 text-red-500 px-2 py-0.5 rounded-full text-xs font-semibold">Rejeté</span>',
     en_retard:              '<span class="bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full text-xs font-semibold">En retard</span>',
   };
 
@@ -987,11 +998,8 @@ function copierTexte(texte, btnEl) {
 }
 
 // ─── Initialisation automatique ──────────────────────────────────────────────
-// BUG-009 FIX — séquentialisation : charger les plans d'abord,
-// PUIS initialiser la section (évite la race condition).
 
 document.addEventListener('DOMContentLoaded', async () => {
-  // Pré-charger les plans en cache
   try {
     const res = await fetch(PLANS_API, {
       credentials: 'include',
@@ -1003,7 +1011,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   } catch {}
 
-  // Initialiser la section abonnement si on est sur /dashboard/abonnement
   if (window.location.pathname === '/dashboard/abonnement') {
     await initSectionAbonnement();
   }
