@@ -1,7 +1,31 @@
 /**
  * src/routes/api-admin-paiements.ts — Administration des paiements manuels
  *
- * Ce router est monté dans src/index.tsx sous /api/v1/admin/paiements.
+ * CORRECTIONS CYCLE-5 :
+ *   FIX-E — POST /confirmer écrivait `tenant.plan_id = abonnement.plan_id`
+ *           directement. Or abonnement.plan_id est un id D1 (stocké tel
+ *           quel par POST /api/v1/paiement/soumettre), alors que
+ *           tenants.plan_id doit contenir l'UUID Supabase (c'est ce que
+ *           /profil et /statut résolvent ensuite via
+ *           resoudreIdD1DepuisPlanSupabase). Sans cette correction, un
+ *           tenant fraîchement activé se retrouvait avec un plan_id
+ *           invalide → son plan actif redevenait introuvable dans le
+ *           dashboard (même bug que celui corrigé en CYCLE-4, mais réopéré
+ *           ici depuis un angle différent). Résolu via la nouvelle fonction
+ *           resoudreIdSupabaseDepuisPlanD1() (src/lib/plans.ts).
+ *   FIX-F — Messages harmonisés avec SLA_ADMIN_HEURES (48h) /
+ *           FENETRE_ACCES_HEURES (72h), au lieu de texte "72h" en dur.
+ *
+ * NOTE IMPORTANTE (déjà correct AVANT cette correction, pas d'action requise) :
+ *   Le rejet (POST /rejeter) passe déjà l'abonnement en statut 'annule'
+ *   IMMÉDIATEMENT (pas d'attente du cron), ET redescend tenant.statut à
+ *   'essai' ou 'inactif' immédiatement. Combiné à verifierAccesTenant()
+ *   (src/lib/acces-tenant.ts) qui ne considère QUE les abonnements encore
+ *   au statut 'en_attente_confirmation', un rejet coupe donc bien l'accès
+ *   dès la requête suivante, sans attendre les 72h — c'est exactement le
+ *   comportement demandé.
+ *
+ * Ce router est monté dans src/index.ts sous /api/v1/admin/paiements.
  * Il expose les endpoints de gestion des paiements côté admin :
  *
  *   GET  /api/v1/admin/paiements              — Liste des paiements en attente
@@ -17,7 +41,7 @@
  *   - SEC-06 : URL R2 signée, jamais d'URL publique directe
  *   - SEC-04 : audit trail (confirme_par, confirme_le, rejete_par, rejete_le)
  *   - Quand un paiement est confirmé :
- *       tenant.plan_id      ← plan_id de l'abonnement confirmé
+ *       tenant.plan_id      ← UUID Supabase résolu depuis l'id D1 de l'abonnement
  *       tenant.statut       ← 'actif'
  *       tenant.essai_expire_le ← null
  *
@@ -28,14 +52,13 @@ import { Hono } from 'hono'
 import type { Env } from '../types/database'
 import { createSupabaseAdminClient } from '../lib/supabase'
 import { setSecurityHeaders } from '../lib/security'
-import { formaterDate, calculerDeadlineConfirmation } from '../lib/paiement'
+import { formaterDate, SLA_ADMIN_HEURES, FENETRE_ACCES_HEURES } from '../lib/paiement'
+import { resoudreIdSupabaseDepuisPlanD1 } from '../lib/plans'
 import { notifierPaiementConfirme, notifierPaiementRejete } from '../lib/whatsapp'
 
 const adminPaiementsRouter = new Hono<{ Bindings: Env }>()
 
 // ── Middleware d'authentification admin ─────────────────────────────────────
-// Le secret admin est transmis via le header X-Admin-Secret
-// JAMAIS en query string (éviter les logs de proxy et l'historique navigateur).
 adminPaiementsRouter.use('*', async (c, next) => {
   setSecurityHeaders(c)
 
@@ -53,7 +76,6 @@ adminPaiementsRouter.use('*', async (c, next) => {
 })
 
 // ── GET /api/v1/admin/paiements ─────────────────────────────────────────────
-// Liste les paiements en attente de confirmation, triés du plus urgent au plus récent
 adminPaiementsRouter.get('/', async (c) => {
   const adminClient = createSupabaseAdminClient(c.env)
   const statut = c.req.query('statut') ?? 'en_attente_confirmation'
@@ -79,7 +101,9 @@ adminPaiementsRouter.get('/', async (c) => {
     return c.json({ error: 'Erreur lors de la récupération.' }, 500)
   }
 
-  // Enrichir avec le nom du plan depuis D1
+  // Enrichir avec le nom du plan depuis D1 (abonnements.plan_id est déjà
+  // un id D1 — pas de résolution UUID nécessaire ici, contrairement à
+  // tenants.plan_id/plan_initial_id).
   const enrichis = await Promise.all(
     (abonnements ?? []).map(async (ab: any) => {
       let plan_nom = null
@@ -92,7 +116,6 @@ adminPaiementsRouter.get('/', async (c) => {
           plan_nom = plan?.nom ?? null
         } catch {}
       }
-      // Calculer urgence
       const heuresRestantes = ab.delai_confirmation_expire_le
         ? Math.ceil((new Date(ab.delai_confirmation_expire_le).getTime() - Date.now()) / 3600000)
         : null
@@ -106,12 +129,13 @@ adminPaiementsRouter.get('/', async (c) => {
     total: count ?? 0,
     page,
     limit,
-    total_pages: Math.ceil((count ?? 0) / limit)
+    total_pages: Math.ceil((count ?? 0) / limit),
+    sla_admin_heures: SLA_ADMIN_HEURES,
+    fenetre_acces_heures: FENETRE_ACCES_HEURES
   })
 })
 
 // ── POST /api/v1/admin/paiements/confirmer ──────────────────────────────────
-// Confirme un paiement et active le tenant
 adminPaiementsRouter.post('/confirmer', async (c) => {
   let body: { abonnement_id?: string; admin_id?: string; note?: string }
   try { body = await c.req.json() }
@@ -126,7 +150,6 @@ adminPaiementsRouter.post('/confirmer', async (c) => {
   const adminClient = createSupabaseAdminClient(c.env)
   const now = new Date().toISOString()
 
-  // Vérifier que l'abonnement existe et est en attente
   const { data: abonnement } = await adminClient
     .from('abonnements')
     .select('id, tenant_id, plan_id, montant_paye, devise, methode_paiement, reference_paiement')
@@ -155,8 +178,9 @@ adminPaiementsRouter.post('/confirmer', async (c) => {
     return c.json({ error: 'Erreur lors de la confirmation.' }, 500)
   }
 
-  // 2. Récupérer le plan pour calculer date_fin
+  // 2. Récupérer le plan D1 pour calculer date_fin + nom (affichage notif)
   let dateFin: string | null = null
+  let planNom: string | null = null
   try {
     const plan = await c.env.DB
       .prepare('SELECT id, nom FROM plans WHERE id = ? LIMIT 1')
@@ -164,12 +188,11 @@ adminPaiementsRouter.post('/confirmer', async (c) => {
       .first<{ id: string; nom: string }>()
 
     if (plan) {
-      // date_fin = 1 mois à partir d'aujourd'hui (mensuel par défaut)
+      planNom = plan.nom
       const fin = new Date()
       fin.setMonth(fin.getMonth() + 1)
       dateFin = fin.toISOString()
 
-      // Mettre à jour date_fin de l'abonnement
       await adminClient
         .from('abonnements')
         .update({ date_fin: dateFin, updated_at: now })
@@ -177,15 +200,18 @@ adminPaiementsRouter.post('/confirmer', async (c) => {
     }
   } catch {}
 
-  // 3. Mettre à jour le tenant :
-  //    - plan_id ← plan de l'abonnement confirmé
-  //    - statut ← 'actif'
-  //    - essai_expire_le ← null
-  //    - paiement_en_attente_depuis ← null
+  // FIX-E — CYCLE-5 : résoudre l'UUID Supabase correspondant à l'id D1
+  // stocké dans abonnement.plan_id, AVANT de l'écrire dans tenants.plan_id.
+  // Sans cette résolution, tenants.plan_id contenait un id D1 (ex:
+  // "plan_faso") au lieu de l'UUID Supabase attendu par /profil et
+  // /statut → le plan actif redevenait "introuvable" juste après activation.
+  const planIdSupabase = await resoudreIdSupabaseDepuisPlanD1(c.env, abonnement.plan_id)
+
+  // 3. Mettre à jour le tenant
   const { data: tenant, error: tenantError } = await adminClient
     .from('tenants')
     .update({
-      plan_id: abonnement.plan_id,
+      plan_id: planIdSupabase, // UUID Supabase (ou null si résolution impossible — voir avertissement ci-dessous)
       statut: 'actif',
       essai_expire_le: null,
       paiement_en_attente_depuis: null,
@@ -197,13 +223,19 @@ adminPaiementsRouter.post('/confirmer', async (c) => {
 
   if (tenantError) {
     console.error('[admin-paiements/confirmer] Erreur update tenant:', tenantError.message)
-    // Rollback partiel — l'abonnement est déjà actif, mais le tenant n'a pas été mis à jour
-    // Log l'incident pour traitement manuel
     return c.json({
       error: 'Abonnement confirmé mais erreur lors de l\'activation du tenant. Vérifiez manuellement.',
       abonnement_id
     }, 500)
   }
+
+  // Avertissement explicite si la résolution UUID a échoué (plan D1 sans
+  // correspondance dans la table Supabase `plans` — configuration
+  // incohérente entre D1 et Supabase à corriger côté admin des plans).
+  const avertissementPlan = (!planIdSupabase && abonnement.plan_id)
+    ? `Attention : aucune correspondance Supabase trouvée pour le plan D1 "${abonnement.plan_id}" (colonne plans.d1_plan_id à vérifier). tenant.plan_id a été laissé vide.`
+    : null
+  if (avertissementPlan) console.warn(`[admin-paiements/confirmer] ${avertissementPlan}`)
 
   // 4. Invalider cache KV
   if (c.env.KV_CACHE && tenant?.slug) {
@@ -228,13 +260,12 @@ adminPaiementsRouter.post('/confirmer', async (c) => {
       tenant_id: abonnement.tenant_id,
       type: 'success',
       titre: 'Paiement confirmé — Abonnement activé !',
-      message: `Votre paiement a été confirmé. Votre abonnement est maintenant actif${dateFin ? ` jusqu\'au ${formaterDate(dateFin)}` : ''}.`,
+      message: `Votre paiement pour le plan ${planNom ?? ''} a été confirmé. Votre abonnement est maintenant actif${dateFin ? ` jusqu'au ${formaterDate(dateFin)}` : ''}.`,
       lien: '/dashboard/abonnement',
       payload: { abonnement_id, confirme_le: now }
     })
     .catch(() => {})
 
-  // 7. Log audit (SEC-04)
   console.log(`[admin-paiements] Paiement confirmé — tenant: ${abonnement.tenant_id.slice(0, 8)}... abonnement: ${abonnement_id.slice(0, 8)}...`)
 
   return c.json({
@@ -242,12 +273,12 @@ adminPaiementsRouter.post('/confirmer', async (c) => {
     message: `Paiement confirmé. Tenant ${tenant?.nom} activé sur le plan.`,
     abonnement_id,
     tenant_id: abonnement.tenant_id,
-    statut_tenant: 'actif'
+    statut_tenant: 'actif',
+    ...(avertissementPlan ? { avertissement: avertissementPlan } : {})
   })
 })
 
 // ── POST /api/v1/admin/paiements/rejeter ────────────────────────────────────
-// Rejette un paiement avec un motif obligatoire
 adminPaiementsRouter.post('/rejeter', async (c) => {
   let body: { abonnement_id?: string; motif?: string; admin_id?: string }
   try { body = await c.req.json() }
@@ -263,7 +294,6 @@ adminPaiementsRouter.post('/rejeter', async (c) => {
   const adminClient = createSupabaseAdminClient(c.env)
   const now = new Date().toISOString()
 
-  // Vérifier l'abonnement
   const { data: abonnement } = await adminClient
     .from('abonnements')
     .select('id, tenant_id, plan_id, reference_paiement')
@@ -275,7 +305,11 @@ adminPaiementsRouter.post('/rejeter', async (c) => {
     return c.json({ error: 'Abonnement introuvable ou déjà traité.' }, 404)
   }
 
-  // 1. Rejeter l'abonnement (SEC-04 : audit trail)
+  // 1. Rejeter l'abonnement (SEC-04 : audit trail).
+  // IMPORTANT : ce changement de statut (≠ 'en_attente_confirmation') est
+  // ce qui coupe IMMÉDIATEMENT l'accès à la requête suivante, via
+  // verifierAccesTenant() (src/lib/acces-tenant.ts) qui ne considère plus
+  // cette ligne comme une fenêtre de grâce valide.
   const { error: abError } = await adminClient
     .from('abonnements')
     .update({
@@ -294,7 +328,6 @@ adminPaiementsRouter.post('/rejeter', async (c) => {
   }
 
   // 2. Remettre le tenant en statut 'essai' (si était en essai) ou 'inactif'
-  // (Ne pas forcer 'inactif' si l'essai n'a pas encore expiré)
   const { data: tenant } = await adminClient
     .from('tenants')
     .select('id, slug, nom, whatsapp_number, statut, essai_expire_le')
@@ -306,21 +339,26 @@ adminPaiementsRouter.post('/rejeter', async (c) => {
       ? new Date(tenant.essai_expire_le).getTime() > Date.now()
       : false
 
+    // Un tenant déjà 'actif' (rejet d'une demande d'upgrade/downgrade, pas
+    // d'un premier paiement) ne doit JAMAIS être redescendu — seul un
+    // tenant en 'essai'/'en_attente_paiement_initial' peut être redescendu.
+    const nouveauStatut =
+      tenant.statut === 'actif' ? 'actif' :
+      essaiEncore ? 'essai' : 'inactif'
+
     await adminClient
       .from('tenants')
       .update({
         paiement_en_attente_depuis: null,
-        statut: essaiEncore ? 'essai' : 'inactif',
+        statut: nouveauStatut,
         updated_at: now
       })
       .eq('id', tenant.id)
 
-    // Invalider cache KV
     if (c.env.KV_CACHE && tenant.slug) {
       try { await c.env.KV_CACHE.delete(`tenant:${tenant.slug}`) } catch {}
     }
 
-    // 3. Notification WhatsApp (non-bloquant)
     if (tenant.whatsapp_number) {
       notifierPaiementRejete(c.env, {
         nom: tenant.nom,
@@ -332,7 +370,6 @@ adminPaiementsRouter.post('/rejeter', async (c) => {
       })
     }
 
-    // 4. Notification in-app restaurant
     await adminClient
       .from('notifications_restaurant')
       .insert({
@@ -350,21 +387,18 @@ adminPaiementsRouter.post('/rejeter', async (c) => {
 
   return c.json({
     success: true,
-    message: 'Paiement rejeté. Le restaurant a été notifié.',
+    message: 'Paiement rejeté. Le restaurant a été notifié, son accès est immédiatement restreint.',
     abonnement_id
   })
 })
 
 // ── GET /api/v1/admin/paiements/preuve/:id ───────────────────────────────────
-// Retourne une URL signée R2 (15 min) pour accéder à la preuve de paiement
-// SEC-06 : jamais d'URL publique directe — URL signée temporaire uniquement
 adminPaiementsRouter.get('/preuve/:id', async (c) => {
   const abonnementId = c.req.param('id')
   if (!abonnementId) return c.json({ error: 'id requis.' }, 422)
 
   const adminClient = createSupabaseAdminClient(c.env)
 
-  // Récupérer la clé R2 depuis la DB (pas l'URL publique — SEC-06)
   const { data: abonnement } = await adminClient
     .from('abonnements')
     .select('id, preuve_paiement_url, tenant_id, statut')
@@ -379,7 +413,6 @@ adminPaiementsRouter.get('/preuve/:id', async (c) => {
     return c.json({ error: 'Stockage non configuré.' }, 503)
   }
 
-  // SEC-06 : Générer une URL signée valide 15 minutes
   try {
     const signedUrl = await c.env.R2_MEDIA.createSignedUrl(
       abonnement.preuve_paiement_url,
@@ -399,7 +432,6 @@ adminPaiementsRouter.get('/preuve/:id', async (c) => {
 })
 
 // ── GET /api/v1/admin/paiements/moyens ────────────────────────────────────────
-// Liste tous les moyens de paiement (actifs et inactifs pour l'admin)
 adminPaiementsRouter.get('/moyens', async (c) => {
   const adminClient = createSupabaseAdminClient(c.env)
 
@@ -416,7 +448,6 @@ adminPaiementsRouter.get('/moyens', async (c) => {
 })
 
 // ── POST /api/v1/admin/paiements/moyens ───────────────────────────────────────
-// Créer un nouveau moyen de paiement
 adminPaiementsRouter.post('/moyens', async (c) => {
   let body: {
     code?: string; nom?: string; description?: string; instructions?: string
@@ -461,14 +492,12 @@ adminPaiementsRouter.post('/moyens', async (c) => {
 })
 
 // ── PATCH /api/v1/admin/paiements/moyens/:id ──────────────────────────────────
-// Mettre à jour un moyen de paiement existant
 adminPaiementsRouter.patch('/moyens/:id', async (c) => {
   const id = c.req.param('id')
   let body: Record<string, unknown>
   try { body = await c.req.json() }
   catch { return c.json({ error: 'JSON invalide.' }, 400) }
 
-  // Champs autorisés à la modification
   const allowed = ['nom', 'description', 'instructions', 'numero', 'nom_compte', 'logo_url', 'actif', 'ordre_affichage']
   const updates: Record<string, unknown> = { updated_at: new Date().toISOString() }
 
