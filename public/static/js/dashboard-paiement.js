@@ -169,7 +169,13 @@ async function initSectionAbonnement() {
   `;
 
   try {
-    const [statutRes, historiqueRes, plansRes, moyensRes] = await Promise.all([
+    // FIX-5 : /reference ajouté en parallèle. C'est CET appel qui génère
+    // (et persiste) la référence de paiement si elle n'existe pas encore —
+    // avant cette correction, seul le flux d'onboarding /bienvenue
+    // l'appelait. Un compte n'ayant jamais traversé /bienvenue n'avait
+    // donc JAMAIS de référence, et le bloc correspondant restait invisible
+    // sur /dashboard/abonnement indéfiniment.
+    const [statutRes, historiqueRes, plansRes, moyensRes, referenceRes] = await Promise.all([
       apiCallPaiement('/statut'),
       apiCallPaiement('/historique'),
       fetch(PLANS_API, {
@@ -179,15 +185,28 @@ async function initSectionAbonnement() {
       fetch('/api/v1/moyens-paiement', {
         credentials: 'include',
         headers: { 'X-Requested-With': 'XMLHttpRequest' }
-      }).catch(() => null)
+      }).catch(() => null),
+      apiCallPaiement('/reference').catch(() => null)
     ]);
 
     const statut     = statutRes.ok     ? await statutRes.json()     : null;
     const historique  = historiqueRes.ok ? await historiqueRes.json() : null;
     const plansData   = plansRes.ok      ? await plansRes.json()      : null;
     const moyensData  = moyensRes?.ok    ? await moyensRes.json()     : null;
+    const referenceData = referenceRes?.ok ? await referenceRes.json() : null;
 
     _plansCache = plansData?.plans ?? [];
+    // FIX-2 : cache des moyens de paiement, utilisé par construireFormUpload()
+    // pour peupler le select "Méthode de paiement" dynamiquement, au lieu
+    // d'une liste codée en dur potentiellement désynchronisée de la base.
+    _moyensCache = moyensData?.moyens ?? [];
+
+    // Injecte la référence fraîchement générée/récupérée dans l'objet
+    // statut, pour que construireCarteStatut() l'affiche sans changement
+    // supplémentaire.
+    if (statut && referenceData?.reference) {
+      statut.reference_active = referenceData.reference;
+    }
 
     container.innerHTML = '';
 
@@ -241,6 +260,9 @@ async function initSectionAbonnement() {
 
 // Cache des plans pour éviter de recharger
 let _plansCache = [];
+// FIX-2 : cache des moyens de paiement actifs, source unique pour le bloc
+// d'affichage ET pour le select "Méthode de paiement" du formulaire.
+let _moyensCache = [];
 
 // FIX-2 : mapping explicite de classes Tailwind complètes (les classes
 // construites par concaténation `bg-${couleur}-50` ne sont PAS détectées
@@ -546,6 +568,18 @@ function construireBlocMoyensPaiement(moyens) {
 // ─── Formulaire d'upload preuve ───────────────────────────────────────────────
 
 function construireFormUpload() {
+  // FIX-2 : le select "Méthode de paiement" est désormais généré depuis
+  // _moyensCache (chargé depuis /api/v1/moyens-paiement, la même source que
+  // le bloc "Moyens de paiement acceptés" juste au-dessus). Avant, cette
+  // liste était codée en dur dans le JS (incluant "Mobile Money (MTN)",
+  // "Virement bancaire", "Espèces" — aucun de ces trois n'existant dans la
+  // table moyens_paiement réelle) et pouvait donc afficher des options que
+  // le restaurant ne pouvait en réalité pas utiliser. "Autre" reste ajouté
+  // manuellement en secours, pour les cas non couverts par la table.
+  const optionsMethode = _moyensCache.length > 0
+    ? _moyensCache.map(m => `<option value="${esc(m.nom)}">${esc(m.nom)}</option>`).join('')
+    : `<option value="Orange Money">Orange Money</option><option value="Mobile Money (Moov)">Mobile Money (Moov)</option>`;
+
   return `
     <div id="upload-zone"
       class="border-2 border-dashed border-gray-200 rounded-2xl p-8 text-center transition-all cursor-pointer hover:border-red-300 hover:bg-red-50/30"
@@ -582,13 +616,19 @@ function construireFormUpload() {
       <label class="block text-xs font-semibold text-gray-600 mb-1.5">Méthode de paiement *</label>
       <select id="inp-methode-preuve" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200 focus:border-red-400">
         <option value="">Sélectionner...</option>
-        <option value="Orange Money">Orange Money</option>
-        <option value="Mobile Money (Moov)">Mobile Money (Moov)</option>
-        <option value="Mobile Money (MTN)">Mobile Money (MTN)</option>
-        <option value="Virement bancaire">Virement bancaire</option>
-        <option value="Espèces">Espèces</option>
+        ${optionsMethode}
         <option value="Autre">Autre</option>
       </select>
+    </div>
+
+    <div class="mt-3">
+      <label class="block text-xs font-semibold text-gray-600 mb-1.5">Numéro utilisé pour le paiement *</label>
+      <input id="inp-numero-preuve" type="tel" required maxlength="20"
+        class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200 focus:border-red-400"
+        placeholder="+226 70 00 00 00">
+      <p class="text-xs text-gray-400 mt-1">
+        Le numéro Mobile Money (ou compte) avec lequel le virement a été (ou sera) effectué — indispensable pour vérifier et rapprocher votre paiement.
+      </p>
     </div>
 
     <div id="upload-progress" class="hidden mt-4">
@@ -727,6 +767,7 @@ async function soumettrePreuvePaiement() {
   const msg  = document.getElementById('msg-soumettre');
   const planId  = document.getElementById('inp-plan-preuve')?.value;
   const methode = document.getElementById('inp-methode-preuve')?.value;
+  const numeroBrut = document.getElementById('inp-numero-preuve')?.value?.trim();
 
   if (!_preuveFichier) {
     afficherErreurUpload('Veuillez sélectionner une image de votre reçu.');
@@ -738,6 +779,13 @@ async function soumettrePreuvePaiement() {
   }
   if (!methode) {
     afficherErreurUpload('Sélectionnez la méthode de paiement.');
+    return;
+  }
+  // FIX-3 : numéro expéditeur obligatoire — validation légère côté client
+  // (la validation stricte reste côté serveur, cf. api-paiement.ts).
+  const numeroNettoye = (numeroBrut || '').replace(/[^0-9+]/g, '');
+  if (!numeroNettoye || numeroNettoye.replace(/\D/g, '').length < 8) {
+    afficherErreurUpload('Indiquez le numéro utilisé pour effectuer le paiement (8 chiffres minimum).');
     return;
   }
 
@@ -758,6 +806,9 @@ async function soumettrePreuvePaiement() {
     formData.append('preuve', _preuveFichier);
     formData.append('plan_id', planId);
     formData.append('methode_paiement', methode);
+    // FIX-3 : numéro utilisé pour le paiement — tarification/traçabilité,
+    // stocké côté serveur dans abonnements.numero_expediteur.
+    formData.append('numero_expediteur', numeroNettoye);
 
     const res = await apiCallPaiement('/soumettre', {
       method: 'POST',
