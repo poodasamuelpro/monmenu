@@ -52,6 +52,15 @@
 //      pour que le dashboard ouvre un onglet WhatsApp pré-rempli — c'est
 //      le filet de sécurité qui doit fonctionner à 100% du temps, que
 //      l'API officielle soit configurée ou non.
+//
+// AJOUT (audit mobile — corrections 4.3/4.4 du 10/08) —
+//   PATCH /codes-promo/:id — nouvelle route (n'existait pas), pour
+//   activer/désactiver un code promo depuis l'app mobile (et,
+//   potentiellement, le dashboard web).
+//   PATCH /livreurs/:id — élargie pour accepter en plus de "actif" les
+//   champs "nom" et "whatsapp_number", auparavant silencieusement ignorés
+//   côté serveur alors que le mobile (et le dashboard web) laissaient
+//   croire à l'utilisateur que la modification avait été enregistrée.
 
 import { Hono } from 'hono'
 import { getCookie } from 'hono/cookie'
@@ -876,21 +885,32 @@ dashboardRouter.delete('/livreurs/:id', async (c) => {
   return c.json({ success: true })
 })
 
-// ---- PATCH /api/v1/dashboard/livreurs/:id — Activer / désactiver ----
+// ---- PATCH /api/v1/dashboard/livreurs/:id — Modifier / Activer / désactiver ----
+// AJOUT (audit mobile — correction 4.4) : la route se limitait avant à
+// n'accepter (et n'écrire) que le champ "actif". Les champs "nom" et
+// "whatsapp_number" étaient silencieusement ignorés, alors que le client
+// (mobile et dashboard web) pouvait laisser croire à l'utilisateur qu'une
+// modification du nom/numéro avait été enregistrée (réponse 200 trompeuse).
+// Élargie pour accepter, de façon indépendante, "actif", "nom" et/ou
+// "whatsapp_number" — chaque champ n'est mis à jour que s'il est fourni.
 dashboardRouter.patch('/livreurs/:id', async (c) => {
   setSecurityHeaders(c)
   const auth = await verifyAuth(c)
   if (!auth) return c.json({ error: 'Non authentifié.' }, 401)
 
   const livId = c.req.param('id')
-  let body: { actif?: number | boolean }
+  let body: { actif?: number | boolean; nom?: string; whatsapp_number?: string }
   try { body = await c.req.json() } catch { return c.json({ error: 'JSON invalide.' }, 400) }
 
-  if (body.actif === undefined) {
-    return c.json({ error: 'Champ actif requis (0/1 ou true/false).' }, 422)
+  if (body.actif === undefined && body.nom === undefined && body.whatsapp_number === undefined) {
+    return c.json({ error: 'Au moins un champ à modifier est requis (actif, nom ou whatsapp_number).' }, 422)
   }
-
-  const actifBool = body.actif === 1 || body.actif === true
+  if (body.nom !== undefined && body.nom.trim().length < 2) {
+    return c.json({ error: 'Nom invalide (2 caractères minimum).' }, 422)
+  }
+  if (body.whatsapp_number !== undefined && !/^\+?[0-9\s\-]{8,20}$/.test(body.whatsapp_number)) {
+    return c.json({ error: 'Numéro WhatsApp invalide.' }, 422)
+  }
 
   const supabase = createSupabaseClientWithToken(c.env, auth.token)
 
@@ -903,15 +923,25 @@ dashboardRouter.patch('/livreurs/:id', async (c) => {
 
   if (!livreur) return c.json({ error: 'Livreur introuvable.' }, 404)
 
+  const updateData: any = { updated_at: new Date().toISOString() }
+  if (body.actif !== undefined) updateData.actif = body.actif === 1 || body.actif === true
+  if (body.nom !== undefined) updateData.nom = body.nom.trim()
+  if (body.whatsapp_number !== undefined) updateData.whatsapp_number = body.whatsapp_number.replace(/\s/g, '')
+
   const { error } = await supabase
     .from('livreurs')
-    .update({ actif: actifBool, updated_at: new Date().toISOString() })
+    .update(updateData)
     .eq('id', livId)
     .eq('tenant_id', auth.tenant_id)
 
   if (error) return c.json({ error: 'Erreur mise à jour livreur.', detail: error.message }, 500)
 
-  return c.json({ success: true, actif: actifBool ? 1 : 0 })
+  return c.json({
+    success: true,
+    ...(updateData.actif !== undefined ? { actif: updateData.actif ? 1 : 0 } : {}),
+    ...(updateData.nom !== undefined ? { nom: updateData.nom } : {}),
+    ...(updateData.whatsapp_number !== undefined ? { whatsapp_number: updateData.whatsapp_number } : {})
+  })
 })
 
 // ---- GET /api/v1/dashboard/pdv ----
@@ -1395,6 +1425,51 @@ dashboardRouter.post('/codes-promo/generate', async (c) => {
 
   if (error) return c.json({ error: 'Erreur génération code promo.', detail: error.message }, 500)
   return c.json({ success: true, id: promoId, code }, 201)
+})
+
+// ---- PATCH /api/v1/dashboard/codes-promo/:id — Activer / désactiver ----
+// AJOUT (audit mobile — correction S5-A) : cette route n'existait pas.
+// Le mobile (et potentiellement le dashboard web) tentait d'activer ou
+// désactiver un code promo via un PATCH qui retournait systématiquement
+// 404, faute de route côté serveur. Ajoutée sur le même modèle que la
+// route équivalente pour les livreurs : accepte uniquement "actif" pour
+// l'instant (le montant minimum de commande n'est volontairement pas
+// couvert par cette route, hors périmètre demandé).
+dashboardRouter.patch('/codes-promo/:id', async (c) => {
+  setSecurityHeaders(c)
+  const auth = await verifyAuth(c)
+  if (!auth) return c.json({ error: 'Non authentifié.' }, 401)
+
+  const promoId = c.req.param('id')
+  let body: { actif?: number | boolean }
+  try { body = await c.req.json() } catch { return c.json({ error: 'JSON invalide.' }, 400) }
+
+  if (body.actif === undefined) {
+    return c.json({ error: 'Champ actif requis (0/1 ou true/false).' }, 422)
+  }
+
+  const actifBool = body.actif === 1 || body.actif === true
+
+  const supabase = createSupabaseClientWithToken(c.env, auth.token)
+
+  const { data: promo } = await supabase
+    .from('codes_promo')
+    .select('id')
+    .eq('id', promoId)
+    .eq('tenant_id', auth.tenant_id)
+    .single()
+
+  if (!promo) return c.json({ error: 'Code promo introuvable.' }, 404)
+
+  const { error } = await supabase
+    .from('codes_promo')
+    .update({ actif: actifBool })
+    .eq('id', promoId)
+    .eq('tenant_id', auth.tenant_id)
+
+  if (error) return c.json({ error: 'Erreur mise à jour code promo.', detail: error.message }, 500)
+
+  return c.json({ success: true, actif: actifBool ? 1 : 0 })
 })
 
 // ---- DELETE /api/v1/dashboard/codes-promo/:id ----
