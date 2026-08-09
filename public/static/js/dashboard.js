@@ -1,27 +1,23 @@
-// MonMenu — Dashboard restaurant (v1.8.0 — fix fichier tronqué + sync auth-fetch)
+// MonMenu — Dashboard restaurant (v1.9.0 — FIX savePdv() tronqué + auth-fetch.js branché)
 //
-// CORRECTIONS CYCLE-9 :
-//   FIX-1 — Le fichier précédent était TRONQUÉ en plein milieu de savePdv()
-//           (coupait sur "...lon" avant "longitude"). Une accolade/objet non
-//           fermé rend le fichier JS entier NON-PARSABLE : le navigateur
-//           n'exécute alors AUCUNE fonction du fichier (ni initDashboard,
-//           ni navigateTo, ni les handlers de clic sidebar). Symptôme exact
-//           observé : la page reste bloquée sur le squelette HTML statique
-//           "Commandes" codé en dur dans src/pages/dashboard.ts (qui
-//           s'affiche par défaut avant que le JS ne le remplace), et cliquer
-//           sur un lien de la sidebar déclenche une navigation classique du
-//           navigateur vers une page qui affiche... exactement le même
-//           squelette statique — d'où l'impression que "rien ne se passe".
-//           Ce fichier est désormais complet et vérifié syntaxiquement.
-//   FIX-2 — Toutes les requêtes authentifiées passent désormais par
-//           dashFetch() (au lieu de fetch() brut), qui utilise
-//           window.fetchAvecSession si disponible (public/static/js/auth-fetch.js)
-//           pour rafraîchir automatiquement la session expirée (1h) au lieu
-//           de laisser chaque section échouer silencieusement après ce délai.
-//           IMPORTANT : /static/js/auth-fetch.js DOIT être chargé AVANT ce
-//           fichier dans src/pages/dashboard.ts, sinon dashFetch() retombe
-//           simplement sur fetch() standard (comportement inchangé, pas
-//           d'erreur, mais pas de rafraîchissement automatique non plus).
+// CORRECTIONS CYCLE-10 :
+//   FIX-1 — savePdv() était TRONQUÉE en plein milieu (coupait sur "...lon"
+//           avant "longitude"), rendant TOUT le fichier JS non-parsable.
+//           Fonction complétée : construit désormais le payload attendu
+//           par PATCH /api/v1/dashboard/pdv (nom, adresse, latitude,
+//           longitude, tarif_livraison_base, tarif_par_km, horaires via
+//           collecterPdvHoraires()), avec feedback utilisateur et gestion
+//           d'erreur, puis recharge la section via loadPdv().
+//   FIX-2 — /static/js/auth-fetch.js doit être chargé AVANT ce fichier
+//           dans src/pages/dashboard.ts (corrigé séparément) pour que
+//           dashFetch() bénéficie réellement du rafraîchissement
+//           automatique de session (window.fetchAvecSession) — sans ce
+//           tag <script>, dashFetch() retombait silencieusement sur
+//           fetch() brut, sans jamais refresh la session.
+//
+// CORRECTIONS CYCLE-9 (conservées) :
+//   FIX-1 — Fichier complet et vérifié syntaxiquement.
+//   FIX-2 — Toutes les requêtes authentifiées passent par dashFetch().
 //
 // CHANGELOG v1.7.0 (conservé) :
 //   1. FIX Navigation — parsing du dernier segment d'URL + popstate.
@@ -60,6 +56,8 @@ const JOURS_LABELS = {
 // Utilise window.fetchAvecSession (auth-fetch.js) si présent — sinon
 // retombe silencieusement sur fetch() standard. Toutes les routes
 // /api/v1/dashboard/* protégées passent par ici désormais.
+// IMPORTANT : /static/js/auth-fetch.js DOIT être chargé AVANT ce fichier
+// dans src/pages/dashboard.ts pour que le refresh automatique fonctionne.
 function dashFetch(url, opts = {}) {
   const fetchFn = window.fetchAvecSession || fetch;
   return fetchFn(url, { credentials: 'include', ...opts });
@@ -300,11 +298,10 @@ async function initDashboard() {
   else if (path.includes('/abonnement')) section = 'abonnement';
   else if (path.includes('/parametres')) section = 'parametres';
 
-  // FIX-1 : navigateTo() est désormais TOUJOURS appelée, et les handlers de
-  // clic TOUJOURS attachés, même si le bloc ci-dessus a échoué — le tout
-  // enveloppé pour ne jamais laisser une exception couper le reste de
-  // l'initialisation (c'est précisément ce genre de coupure silencieuse qui,
-  // combinée à un fichier tronqué, provoquait le blocage total observé).
+  // FIX-1 (cycle-9) : navigateTo() est désormais TOUJOURS appelée, et les
+  // handlers de clic TOUJOURS attachés, même si le bloc ci-dessus a échoué
+  // — le tout enveloppé pour ne jamais laisser une exception couper le
+  // reste de l'initialisation.
   try {
     navigateTo(section);
   } catch (err) {
@@ -1761,11 +1758,11 @@ function renderPdvConfig(pdv, container) {
           <div class="grid grid-cols-2 gap-3">
             <div>
               <label class="block text-sm font-semibold text-gray-700 mb-1.5">Latitude GPS</label>
-              <input id="pdv-lat" type="number" step="0.000001" min="-90" max="90" value="${pdv?.latitude||''}" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200" placeholder="12.3569">
+              <input id="pdv-lat" type="number" step="0.000001" min="-90" max="90" value="${pdv?.latitude??''}" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200" placeholder="12.3569">
             </div>
             <div>
               <label class="block text-sm font-semibold text-gray-700 mb-1.5">Longitude GPS</label>
-              <input id="pdv-lon" type="number" step="0.000001" min="-180" max="180" value="${pdv?.longitude||''}" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200" placeholder="-1.5353">
+              <input id="pdv-lon" type="number" step="0.000001" min="-180" max="180" value="${pdv?.longitude??''}" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200" placeholder="-1.5353">
             </div>
           </div>
           <button type="button" onclick="useMyLocation()" class="w-full border border-gray-200 text-gray-700 font-semibold text-sm py-2.5 rounded-xl hover:bg-gray-50 flex items-center justify-center gap-2">
@@ -1789,7 +1786,7 @@ function renderPdvConfig(pdv, container) {
             <p class="text-xs text-gray-400 mt-1.5">Ces horaires déterminent le badge « Ouvert / Fermé » sur votre boutique.</p>
           </div>
           <p id="pdv-feedback" class="text-xs hidden rounded-lg px-3 py-2"></p>
-          <button type="submit" class="w-full bg-red-600 text-white font-bold py-3 rounded-xl hover:bg-red-700">
+          <button type="submit" id="pdv-submit-btn" class="w-full bg-red-600 text-white font-bold py-3 rounded-xl hover:bg-red-700 disabled:bg-gray-300 disabled:cursor-not-allowed">
             <i class="fa-solid fa-floppy-disk mr-1.5"></i> Enregistrer
           </button>
         </form>
@@ -1854,14 +1851,19 @@ function useMyLocation() {
     document.getElementById('pdv-lat').value = pos.coords.latitude.toFixed(6);
     document.getElementById('pdv-lon').value = pos.coords.longitude.toFixed(6);
     const fb = document.getElementById('pdv-feedback');
-    fb.textContent = 'Position : ' + pos.coords.latitude.toFixed(4) + ', ' + pos.coords.longitude.toFixed(4);
-    fb.className = 'text-xs bg-green-50 text-green-700 rounded-lg px-3 py-2'; fb.classList.remove('hidden');
+    if (fb) {
+      fb.textContent = 'Position : ' + pos.coords.latitude.toFixed(4) + ', ' + pos.coords.longitude.toFixed(4);
+      fb.className = 'text-xs bg-green-50 text-green-700 rounded-lg px-3 py-2'; fb.classList.remove('hidden');
+    }
   }, () => alert('Impossible d\'obtenir votre position.'));
 }
-async function savePdv(e) {
-  e.preventDefault();
-  const fb = document.getElementById('pdv-feedback');
-  const data = {
-    nom: document.getElementById('pdv-nom').value.trim(),
-    adresse: document.getElementById('pdv-adresse').value.trim(),
-    latitude: parseFloat(docu
+
+// FIX-1 (cycle-10) : savePdv() était tronquée en plein milieu — la fonction
+// n'existait donc plus du tout au runtime, cassant le parsing de TOUT le
+// fichier. Complétée pour construire exactement le payload attendu par
+// PATCH /api/v1/dashboard/pdv (src/routes/api-dashboard.ts) :
+//   { nom, adresse, latitude, longitude, tarif_livraison_base, tarif_par_km, horaires }
+// Latitude/longitude : chaîne vide → null (pas 0, pour ne pas écraser une
+// coordonnée valide à l'équateur/méridien avec une valeur "manquante" mal
+// interprétée) ; sinon parseFloat. Les horaires viennent de
+// collecterPdvHoraires() (déjà présent plus haut
