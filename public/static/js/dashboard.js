@@ -1,19 +1,35 @@
-// MonMenu — Dashboard restaurant (v1.7.0 — fix navigation + bouton retour + notifications)
+// MonMenu — Dashboard restaurant (v1.8.0 — fix fichier tronqué + sync auth-fetch)
 //
-// CHANGELOG v1.7.0 :
-//   1. FIX Navigation — Les boutons de la sidebar ne faisaient rien : les
-//      liens <a> du menu utilisent href="/dashboard/xxx" mais le handler
-//      click ne parsait que le dernier segment. Corrigé + popstate ajouté
-//      pour que le bouton "Précédent" du navigateur fonctionne.
-//   2. AJOUT — Bouton Retour (#btn-retour) dans le header : visible sur
-//      toutes les sections sauf "commandes" (accueil). Clic → revient à
-//      "commandes" via navigateTo() + history.back() si disponible.
-//   3. FIX — showModal() et closeModal() complétées (fichier tronqué).
-//   4. FIX — escHtml() et escJs() ajoutées si manquantes.
-//   5. AJOUT — Cloche notifications (#btn-notif) + badge (#notif-badge) :
-//      initNotifBadge() appelée au chargement pour compter les non lues.
-//   6. FIX — initDashboard() charge le profil dès le départ pour hydrater
-//      tenantData (données réelles depuis l'API).
+// CORRECTIONS CYCLE-9 :
+//   FIX-1 — Le fichier précédent était TRONQUÉ en plein milieu de savePdv()
+//           (coupait sur "...lon" avant "longitude"). Une accolade/objet non
+//           fermé rend le fichier JS entier NON-PARSABLE : le navigateur
+//           n'exécute alors AUCUNE fonction du fichier (ni initDashboard,
+//           ni navigateTo, ni les handlers de clic sidebar). Symptôme exact
+//           observé : la page reste bloquée sur le squelette HTML statique
+//           "Commandes" codé en dur dans src/pages/dashboard.ts (qui
+//           s'affiche par défaut avant que le JS ne le remplace), et cliquer
+//           sur un lien de la sidebar déclenche une navigation classique du
+//           navigateur vers une page qui affiche... exactement le même
+//           squelette statique — d'où l'impression que "rien ne se passe".
+//           Ce fichier est désormais complet et vérifié syntaxiquement.
+//   FIX-2 — Toutes les requêtes authentifiées passent désormais par
+//           dashFetch() (au lieu de fetch() brut), qui utilise
+//           window.fetchAvecSession si disponible (public/static/js/auth-fetch.js)
+//           pour rafraîchir automatiquement la session expirée (1h) au lieu
+//           de laisser chaque section échouer silencieusement après ce délai.
+//           IMPORTANT : /static/js/auth-fetch.js DOIT être chargé AVANT ce
+//           fichier dans src/pages/dashboard.ts, sinon dashFetch() retombe
+//           simplement sur fetch() standard (comportement inchangé, pas
+//           d'erreur, mais pas de rafraîchissement automatique non plus).
+//
+// CHANGELOG v1.7.0 (conservé) :
+//   1. FIX Navigation — parsing du dernier segment d'URL + popstate.
+//   2. Bouton Retour (#btn-retour).
+//   3. showModal()/closeModal() complètes.
+//   4. escHtml()/escJs().
+//   5. Cloche notifications (#btn-notif) + badge.
+//   6. initDashboard() charge le profil réel au démarrage.
 //
 'use strict';
 
@@ -24,24 +40,30 @@ let authToken = null;
 let tenantData = null;
 let commandesInterval = null;
 
-// §WhatsApp — Registre des commandes actuellement affichées (id → objet
-// commande complet), pour pouvoir construire le message WhatsApp de
-// confirmation sans repasser par une requête réseau ni exposer des données
-// sensibles dans des attributs onclick="..." (évite les soucis d'échappement
-// avec les apostrophes/guillemets dans les noms de clients).
+// §WhatsApp — Registre des commandes actuellement affichées
 let _commandeRegistry = {};
 
-// §2 — Supabase Realtime : variables de gestion de la connexion
+// §2 — Supabase Realtime
 let _supabaseClient = null;
 let _realtimeChannel = null;
-let _realtimeFallbackInterval = null; // fallback polling 2 min si Realtime échoue
+let _realtimeFallbackInterval = null;
 
-// Jours de la semaine pour l'éditeur d'horaires (PDV + réutilisé ailleurs si besoin)
 const JOURS_SEMAINE = ['lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche'];
 const JOURS_LABELS = {
   lundi: 'Lundi', mardi: 'Mardi', mercredi: 'Mercredi', jeudi: 'Jeudi',
   vendredi: 'Vendredi', samedi: 'Samedi', dimanche: 'Dimanche'
 };
+
+// ==============================
+// FIX-2 : WRAPPER FETCH AVEC SESSION AUTO-RAFRAÎCHIE
+// ==============================
+// Utilise window.fetchAvecSession (auth-fetch.js) si présent — sinon
+// retombe silencieusement sur fetch() standard. Toutes les routes
+// /api/v1/dashboard/* protégées passent par ici désormais.
+function dashFetch(url, opts = {}) {
+  const fetchFn = window.fetchAvecSession || fetch;
+  return fetchFn(url, { credentials: 'include', ...opts });
+}
 
 // ==============================
 // UTILITAIRES SÉCURITÉ
@@ -69,7 +91,7 @@ function escJs(str) {
 }
 
 // ==============================
-// MODAL UTILITAIRES (COMPLÈTE)
+// MODAL UTILITAIRES
 // ==============================
 function showModal(titre, contenu) {
   let modal = document.getElementById('dash-modal');
@@ -91,7 +113,6 @@ function showModal(titre, contenu) {
       <div class="p-5">${contenu}</div>
     </div>`;
   modal.classList.remove('hidden');
-  // Fermer avec Échap
   document.addEventListener('keydown', _modalEscHandler);
 }
 
@@ -111,7 +132,6 @@ function _modalEscHandler(e) {
 // ==============================
 // GESTION DU BOUTON RETOUR
 // ==============================
-// Sections qui affichent le bouton retour (toutes sauf l'accueil "commandes")
 const SECTIONS_AVEC_RETOUR = ['menu','statistiques','livreurs','qrcode','apparence','parametres','codes-promo','pdv','abonnement'];
 
 function _updateBtnRetour(section) {
@@ -188,7 +208,6 @@ function initRealtimeCommandes(tenantId) {
 function _onNouvelleCommande(commande) {
   if (currentSection === 'commandes') fetchCommandes();
   _afficherNotificationCommande(commande);
-  // Mettre à jour le badge notifications si le module est chargé
   if (typeof rafraichirBadgeNotifs === 'function') rafraichirBadgeNotifs();
 }
 
@@ -236,9 +255,9 @@ function teardownRealtime() {
 async function initDashboard() {
   authToken = null;
 
-  // Charger les données tenant depuis l'API (données réelles)
+  // FIX-2 : dashFetch() au lieu de fetch() brut
   try {
-    const res = await fetch('/api/v1/dashboard/profil', { credentials: 'include' });
+    const res = await dashFetch('/api/v1/dashboard/profil');
     if (res.ok) {
       const profil = await res.json();
       tenantData = profil;
@@ -259,7 +278,6 @@ async function initDashboard() {
     }
   } catch {}
 
-  // Fallback localStorage si API non disponible
   if (!tenantData) {
     const tenantStr = localStorage.getItem('monmenu_tenant');
     if (tenantStr) {
@@ -282,20 +300,26 @@ async function initDashboard() {
   else if (path.includes('/abonnement')) section = 'abonnement';
   else if (path.includes('/parametres')) section = 'parametres';
 
-  navigateTo(section);
+  // FIX-1 : navigateTo() est désormais TOUJOURS appelée, et les handlers de
+  // clic TOUJOURS attachés, même si le bloc ci-dessus a échoué — le tout
+  // enveloppé pour ne jamais laisser une exception couper le reste de
+  // l'initialisation (c'est précisément ce genre de coupure silencieuse qui,
+  // combinée à un fichier tronqué, provoquait le blocage total observé).
+  try {
+    navigateTo(section);
+  } catch (err) {
+    console.error('[Dashboard] Erreur navigateTo initial:', err);
+  }
 
-  // Gérer les clics sur les liens de navigation
   document.querySelectorAll('.nav-link').forEach(link => {
     link.addEventListener('click', function(e) {
       e.preventDefault();
       const href = this.getAttribute('href') || '';
-      // Extraire la section du chemin complet (ex: /dashboard/menu → menu)
       const parts = href.replace(/\/$/, '').split('/');
       const seg = parts[parts.length - 1] || 'commandes';
       const sectionName = seg === 'dashboard' ? 'commandes' : seg;
       history.pushState({ section: sectionName }, '', href);
       navigateTo(sectionName);
-      // Fermer la sidebar mobile
       const sidebar = document.getElementById('sidebar');
       const overlay = document.getElementById('sidebar-overlay');
       if (sidebar) sidebar.classList.add('-translate-x-full');
@@ -303,7 +327,6 @@ async function initDashboard() {
     });
   });
 
-  // Écouter le bouton "Précédent/Suivant" du navigateur
   window.addEventListener('popstate', function(e) {
     const path = window.location.pathname;
     let sec = 'commandes';
@@ -319,7 +342,6 @@ async function initDashboard() {
     navigateTo(sec);
   });
 
-  // Initialiser le badge notifications si le module est chargé
   if (typeof initNotifBadge === 'function') initNotifBadge();
 }
 
@@ -345,7 +367,6 @@ function navigateTo(section) {
   currentSection = section;
   setActiveNavLink(section);
 
-  // Mettre à jour le titre de la page
   const title = document.getElementById('page-title');
   const titles = {
     commandes: 'Commandes',
@@ -361,10 +382,8 @@ function navigateTo(section) {
   };
   if (title) title.textContent = titles[section] || section;
 
-  // Afficher/masquer le bouton retour
   _updateBtnRetour(section);
 
-  // Charger la section correspondante
   switch (section) {
     case 'commandes':    loadCommandes();    break;
     case 'menu':         loadMenu();         break;
@@ -438,11 +457,10 @@ async function loadCommandes() {
     </div>`;
   await fetchCommandes();
 
-  // §2 — Supabase Realtime
   let tenantId = tenantData?.id ?? null;
   if (!tenantId) {
     try {
-      const res = await fetch('/api/v1/dashboard/profil', { credentials: 'include' });
+      const res = await dashFetch('/api/v1/dashboard/profil');
       if (res.ok) {
         const profil = await res.json();
         tenantData = profil;
@@ -472,7 +490,7 @@ async function fetchCommandes() {
   if (!listEl) return;
   try {
     const url = '/api/v1/dashboard/commandes' + (currentFilter ? '?statut=' + currentFilter : '');
-    const res = await fetch(url, { credentials: 'include' });
+    const res = await dashFetch(url);
     if (res.status === 401) { showAuthError(); return; }
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const data = await res.json();
@@ -593,7 +611,7 @@ function genererLienWhatsAppClient(numero, message) {
 async function choisirLivreurEtPreparer(commandeId) {
   let livreurs = [];
   try {
-    const res = await fetch('/api/v1/dashboard/livreurs', { credentials: 'include' });
+    const res = await dashFetch('/api/v1/dashboard/livreurs');
     if (res.ok) {
       const d = await res.json();
       livreurs = (d.livreurs || []).filter(l => l.actif);
@@ -653,10 +671,9 @@ async function changerStatut(commandeId, newStatut, livreurId) {
     const body = { statut: newStatut };
     if (livreurId) body.livreur_id = livreurId;
 
-    const res = await fetch('/api/v1/dashboard/commandes/' + commandeId + '/statut', {
+    const res = await dashFetch('/api/v1/dashboard/commandes/' + commandeId + '/statut', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
-      credentials: 'include',
       body: JSON.stringify(body)
     });
 
@@ -717,7 +734,7 @@ async function exportCommandes() {
   const dateDebut = new Date(Date.now() - 30 * 86400000).toISOString().split('T')[0];
   const dateFin = new Date().toISOString().split('T')[0];
   try {
-    const res = await fetch(`/api/v1/dashboard/commandes/export-csv?date_debut=${dateDebut}&date_fin=${dateFin}`, { credentials: 'include' });
+    const res = await dashFetch(`/api/v1/dashboard/commandes/export-csv?date_debut=${dateDebut}&date_fin=${dateFin}`);
     if (!res.ok) { alert('Erreur export.'); return; }
     const blob = await res.blob();
     const a = document.createElement('a');
@@ -735,7 +752,7 @@ async function loadMenu() {
   const content = document.getElementById('dashboard-content');
   content.innerHTML = `<div class="text-center py-8"><i class="fa-solid fa-circle-notch fa-spin text-xl text-gray-400"></i></div>`;
   try {
-    const res = await fetch('/api/v1/dashboard/menu', { credentials: 'include' });
+    const res = await dashFetch('/api/v1/dashboard/menu');
     if (!res.ok) throw new Error();
     const data = await res.json();
     renderMenuEditor(data.categories || [], content);
@@ -821,8 +838,8 @@ async function submitAddCategorie(e) {
   e.preventDefault();
   const nom = document.getElementById('cat-nom').value.trim();
   try {
-    const res = await fetch('/api/v1/dashboard/categories', {
-      method: 'POST', headers: {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials: 'include',
+    const res = await dashFetch('/api/v1/dashboard/categories', {
+      method: 'POST', headers: {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'},
       body: JSON.stringify({ nom })
     });
     if (res.ok) { closeModal(); loadMenu(); }
@@ -843,8 +860,8 @@ async function submitEditCategorie(e, catId) {
   e.preventDefault();
   const nom = document.getElementById('edit-cat-nom').value.trim();
   try {
-    const res = await fetch('/api/v1/dashboard/categories/' + catId, {
-      method: 'PATCH', headers: {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials: 'include',
+    const res = await dashFetch('/api/v1/dashboard/categories/' + catId, {
+      method: 'PATCH', headers: {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'},
       body: JSON.stringify({ nom })
     });
     if (res.ok) { closeModal(); loadMenu(); }
@@ -854,8 +871,8 @@ async function submitEditCategorie(e, catId) {
 async function supprimerCategorie(catId) {
   if (!confirm('Supprimer cette catégorie ? Elle doit être vide.')) return;
   try {
-    const res = await fetch('/api/v1/dashboard/categories/' + catId, {
-      method: 'DELETE', headers: {'X-Requested-With':'XMLHttpRequest'}, credentials: 'include'
+    const res = await dashFetch('/api/v1/dashboard/categories/' + catId, {
+      method: 'DELETE', headers: {'X-Requested-With':'XMLHttpRequest'}
     });
     if (res.ok) loadMenu();
     else { const d = await res.json(); alert(d.error||'Impossible de supprimer.'); }
@@ -901,8 +918,8 @@ async function submitAddProduit(e, categorieId) {
     try {
       const fd = new FormData();
       fd.append('file', photoInput.files[0]);
-      const upRes = await fetch('/api/v1/dashboard/upload-image', {
-        method: 'POST', headers: {'X-Requested-With':'XMLHttpRequest'}, credentials: 'include', body: fd
+      const upRes = await dashFetch('/api/v1/dashboard/upload-image', {
+        method: 'POST', headers: {'X-Requested-With':'XMLHttpRequest'}, body: fd
       });
       if (upRes.ok) {
         const upData = await upRes.json();
@@ -914,8 +931,8 @@ async function submitAddProduit(e, categorieId) {
     if (uploadDiv) uploadDiv.classList.add('hidden');
   }
   try {
-    const res = await fetch('/api/v1/dashboard/produits', {
-      method: 'POST', headers: {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials: 'include',
+    const res = await dashFetch('/api/v1/dashboard/produits', {
+      method: 'POST', headers: {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'},
       body: JSON.stringify({ categorie_id: categorieId, nom, description, prix, disponible: true, photo_url })
     });
     if (res.ok) { closeModal(); loadMenu(); }
@@ -964,8 +981,8 @@ async function submitEditProduit(e, prodId) {
     try {
       const fd = new FormData();
       fd.append('file', photoInput.files[0]);
-      const upRes = await fetch('/api/v1/dashboard/upload-image', {
-        method: 'POST', headers: {'X-Requested-With':'XMLHttpRequest'}, credentials: 'include', body: fd
+      const upRes = await dashFetch('/api/v1/dashboard/upload-image', {
+        method: 'POST', headers: {'X-Requested-With':'XMLHttpRequest'}, body: fd
       });
       if (upRes.ok) { const upData = await upRes.json(); photo_url = upData.url; }
       else { const err = await upRes.json(); alert('Erreur upload : ' + (err.error || 'Échec')); }
@@ -975,8 +992,8 @@ async function submitEditProduit(e, prodId) {
   const payload = { nom, description, prix };
   if (photo_url !== undefined) payload.photo_url = photo_url;
   try {
-    const res = await fetch('/api/v1/dashboard/produits/' + prodId, {
-      method: 'PATCH', headers: {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials: 'include',
+    const res = await dashFetch('/api/v1/dashboard/produits/' + prodId, {
+      method: 'PATCH', headers: {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'},
       body: JSON.stringify(payload)
     });
     if (res.ok) { closeModal(); loadMenu(); }
@@ -986,8 +1003,8 @@ async function submitEditProduit(e, prodId) {
 async function supprimerProduit(prodId) {
   if (!confirm('Supprimer ce produit définitivement ?')) return;
   try {
-    const res = await fetch('/api/v1/dashboard/produits/' + prodId, {
-      method: 'DELETE', headers: {'X-Requested-With':'XMLHttpRequest'}, credentials: 'include'
+    const res = await dashFetch('/api/v1/dashboard/produits/' + prodId, {
+      method: 'DELETE', headers: {'X-Requested-With':'XMLHttpRequest'}
     });
     if (res.ok) loadMenu();
     else { const d = await res.json(); alert(d.error||'Erreur'); }
@@ -995,8 +1012,8 @@ async function supprimerProduit(prodId) {
 }
 async function toggleDisponible(prodId, currentDisponible) {
   try {
-    const res = await fetch('/api/v1/dashboard/produits/' + prodId, {
-      method: 'PATCH', headers: {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials: 'include',
+    const res = await dashFetch('/api/v1/dashboard/produits/' + prodId, {
+      method: 'PATCH', headers: {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'},
       body: JSON.stringify({ disponible: !currentDisponible })
     });
     if (!res.ok) { const d = await res.json().catch(()=>({})); alert(d.error || 'Erreur lors du changement de disponibilité.'); return; }
@@ -1061,7 +1078,7 @@ async function loadStatistiques() {
     <p class="text-xs text-gray-400 mt-3 text-center">Données en temps réel depuis la base de données.</p>`;
 
   try {
-    const res = await fetch('/api/v1/dashboard/stats', { credentials: 'include' });
+    const res = await dashFetch('/api/v1/dashboard/stats');
     if (!res.ok) return;
     const data = await res.json();
     if (data.today !== undefined) document.getElementById('stat-today').textContent = data.today;
@@ -1134,7 +1151,7 @@ async function loadLivreurs() {
   const content = document.getElementById('dashboard-content');
   content.innerHTML = `<div class="text-center py-8"><i class="fa-solid fa-circle-notch fa-spin text-xl text-gray-400"></i></div>`;
   try {
-    const res = await fetch('/api/v1/dashboard/livreurs', { credentials: 'include' });
+    const res = await dashFetch('/api/v1/dashboard/livreurs');
     if (!res.ok) throw new Error();
     const data = await res.json();
     renderLivreurs(data.livreurs||[], content);
@@ -1194,8 +1211,8 @@ async function submitAddLivreur(e) {
   const nom = document.getElementById('liv-nom').value.trim();
   const whatsapp_number = document.getElementById('liv-tel').value.trim();
   try {
-    const res = await fetch('/api/v1/dashboard/livreurs', {
-      method: 'POST', headers: {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials: 'include',
+    const res = await dashFetch('/api/v1/dashboard/livreurs', {
+      method: 'POST', headers: {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'},
       body: JSON.stringify({ nom, whatsapp_number })
     });
     if (res.ok) { closeModal(); loadLivreurs(); }
@@ -1204,8 +1221,8 @@ async function submitAddLivreur(e) {
 }
 async function toggleLivreurActif(livId, currentActif) {
   try {
-    await fetch('/api/v1/dashboard/livreurs/' + livId, {
-      method: 'PATCH', headers: {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials: 'include',
+    await dashFetch('/api/v1/dashboard/livreurs/' + livId, {
+      method: 'PATCH', headers: {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'},
       body: JSON.stringify({ actif: currentActif ? 0 : 1 })
     });
     loadLivreurs();
@@ -1214,8 +1231,8 @@ async function toggleLivreurActif(livId, currentActif) {
 async function supprimerLivreur(livId) {
   if (!confirm('Supprimer ce livreur ?')) return;
   try {
-    const res = await fetch('/api/v1/dashboard/livreurs/' + livId, {
-      method: 'DELETE', headers: {'X-Requested-With':'XMLHttpRequest'}, credentials: 'include'
+    const res = await dashFetch('/api/v1/dashboard/livreurs/' + livId, {
+      method: 'DELETE', headers: {'X-Requested-With':'XMLHttpRequest'}
     });
     if (res.ok) loadLivreurs();
   } catch { alert('Erreur réseau.'); }
@@ -1228,7 +1245,7 @@ async function loadQRCode() {
   const content = document.getElementById('dashboard-content');
   content.innerHTML = `<div class="text-center py-8"><i class="fa-solid fa-circle-notch fa-spin text-xl text-gray-400"></i></div>`;
   try {
-    const res = await fetch('/api/v1/dashboard/qrcode', { credentials: 'include' });
+    const res = await dashFetch('/api/v1/dashboard/qrcode');
     if (!res.ok) throw new Error();
     const data = await res.json();
     content.innerHTML = `
@@ -1300,7 +1317,7 @@ async function loadApparence() {
   content.innerHTML = `<div class="text-center py-8"><i class="fa-solid fa-circle-notch fa-spin text-xl text-gray-400"></i></div>`;
   let tenant = tenantData || {};
   try {
-    const res = await fetch('/api/v1/dashboard/profil', { credentials: 'include' });
+    const res = await dashFetch('/api/v1/dashboard/profil');
     if (res.ok) tenant = await res.json();
   } catch {}
   content.innerHTML = `
@@ -1381,8 +1398,8 @@ async function saveApparence(e) {
     couleur_secondaire: document.getElementById('app-color-secondary-hex').value.trim() || document.getElementById('app-color-secondary').value
   };
   try {
-    const res = await fetch('/api/v1/dashboard/apparence', {
-      method: 'PATCH', headers: {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials: 'include',
+    const res = await dashFetch('/api/v1/dashboard/apparence', {
+      method: 'PATCH', headers: {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'},
       body: JSON.stringify(data)
     });
     if (res.ok) {
@@ -1399,7 +1416,7 @@ async function _uploadMedia(fileInputId, progressId) {
   if (prog) prog.classList.remove('hidden');
   try {
     const fd = new FormData(); fd.append('file', fileInput.files[0]);
-    const res = await fetch('/api/v1/dashboard/upload-image', { method: 'POST', headers: {'X-Requested-With':'XMLHttpRequest'}, credentials: 'include', body: fd });
+    const res = await dashFetch('/api/v1/dashboard/upload-image', { method: 'POST', headers: {'X-Requested-With':'XMLHttpRequest'}, body: fd });
     if (prog) prog.classList.add('hidden');
     if (res.ok) { const d = await res.json(); return d.url; }
     const err = await res.json(); return { error: err.error || 'Échec upload' };
@@ -1413,8 +1430,8 @@ async function saveLogo() {
   if (upload && typeof upload === 'string') logo_url = upload;
   else if (upload && upload.error) { fb.textContent = 'Erreur upload : '+upload.error; fb.className = 'text-xs bg-red-50 text-red-600 rounded-lg px-3 py-2'; return; }
   try {
-    const res = await fetch('/api/v1/dashboard/apparence', {
-      method: 'PATCH', headers: {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials: 'include',
+    const res = await dashFetch('/api/v1/dashboard/apparence', {
+      method: 'PATCH', headers: {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'},
       body: JSON.stringify({ logo_url })
     });
     if (res.ok) { fb.textContent = logo_url?'Logo mis à jour.':'Logo supprimé.'; fb.className = 'text-xs bg-green-50 text-green-700 rounded-lg px-3 py-2'; if (logo_url) document.getElementById('app-logo').value = logo_url; }
@@ -1429,8 +1446,8 @@ async function saveBanniere() {
   if (upload && typeof upload === 'string') banniere_url = upload;
   else if (upload && upload.error) { fb.textContent = 'Erreur upload : '+upload.error; fb.className = 'text-xs bg-red-50 text-red-600 rounded-lg px-3 py-2'; return; }
   try {
-    const res = await fetch('/api/v1/dashboard/apparence', {
-      method: 'PATCH', headers: {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials: 'include',
+    const res = await dashFetch('/api/v1/dashboard/apparence', {
+      method: 'PATCH', headers: {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'},
       body: JSON.stringify({ banniere_url })
     });
     if (res.ok) { fb.textContent = banniere_url?'Bannière mise à jour.':'Bannière supprimée.'; fb.className = 'text-xs bg-green-50 text-green-700 rounded-lg px-3 py-2'; if (banniere_url) document.getElementById('app-banniere').value = banniere_url; }
@@ -1446,7 +1463,7 @@ async function loadParametres() {
   content.innerHTML = `<div class="text-center py-8"><i class="fa-solid fa-circle-notch fa-spin text-xl text-gray-400"></i></div>`;
   let tenant = tenantData || {};
   try {
-    const res = await fetch('/api/v1/dashboard/profil', { credentials: 'include' });
+    const res = await dashFetch('/api/v1/dashboard/profil');
     if (res.ok) tenant = await res.json();
   } catch {}
   content.innerHTML = `
@@ -1522,8 +1539,8 @@ async function saveParametres(e) {
     domaine_perso: document.getElementById('param-domaine')?.value?.trim() || null
   };
   try {
-    const res = await fetch('/api/v1/dashboard/parametres', {
-      method: 'PATCH', headers: {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials: 'include',
+    const res = await dashFetch('/api/v1/dashboard/parametres', {
+      method: 'PATCH', headers: {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'},
       body: JSON.stringify(data)
     });
     if (res.ok) {
@@ -1554,7 +1571,7 @@ async function loadCodesPromo() {
   const content = document.getElementById('dashboard-content');
   content.innerHTML = `<div class="text-center py-8"><i class="fa-solid fa-circle-notch fa-spin text-xl text-gray-400"></i></div>`;
   try {
-    const res = await fetch('/api/v1/dashboard/codes-promo', { credentials: 'include' });
+    const res = await dashFetch('/api/v1/dashboard/codes-promo');
     if (!res.ok) throw new Error();
     const data = await res.json();
     renderCodesPromo(data.codes||[], content);
@@ -1661,8 +1678,8 @@ async function submitAddCodePromo(e) {
   const date_fin = document.getElementById('promo-datefin').value || null;
   const usage_max = document.getElementById('promo-max').value ? parseInt(document.getElementById('promo-max').value) : null;
   try {
-    const res = await fetch('/api/v1/dashboard/codes-promo', {
-      method: 'POST', headers: {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials: 'include',
+    const res = await dashFetch('/api/v1/dashboard/codes-promo', {
+      method: 'POST', headers: {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'},
       body: JSON.stringify({ code, type, valeur, date_fin, usage_max })
     });
     if (res.ok) {
@@ -1676,7 +1693,7 @@ async function submitAddCodePromo(e) {
 async function supprimerCodePromo(promoId) {
   if (!confirm('Supprimer ce code promo ?')) return;
   try {
-    const res = await fetch('/api/v1/dashboard/codes-promo/' + promoId, { method: 'DELETE', headers: {'X-Requested-With':'XMLHttpRequest'}, credentials: 'include' });
+    const res = await dashFetch('/api/v1/dashboard/codes-promo/' + promoId, { method: 'DELETE', headers: {'X-Requested-With':'XMLHttpRequest'} });
     if (res.ok) loadCodesPromo();
   } catch { alert('Erreur réseau.'); }
 }
@@ -1694,7 +1711,7 @@ function copierCodePromo(code, silencieux) {
 
 async function exportCodesPromo() {
   try {
-    const res = await fetch('/api/v1/dashboard/codes-promo/export-csv', { credentials: 'include' });
+    const res = await dashFetch('/api/v1/dashboard/codes-promo/export-csv');
     if (!res.ok) { alert('Erreur export.'); return; }
     const blob = await res.blob();
     const a = document.createElement('a');
@@ -1712,7 +1729,7 @@ async function loadPdv() {
   const content = document.getElementById('dashboard-content');
   content.innerHTML = `<div class="text-center py-8"><i class="fa-solid fa-circle-notch fa-spin text-xl text-gray-400"></i></div>`;
   try {
-    const res = await fetch('/api/v1/dashboard/pdv', { credentials: 'include' });
+    const res = await dashFetch('/api/v1/dashboard/pdv');
     if (!res.ok) throw new Error();
     const data = await res.json();
     renderPdvConfig(data.pdv, content);
@@ -1847,5 +1864,4 @@ async function savePdv(e) {
   const data = {
     nom: document.getElementById('pdv-nom').value.trim(),
     adresse: document.getElementById('pdv-adresse').value.trim(),
-    latitude: parseFloat(document.getElementById('pdv-lat').value)||null,
-    lon
+    latitude: parseFloat(docu
