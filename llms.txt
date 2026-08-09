@@ -1,89 +1,33 @@
 # MonMenu
 
-> Plateforme SaaS multi-tenant de commande en ligne pour restaurants d'Afrique de l'Ouest et Centrale, construite avec Hono (Cloudflare Workers), Cloudflare D1, Cloudflare R2 et Supabase PostgreSQL.
+> MonMenu est une solution de commande en ligne pour restaurants en Afrique de l'Ouest et Centrale, permettant à chaque établissement de créer sa boutique digitale et de recevoir des commandes avec livraison.
 
-## Description technique
+## À propos
 
-**Stack technique constatée dans le code source :**
-- **Runtime** : Cloudflare Workers (Hono 4.x, TypeScript)
-- **Base de données** :
-  - Cloudflare D1 (SQLite) — configuration site web : `plans`, `pays`, `config_globale`
-  - Supabase PostgreSQL — données applicatives : `tenants`, `commandes`, `menus`, `abonnements`, `livreurs`, `points_de_vente`, `audit_log`, `notifications_restaurant`, etc.
-- **Stockage médias** : Cloudflare R2 (`monmenu-media`) — preuves de paiement, captures d'écran boutiques
-- **Email** : Brevo (ex-Sendinblue) — `src/lib/brevo.ts`
-- **WhatsApp** : intégration WhatsApp pour notifications — `src/lib/whatsapp.ts`
-- **Build** : Vite + `@hono/vite-build`, déployé sur `https://monmenu.poodasamuelpro.workers.dev` (domaine définitif : `https://monmenu.app`)
-- **Validation** : Zod
+MonMenu permet aux restaurants de disposer rapidement d'une boutique en ligne sans compétence technique. Les clients commandent directement depuis la page du restaurant, suivent leur commande en temps réel et sont livrés à domicile. La plateforme est disponible dans 14 pays d'Afrique francophone (Burkina Faso, Côte d'Ivoire, Cameroun, Mali, Sénégal, Togo, Bénin, Niger, Guinée, Gabon, Congo, Tchad et autres).
 
-**Architecture multi-tenant :**
-Chaque restaurant est un "tenant" identifié par un slug. L'accès est contrôlé via `src/lib/acces-tenant.ts`. La plateforme gère des plans d'abonnement (gratuit et payants) avec un système de paiement manuel (soumission de preuve → validation admin dans une fenêtre de 72h).
+## Fonctionnalités pour les restaurants
 
-**Pays couverts (dans le schéma D1) :** Burkina Faso, Côte d'Ivoire, Cameroun, Mali, Sénégal, Togo, Bénin, Niger, Guinée, Gabon, Congo, Tchad (FCFA / XOF / XAF)
+- Création d'une boutique en ligne personnalisée (couleurs, logo, bannière)
+- Réception et gestion des commandes en ligne
+- Module de livraison intégré
+- Tableau de bord avec statistiques de ventes et suivi des commandes
+- Notifications en temps réel à chaque nouvelle commande
+- Plans d'abonnement adaptés à la taille de chaque établissement
 
-**Fonctionnalités identifiées dans le code :**
-- Création de boutique en ligne par restaurant (inscription, personnalisation couleurs, logo, bannière)
-- Commandes en ligne avec livraison (module livraison)
-- Dashboard restaurateur (stats, commandes, profil, plan actuel)
-- Système d'abonnement SaaS (plans gratuit/payant, essai, confirmation paiement manuel)
-- Notifications in-app restaurant
-- Blog + newsletter
-- Interface admin (validation paiements, tâches)
-- Cron jobs automatiques (stats journalières, expiration essais, captures screenshots boutiques, blocage paiements expirés)
-- Serveur SSR HTML (pages rendues côté serveur par Hono)
-- Suivi de commande via token (`/suivi/:token`)
+## Fonctionnalités pour les clients
 
-**Cron jobs configurés (wrangler.jsonc) :**
-- `0 2 * * *` — calcul stats journalières
-- `10 2 * * *` — vérification essais expirés
-- `20 2 * * *` — capture screenshots boutiques (Thum.io → R2)
-- `30 */6 * * *` — blocage automatique paiements expirés (fenêtre 72h)
+- Consultation du menu et commande en quelques clics
+- Suivi de commande en temps réel via un lien dédié
+- Prise en charge des devises locales (FCFA / XOF / XAF)
 
-## Points d'entrée — pages
+## Public cible
 
-- [src/pages/home.ts](./src/pages/home.ts) — Page d'accueil
-- [src/pages/tarifs.ts](./src/pages/tarifs.ts) — Page tarifs/plans
-- [src/pages/inscription.ts](./src/pages/inscription.ts) — Inscription restaurant
-- [src/pages/dashboard.ts](./src/pages/dashboard.ts) — Dashboard restaurateur
-- [src/pages/boutique.ts](./src/pages/boutique.ts) — Page boutique publique d'un restaurant
-- [src/pages/blog.ts](./src/pages/blog.ts) — Blog
-- [src/pages/contact.ts](./src/pages/contact.ts) — Contact
+Restaurants, snacks, traiteurs et dark kitchens en Afrique de l'Ouest et Centrale souhaitant digitaliser leur prise de commande et proposer la livraison à domicile.
 
-## Routes API (préfixe `/api/v1/`)
+## Accès
 
-- [src/routes/api-auth.ts](./src/routes/api-auth.ts) — Authentification (inscription, connexion)
-- [src/routes/api-tenants.ts](./src/routes/api-tenants.ts) — Gestion des tenants (restaurants)
-- [src/routes/api-commandes.ts](./src/routes/api-commandes.ts) — Commandes
-- [src/routes/api-livraison.ts](./src/routes/api-livraison.ts) — Module livraison
-- [src/routes/api-plans.ts](./src/routes/api-plans.ts) — Plans d'abonnement
-- [src/routes/api-paiement.ts](./src/routes/api-paiement.ts) — Paiement (soumission preuve, statut)
-- [src/routes/api-dashboard.ts](./src/routes/api-dashboard.ts) — Dashboard (stats, profil, plan)
-- [src/routes/api-blog.ts](./src/routes/api-blog.ts) — Articles de blog
-- [src/routes/api-newsletter.ts](./src/routes/api-newsletter.ts) — Newsletter
-- [src/routes/api-screenshots.ts](./src/routes/api-screenshots.ts) — Captures d'écran boutiques
-- [src/routes/api-admin-paiements.ts](./src/routes/api-admin-paiements.ts) — Admin : validation paiements
-- [src/routes/api-admin-tasks.ts](./src/routes/api-admin-tasks.ts) — Admin : tâches
-- [src/routes/api-cron.ts](./src/routes/api-cron.ts) — Tâches cron
-
-## Schéma de base de données
-
-- [migrations/001_initial_schema.sql](./migrations/001_initial_schema.sql) — Schéma D1 (site web : `plans`, `pays`, `config_globale`)
-- [supabase/migrations/](./supabase/migrations/) — Migrations Supabase (13 migrations : schéma applicatif, RLS, abonnements, paiements, notifications)
-
-## Bibliothèques métier
-
-- [src/lib/plans.ts](./src/lib/plans.ts) — Résolution UUID Supabase ↔ ID D1 pour les plans
-- [src/lib/supabase.ts](./src/lib/supabase.ts) — Client Supabase (anon + admin)
-- [src/lib/paiement.ts](./src/lib/paiement.ts) — Logique paiement manuel
-- [src/lib/delivery.ts](./src/lib/delivery.ts) — Module livraison
-- [src/lib/brevo.ts](./src/lib/brevo.ts) — Envoi d'emails (Brevo)
-- [src/lib/whatsapp.ts](./src/lib/whatsapp.ts) — Notifications WhatsApp
-- [src/lib/screenshot.ts](./src/lib/screenshot.ts) — Captures Thum.io → R2
-- [src/lib/security.ts](./src/lib/security.ts) — Utilitaires sécurité
-- [src/lib/acces-tenant.ts](./src/lib/acces-tenant.ts) — Contrôle d'accès multi-tenant
-- [src/middleware/auth.ts](./src/middleware/auth.ts) — Middleware d'authentification
-
-## Configuration
-
-- [wrangler.jsonc](./wrangler.jsonc) — Config Cloudflare Workers (D1 `monmenu-production`, R2 `monmenu-media`, cron triggers, observabilité)
-- [package.json](./package.json) — Dépendances (Hono, Supabase, Zod, Vite, Wrangler)
-- [src/types/database.ts](./src/types/database.ts) — Types TypeScript (Tenant, Plan, Abonnement, Commande, etc.)
+- Site officiel : [https://monmenu.app](https://monmenu.app)
+- Tarifs : [https://monmenu.app/tarifs](https://monmenu.app/tarifs)
+- Inscription : [https://monmenu.app/inscription](https://monmenu.app/inscription)
+- Contact : [https://monmenu.app/contact](https://monmenu.app/contact)
