@@ -1,1090 +1,1851 @@
-/**
- * public/static/js/dashboard-paiement.js — Module UI paiement manuel (côté restaurant)
- *
- * CORRECTIONS CYCLE-4 :
- *   FIX-1 — Messages harmonisés : SLA admin annoncé = 48h (avant : "38h",
- *           incohérent avec la deadline technique réelle de 72h côté
- *           serveur). La fenêtre technique de coupure reste 72h, mais est
- *           désormais clairement présentée comme distincte du SLA.
- *   FIX-2 — Classes Tailwind dynamiques (`bg-${couleur}-50`, etc.)
- *           remplacées par un mapping explicite de classes complètes :
- *           Tailwind JIT ne détecte pas les classes construites par
- *           concaténation de variable → le bandeau "essai" n'avait aucun
- *           fond coloré en production.
- *   FIX-3 — Comparaison "Votre plan" corrigée : comparait
- *           s.plan_initial_id (UUID Supabase) à p.id (id D1) → ne
- *           matchait jamais. Utilise désormais s.plan_initial_id_d1
- *           (renvoyé par /api/v1/paiement/statut après correction
- *           serveur, voir src/routes/api-paiement.ts).
- *   FIX-4 — Si /statut échoue (401) mais que moyens/plans sont dispo, on
- *           affiche désormais un bandeau "reconnectez-vous" au lieu de ne
- *           rien afficher à la place de la carte de statut.
- *
- * Ce module gère :
- *   - Les bandeaux de notification paiement dans le header du dashboard
- *   - La section /dashboard/abonnement complète (statut, référence, upload preuve,
- *     historique, progression délai, upgrade/downgrade)
- *   - L'upload avec drag-and-drop et validation 4 couches côté client
- *
- * SÉCURITÉ CÔTÉ CLIENT :
- *   - Toutes les requêtes ajoutent X-Requested-With: XMLHttpRequest (SEC-05 CSRF)
- *   - Les tokens JWT ne sont jamais manipulés ici (gérés par le serveur via cookie httpOnly)
- *   - Validation extension + taille côté client (pré-filtre) ; la validation magic bytes
- *     reste côté serveur (SEC-02)
- *
- * @module dashboard-paiement
- * @see src/routes/api-paiement.ts
- */
+// MonMenu — Dashboard restaurant (v1.7.0 — fix navigation + bouton retour + notifications)
+//
+// CHANGELOG v1.7.0 :
+//   1. FIX Navigation — Les boutons de la sidebar ne faisaient rien : les
+//      liens <a> du menu utilisent href="/dashboard/xxx" mais le handler
+//      click ne parsait que le dernier segment. Corrigé + popstate ajouté
+//      pour que le bouton "Précédent" du navigateur fonctionne.
+//   2. AJOUT — Bouton Retour (#btn-retour) dans le header : visible sur
+//      toutes les sections sauf "commandes" (accueil). Clic → revient à
+//      "commandes" via navigateTo() + history.back() si disponible.
+//   3. FIX — showModal() et closeModal() complétées (fichier tronqué).
+//   4. FIX — escHtml() et escJs() ajoutées si manquantes.
+//   5. AJOUT — Cloche notifications (#btn-notif) + badge (#notif-badge) :
+//      initNotifBadge() appelée au chargement pour compter les non lues.
+//   6. FIX — initDashboard() charge le profil dès le départ pour hydrater
+//      tenantData (données réelles depuis l'API).
+//
 'use strict';
 
-// ─── Constantes ──────────────────────────────────────────────────────────────
-const PAIEMENT_API = '/api/v1/paiement';
-const PLANS_API    = '/api/v1/plans';
-const MAX_TAILLE_FICHIER = 5 * 1024 * 1024; // 5 Mo
-const EXTENSIONS_VALIDES = ['.jpg', '.jpeg', '.png'];
-const MIME_VALIDES = ['image/jpeg', 'image/png'];
-// FIX-1 : SLA annoncé au client (48h) distinct de la fenêtre technique (72h)
-const SLA_ADMIN_H = 48;
-const FENETRE_TOLERANCE_H = 72;
+let currentSection = 'commandes';
+let currentFilter = null;
+// authToken conservé pour compatibilité interne mais toujours null (cookie httpOnly utilisé)
+let authToken = null;
+let tenantData = null;
+let commandesInterval = null;
 
-// ─── Utilitaires ─────────────────────────────────────────────────────────────
+// §WhatsApp — Registre des commandes actuellement affichées (id → objet
+// commande complet), pour pouvoir construire le message WhatsApp de
+// confirmation sans repasser par une requête réseau ni exposer des données
+// sensibles dans des attributs onclick="..." (évite les soucis d'échappement
+// avec les apostrophes/guillemets dans les noms de clients).
+let _commandeRegistry = {};
 
-function esc(str) {
-  return String(str ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;')
-    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
+// §2 — Supabase Realtime : variables de gestion de la connexion
+let _supabaseClient = null;
+let _realtimeChannel = null;
+let _realtimeFallbackInterval = null; // fallback polling 2 min si Realtime échoue
 
-function formatDate(iso) {
-  if (!iso) return '—';
-  return new Date(iso).toLocaleDateString('fr-FR', {
-    day: '2-digit', month: 'short', year: 'numeric',
-    hour: '2-digit', minute: '2-digit'
-  });
-}
-
-function formatMontant(val) {
-  if (val == null) return '—';
-  return Number(val).toLocaleString('fr-FR') + ' FCFA';
-}
-
-/** Calcule le pourcentage de progression d'un délai entre deux dates */
-function progressionDelai(debut, fin) {
-  const now = Date.now();
-  const d = new Date(debut).getTime();
-  const f = new Date(fin).getTime();
-  if (now >= f) return 100;
-  if (now <= d) return 0;
-  return Math.round(((now - d) / (f - d)) * 100);
-}
-
-/** Retourne les heures restantes (peut être négatif si dépassé) */
-function heuresRestantes(isoFin) {
-  return Math.ceil((new Date(isoFin).getTime() - Date.now()) / 3600000);
-}
-
-function apiCallPaiement(path, opts = {}) {
-  const fetchFn = window.fetchAvecSession || fetch; // fallback si auth-fetch.js absent
-  return fetchFn(PAIEMENT_API + path, {
-    credentials: 'include',
-    headers: {
-      'X-Requested-With': 'XMLHttpRequest',
-      ...((opts.body && !(opts.body instanceof FormData))
-        ? { 'Content-Type': 'application/json' }
-        : {}),
-      ...(opts.headers || {})
-    },
-    ...opts
-  });
-}
-
-// ─── Bandeaux notifications (header dashboard) ────────────────────────────────
-
-async function initBandeauxPaiement() {
-  const container = document.getElementById('notification-bandeaux');
-  if (!container) return;
-
-  try {
-    const res = await apiCallPaiement('/notifications');
-    if (!res.ok) return;
-    const data = await res.json();
-
-    const notifs = (data.notifications || []).filter(n =>
-      ['info', 'warning', 'error', 'success'].includes(n.type)
-    );
-
-    if (!notifs.length) { container.innerHTML = ''; return; }
-
-    container.innerHTML = notifs.map(n => construireBandeau(n)).join('');
-
-    const requiresAction = notifs.some(n =>
-      n.type === 'error' || (n.type === 'warning' && n.action)
-    );
-    const badge = document.getElementById('badge-abonnement');
-    if (badge) {
-      badge.classList.toggle('hidden', !requiresAction);
-    }
-  } catch { /* Silencieux — le dashboard fonctionne sans bandeaux */ }
-}
-
-function construireBandeau(notif) {
-  const colorMap = {
-    info:    'bg-blue-50 border-blue-200 text-blue-800',
-    warning: 'bg-yellow-50 border-yellow-200 text-yellow-800',
-    error:   'bg-red-50 border-red-200 text-red-800',
-    success: 'bg-green-50 border-green-200 text-green-800',
-  };
-  const iconMap = {
-    info:    'fa-circle-info text-blue-500',
-    warning: 'fa-triangle-exclamation text-yellow-500',
-    error:   'fa-circle-xmark text-red-500',
-    success: 'fa-circle-check text-green-500',
-  };
-
-  const couleur = colorMap[notif.type] || colorMap.info;
-  const icone   = iconMap[notif.type]  || iconMap.info;
-
-  return `
-    <div class="border-b ${couleur} px-4 py-3 flex items-center gap-3 text-sm" role="alert">
-      <i class="fa-solid ${icone} flex-shrink-0 text-base"></i>
-      <div class="flex-1">
-        <span class="font-semibold">${esc(notif.titre || '')}</span>
-        ${notif.titre ? ' — ' : ''}${esc(notif.message)}
-      </div>
-      ${notif.action ? `<a href="${esc(notif.action.href)}" class="font-semibold underline hover:no-underline whitespace-nowrap ml-2">${esc(notif.action.label || 'Voir')}</a>` : ''}
-    </div>
-  `;
-}
-
-// ─── Section Abonnement (/dashboard/abonnement) ───────────────────────────────
-
-async function initSectionAbonnement() {
-  const container = document.getElementById('section-abonnement-content');
-  if (!container) return;
-
-  container.innerHTML = `
-    <div class="text-center py-16 text-gray-400">
-      <i class="fa-solid fa-circle-notch fa-spin text-3xl mb-3 block"></i>
-      <p class="text-sm">Chargement de votre abonnement...</p>
-    </div>
-  `;
-
-  try {
-    // FIX-5 : /reference ajouté en parallèle. C'est CET appel qui génère
-    // (et persiste) la référence de paiement si elle n'existe pas encore —
-    // avant cette correction, seul le flux d'onboarding /bienvenue
-    // l'appelait. Un compte n'ayant jamais traversé /bienvenue n'avait
-    // donc JAMAIS de référence, et le bloc correspondant restait invisible
-    // sur /dashboard/abonnement indéfiniment.
-    const [statutRes, historiqueRes, plansRes, moyensRes, referenceRes] = await Promise.all([
-      apiCallPaiement('/statut'),
-      apiCallPaiement('/historique'),
-      fetch(PLANS_API, {
-        credentials: 'include',
-        headers: { 'X-Requested-With': 'XMLHttpRequest' }
-      }),
-      fetch('/api/v1/moyens-paiement', {
-        credentials: 'include',
-        headers: { 'X-Requested-With': 'XMLHttpRequest' }
-      }).catch(() => null),
-      apiCallPaiement('/reference').catch(() => null)
-    ]);
-
-    const statut     = statutRes.ok     ? await statutRes.json()     : null;
-    const historique  = historiqueRes.ok ? await historiqueRes.json() : null;
-    const plansData   = plansRes.ok      ? await plansRes.json()      : null;
-    const moyensData  = moyensRes?.ok    ? await moyensRes.json()     : null;
-    const referenceData = referenceRes?.ok ? await referenceRes.json() : null;
-
-    _plansCache = plansData?.plans ?? [];
-    // FIX-2 : cache des moyens de paiement, utilisé par construireFormUpload()
-    // pour peupler le select "Méthode de paiement" dynamiquement, au lieu
-    // d'une liste codée en dur potentiellement désynchronisée de la base.
-    _moyensCache = moyensData?.moyens ?? [];
-
-    // Injecte la référence fraîchement générée/récupérée dans l'objet
-    // statut, pour que construireCarteStatut() l'affiche sans changement
-    // supplémentaire.
-    if (statut && referenceData?.reference) {
-      statut.reference_active = referenceData.reference;
-    }
-
-    container.innerHTML = '';
-
-    // ── Bloc 1 : Statut courant ──
-    if (statut) {
-      container.appendChild(construireCarteStatut(statut));
-    } else if (statutRes.status === 401) {
-      // FIX-4 : le 401 est le cas le plus fréquent (session expirée) — on
-      // le distingue clairement d'une vraie absence de données, au lieu de
-      // simplement ne rien afficher pendant que moyens/plans s'affichent.
-      const div = document.createElement('div');
-      div.className = 'bg-orange-50 border border-orange-200 rounded-2xl p-5 mb-4 text-sm text-orange-700';
-      div.innerHTML = `
-        <i class="fa-solid fa-lock mr-1.5"></i>
-        Votre session a expiré. <a href="/connexion" class="underline font-semibold">Reconnectez-vous</a> pour voir le détail de votre abonnement.
-      `;
-      container.appendChild(div);
-    }
-
-    // ── Bloc 2 : Moyens de paiement (affiché si données disponibles)
-    const moyens = moyensData?.moyens ?? [];
-    if (moyens.length > 0 || _plansCache.length > 0) {
-      const blocMoyens = construireBlocMoyensPaiement(moyens);
-      if (blocMoyens && blocMoyens.children?.length > 0) {
-        container.appendChild(blocMoyens);
-      } else if (moyens.length > 0) {
-        container.appendChild(blocMoyens);
-      }
-    }
-
-    // ── Bloc 3 : Historique ──
-    if (historique?.abonnements?.length) {
-      container.appendChild(construireHistorique(historique.abonnements));
-    }
-
-    // Cas d'erreur réelle uniquement (pas de statut ET pas d'historique ET pas de plans)
-    if (!statut && !historique?.abonnements?.length && !_plansCache.length && statutRes.status !== 401) {
-      container.innerHTML = `
-        <div class="text-center py-12 text-gray-400">
-          <i class="fa-solid fa-credit-card text-4xl mb-3 block"></i>
-          <p class="text-sm font-medium text-gray-600 mb-1">Impossible de charger votre abonnement.</p>
-          <p class="text-xs">Vérifiez votre connexion ou rechargez la page.</p>
-          <button onclick="initSectionAbonnement()" class="mt-4 text-red-600 hover:underline text-sm font-medium">Réessayer →</button>
-        </div>
-      `;
-    }
-  } catch (err) {
-    container.innerHTML = `<div class="p-4 text-red-600 text-sm">Erreur de chargement. <button onclick="initSectionAbonnement()" class="underline">Réessayer</button></div>`;
-  }
-}
-
-// Cache des plans pour éviter de recharger
-let _plansCache = [];
-// FIX-2 : cache des moyens de paiement actifs, source unique pour le bloc
-// d'affichage ET pour le select "Méthode de paiement" du formulaire.
-let _moyensCache = [];
-
-// FIX-2 : mapping explicite de classes Tailwind complètes (les classes
-// construites par concaténation `bg-${couleur}-50` ne sont PAS détectées
-// par le compilateur JIT de Tailwind en production).
-const PALETTE_ESSAI = {
-  orange: {
-    bg: 'bg-orange-50 border-orange-200',
-    icone: 'text-orange-500',
-    titre: 'text-orange-800',
-    texte: 'text-orange-700',
-    texteSecondaire: 'text-orange-600'
-  },
-  blue: {
-    bg: 'bg-blue-50 border-blue-200',
-    icone: 'text-blue-500',
-    titre: 'text-blue-800',
-    texte: 'text-blue-700',
-    texteSecondaire: 'text-blue-600'
-  }
+// Jours de la semaine pour l'éditeur d'horaires (PDV + réutilisé ailleurs si besoin)
+const JOURS_SEMAINE = ['lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche'];
+const JOURS_LABELS = {
+  lundi: 'Lundi', mardi: 'Mardi', mercredi: 'Mercredi', jeudi: 'Jeudi',
+  vendredi: 'Vendredi', samedi: 'Samedi', dimanche: 'Dimanche'
 };
 
-function construireCarteStatut(s) {
-  const div = document.createElement('div');
-  div.className = 'space-y-4 mb-6';
+// ==============================
+// UTILITAIRES SÉCURITÉ
+// ==============================
+function escHtml(str) {
+  if (str === null || str === undefined) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
 
-  const abonnement = s.abonnement;
-  const statutAbonnement = abonnement?.statut ?? null;
-  const statutTenant = s.statut_tenant;
+function escJs(str) {
+  if (str === null || str === undefined) return '';
+  return String(str)
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r')
+    .replace(/</g, '\\u003C')
+    .replace(/>/g, '\\u003E');
+}
 
-  let statutHtml = '';
-  let actionHtml = '';
-  let upgradeHtml = '';
-
-  // ── État 'en_attente_paiement_initial' ──
-  if (statutTenant === 'en_attente_paiement_initial') {
-    const planNom = s.plan_initial_nom || '—';
-    const planPrix = s.plan_initial_prix_mensuel;
-    const planPrixStr = planPrix != null ? Number(planPrix).toLocaleString('fr-FR') + ' FCFA/mois' : '—';
-
-    statutHtml = `
-      <div class="bg-amber-50 border border-amber-200 rounded-2xl p-5">
-        <div class="flex items-center gap-3 mb-3">
-          <i class="fa-solid fa-clock text-amber-500 text-xl"></i>
-          <div>
-            <span class="font-bold text-amber-800">En attente de votre premier paiement</span>
-            <p class="text-xs text-amber-600 mt-0.5">Votre compte est créé — soumettez votre preuve pour accéder au dashboard.</p>
-          </div>
-        </div>
-        <div class="bg-white/70 rounded-xl px-4 py-3 mb-3">
-          <p class="text-sm font-semibold text-gray-800 mb-1">
-            <i class="fa-solid fa-tag text-amber-400 mr-1.5"></i>
-            Plan choisi : <span class="text-amber-700">${esc(planNom)}</span>
-          </p>
-          <p class="text-sm text-gray-600">Montant mensuel : <strong>${esc(planPrixStr)}</strong></p>
-        </div>
-        <p class="text-xs text-amber-700">
-          <i class="fa-solid fa-circle-info mr-1"></i>
-          Effectuez le paiement en utilisant la référence ci-dessous et uploadez votre reçu.
-          Votre accès complet sera débloqué et maintenu pendant ${FENETRE_TOLERANCE_H}h le temps de la vérification.
-        </p>
-      </div>
-    `;
-  } else if (statutAbonnement === 'actif') {
-    upgradeHtml = `
-      <div class="mt-3">
-        <button onclick="ouvrirModalChangementPlan()"
-          class="text-sm text-red-600 hover:text-red-800 font-medium underline hover:no-underline flex items-center gap-1.5">
-          <i class="fa-solid fa-arrows-rotate text-xs"></i>
-          Changer de plan (upgrade / downgrade)
+// ==============================
+// MODAL UTILITAIRES (COMPLÈTE)
+// ==============================
+function showModal(titre, contenu) {
+  let modal = document.getElementById('dash-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'dash-modal';
+    modal.className = 'fixed inset-0 z-50';
+    document.body.appendChild(modal);
+  }
+  modal.innerHTML = `
+    <div class="absolute inset-0 bg-black/50" onclick="closeModal()"></div>
+    <div class="absolute inset-x-4 bottom-0 sm:inset-auto sm:top-1/2 sm:left-1/2 sm:-translate-x-1/2 sm:-translate-y-1/2 bg-white rounded-2xl sm:w-96 shadow-2xl max-h-[90vh] overflow-y-auto">
+      <div class="flex items-center justify-between px-5 py-4 border-b border-gray-100 sticky top-0 bg-white z-10">
+        <h3 class="font-bold text-gray-900">${escHtml(titre)}</h3>
+        <button onclick="closeModal()" class="p-1.5 text-gray-400 hover:text-gray-700 rounded-lg hover:bg-gray-100 transition-colors" aria-label="Fermer">
+          <i class="fa-solid fa-xmark"></i>
         </button>
       </div>
-    `;
+      <div class="p-5">${contenu}</div>
+    </div>`;
+  modal.classList.remove('hidden');
+  // Fermer avec Échap
+  document.addEventListener('keydown', _modalEscHandler);
+}
 
-    statutHtml = `
-      <div class="bg-green-50 border border-green-200 rounded-2xl p-5">
-        <div class="flex items-center gap-3 mb-2">
-          <i class="fa-solid fa-circle-check text-green-500 text-xl"></i>
-          <span class="font-bold text-green-800">Abonnement actif</span>
-        </div>
-        <p class="text-sm text-green-700">Plan : <strong>${esc(abonnement?.plan_nom || s.plan_initial_nom || '—')}</strong></p>
-        <p class="text-sm text-green-700">Expire le : <strong>${formatDate(abonnement?.date_fin)}</strong></p>
-        <p class="text-xs text-green-600 mt-1">
-          <i class="fa-solid fa-rotate mr-1"></i>Périodicité : mensuel
-        </p>
-        ${upgradeHtml}
-      </div>
-    `;
-  } else if (statutAbonnement === 'en_attente_confirmation') {
-    const deadline = abonnement?.delai_confirmation_expire_le;
-    const hR  = deadline ? heuresRestantes(deadline) : null;
-    const soumisLe = abonnement?.soumis_le;
-    const pct = (soumisLe && deadline) ? progressionDelai(soumisLe, deadline) : 0;
-    const urgent = hR !== null && hR < 12;
+function closeModal() {
+  const modal = document.getElementById('dash-modal');
+  if (modal) {
+    modal.classList.add('hidden');
+    modal.innerHTML = '';
+  }
+  document.removeEventListener('keydown', _modalEscHandler);
+}
 
-    statutHtml = `
-      <div class="bg-blue-50 border border-blue-200 rounded-2xl p-5">
-        <div class="flex items-center gap-3 mb-3">
-          <i class="fa-solid fa-clock text-blue-500 text-xl"></i>
-          <div>
-            <span class="font-bold text-blue-800">Paiement en cours de vérification</span>
-            <p class="text-xs text-blue-600 mt-0.5">Soumis le ${formatDate(soumisLe)}</p>
-          </div>
-        </div>
-        ${hR !== null ? `
-        <div class="mb-3">
-          <div class="flex items-center justify-between text-xs text-blue-600 mb-1">
-            <span>Fenêtre d'accès (${FENETRE_TOLERANCE_H}h max)</span>
-            <span class="${urgent ? 'text-orange-600 font-bold' : ''}">${hR > 0 ? `${hR}h restantes` : 'Délai dépassé'}</span>
-          </div>
-          <div class="h-2 bg-blue-100 rounded-full overflow-hidden">
-            <div class="h-full rounded-full transition-all ${pct > 80 ? 'bg-orange-500' : 'bg-blue-500'}" style="width: ${pct}%"></div>
-          </div>
-        </div>` : ''}
-        <p class="text-xs text-blue-600">
-          <i class="fa-solid fa-circle-info mr-1"></i>
-          Notre équipe s'engage à confirmer votre paiement sous ${SLA_ADMIN_H}h.
-          Votre accès complet reste actif pendant ${FENETRE_TOLERANCE_H}h à partir de la soumission,
-          le temps que la vérification se termine.
-        </p>
-        ${abonnement?.reference_paiement ? `
-        <p class="text-xs text-blue-500 mt-2">
-          <i class="fa-solid fa-hashtag mr-1"></i>
-          Référence : <code class="font-mono font-bold">${esc(abonnement.reference_paiement)}</code>
-        </p>` : ''}
-      </div>
-    `;
-  } else if (statutTenant === 'essai' && s.jours_essai_restants !== null) {
-    const jours = s.jours_essai_restants;
-    // FIX-2 : palette figée (classes Tailwind complètes), plus de concaténation dynamique
-    const p = jours <= 2 ? PALETTE_ESSAI.orange : PALETTE_ESSAI.blue;
-    statutHtml = `
-      <div class="${p.bg} rounded-2xl p-5">
-        <div class="flex items-center gap-3 mb-2">
-          <i class="fa-solid fa-hourglass-half ${p.icone} text-xl"></i>
-          <span class="font-bold ${p.titre}">Période d'essai</span>
-        </div>
-        <p class="text-sm ${p.texte}">
-          ${jours > 0
-            ? `Il vous reste <strong>${jours} jour(s)</strong> d'essai gratuit.`
-            : '<strong>Votre période d\'essai est terminée.</strong>'}
-        </p>
-        <p class="text-sm ${p.texteSecondaire} mt-1">
-          Soumettez une preuve de paiement pour activer votre abonnement.
-        </p>
-      </div>
-    `;
+function _modalEscHandler(e) {
+  if (e.key === 'Escape') closeModal();
+}
+
+// ==============================
+// GESTION DU BOUTON RETOUR
+// ==============================
+// Sections qui affichent le bouton retour (toutes sauf l'accueil "commandes")
+const SECTIONS_AVEC_RETOUR = ['menu','statistiques','livreurs','qrcode','apparence','parametres','codes-promo','pdv','abonnement'];
+
+function _updateBtnRetour(section) {
+  const btn = document.getElementById('btn-retour');
+  if (!btn) return;
+  if (SECTIONS_AVEC_RETOUR.includes(section)) {
+    btn.classList.remove('hidden');
   } else {
-    statutHtml = `
-      <div class="bg-orange-50 border border-orange-200 rounded-2xl p-5">
-        <div class="flex items-center gap-3 mb-2">
-          <i class="fa-solid fa-triangle-exclamation text-orange-500 text-xl"></i>
-          <span class="font-bold text-orange-800">Aucun abonnement actif</span>
-        </div>
-        <p class="text-sm text-orange-700 mb-4">
-          Effectuez un paiement et soumettez votre preuve pour activer votre restaurant.
-        </p>
-      </div>
-    `;
+    btn.classList.add('hidden');
+  }
+}
+
+function retourAccueil() {
+  navigateTo('commandes');
+  history.pushState({}, '', '/dashboard/commandes');
+}
+
+// ==============================
+// SUPABASE REALTIME
+// ==============================
+function initRealtimeCommandes(tenantId) {
+  const supabaseUrl = window.__SUPABASE_URL__;
+  const supabaseAnonKey = window.__SUPABASE_ANON_KEY__;
+
+  if (!supabaseUrl || !supabaseAnonKey || typeof window.supabase === 'undefined') {
+    console.warn('[Realtime] Supabase JS ou clés indisponibles — fallback polling activé');
+    _startFallbackPolling();
+    return;
   }
 
-  // ── Bloc référence de paiement ──
-  let referenceHtml = '';
-  if (s.reference_active) {
-    referenceHtml = `
-      <div class="bg-white border border-gray-200 rounded-2xl p-5">
-        <h3 class="font-bold text-gray-900 mb-1 text-sm flex items-center gap-2">
-          <i class="fa-solid fa-hashtag text-gray-400"></i>
-          Référence de paiement active
-        </h3>
-        <p class="text-xs text-gray-400 mb-3">
-          Mentionnez cette référence dans votre virement pour faciliter la vérification.
+  if (!_supabaseClient) {
+    _supabaseClient = window.supabase.createClient(supabaseUrl, supabaseAnonKey, {
+      realtime: { timeout: 30000 }
+    });
+  }
+
+  if (_realtimeChannel) {
+    _supabaseClient.removeChannel(_realtimeChannel);
+    _realtimeChannel = null;
+  }
+
+  _realtimeChannel = _supabaseClient
+    .channel('commandes-dashboard-' + tenantId)
+    .on(
+      'postgres_changes',
+      { event: 'INSERT', schema: 'public', table: 'commandes', filter: `tenant_id=eq.${tenantId}` },
+      (payload) => {
+        console.log('[Realtime] Nouvelle commande :', payload.new?.id);
+        _onNouvelleCommande(payload.new);
+      }
+    )
+    .on(
+      'postgres_changes',
+      { event: 'UPDATE', schema: 'public', table: 'commandes', filter: `tenant_id=eq.${tenantId}` },
+      (payload) => {
+        console.log('[Realtime] Commande mise à jour :', payload.new?.id, payload.new?.statut);
+        if (currentSection === 'commandes') fetchCommandes();
+      }
+    )
+    .subscribe((status, err) => {
+      if (status === 'SUBSCRIBED') {
+        console.log('[Realtime] Abonnement Realtime actif pour tenant', tenantId);
+        if (_realtimeFallbackInterval) {
+          clearInterval(_realtimeFallbackInterval);
+          _realtimeFallbackInterval = null;
+        }
+      } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+        console.warn('[Realtime] Erreur connexion Realtime (' + status + ') — fallback polling activé', err);
+        _startFallbackPolling();
+      }
+    });
+}
+
+function _onNouvelleCommande(commande) {
+  if (currentSection === 'commandes') fetchCommandes();
+  _afficherNotificationCommande(commande);
+  // Mettre à jour le badge notifications si le module est chargé
+  if (typeof rafraichirBadgeNotifs === 'function') rafraichirBadgeNotifs();
+}
+
+function _afficherNotificationCommande(commande) {
+  const toast = document.createElement('div');
+  toast.className = 'fixed top-4 right-4 z-50 bg-green-600 text-white px-5 py-3 rounded-xl shadow-lg flex items-center gap-3 animate-bounce';
+  toast.innerHTML = `<i class="fa-solid fa-bell"></i> <span>Nouvelle commande de <strong>${escHtml(commande?.client_nom || 'Client')}</strong> !</span>`;
+  document.body.appendChild(toast);
+  try {
+    const ctx = new AudioContext();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.frequency.value = 880;
+    gain.gain.setValueAtTime(0.3, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime + 0.4);
+  } catch {}
+  setTimeout(() => toast.remove(), 5000);
+}
+
+function _startFallbackPolling() {
+  if (_realtimeFallbackInterval) return;
+  _realtimeFallbackInterval = setInterval(() => {
+    if (currentSection === 'commandes') fetchCommandes();
+  }, 120000);
+}
+
+function teardownRealtime() {
+  if (_realtimeChannel && _supabaseClient) {
+    _supabaseClient.removeChannel(_realtimeChannel);
+    _realtimeChannel = null;
+  }
+  if (_realtimeFallbackInterval) {
+    clearInterval(_realtimeFallbackInterval);
+    _realtimeFallbackInterval = null;
+  }
+}
+
+// ==============================
+// INIT DASHBOARD
+// ==============================
+async function initDashboard() {
+  authToken = null;
+
+  // Charger les données tenant depuis l'API (données réelles)
+  try {
+    const res = await fetch('/api/v1/dashboard/profil', { credentials: 'include' });
+    if (res.ok) {
+      const profil = await res.json();
+      tenantData = profil;
+      try {
+        localStorage.setItem('monmenu_tenant', JSON.stringify({
+          id: profil.id, nom: profil.nom, slug: profil.slug,
+          couleur_primaire: profil.couleur_primaire,
+          couleur_secondaire: profil.couleur_secondaire
+        }));
+      } catch {}
+      const nameEl = document.getElementById('tenant-name');
+      if (nameEl) nameEl.textContent = profil.nom || 'Mon Restaurant';
+      const boutiqueLink = document.getElementById('boutique-link');
+      if (boutiqueLink && profil.slug) {
+        boutiqueLink.href = '/' + profil.slug;
+        boutiqueLink.classList.remove('hidden');
+      }
+    }
+  } catch {}
+
+  // Fallback localStorage si API non disponible
+  if (!tenantData) {
+    const tenantStr = localStorage.getItem('monmenu_tenant');
+    if (tenantStr) {
+      try { tenantData = JSON.parse(tenantStr); } catch {}
+    }
+    const nameEl = document.getElementById('tenant-name');
+    if (nameEl && tenantData) nameEl.textContent = tenantData.nom || 'Mon Restaurant';
+  }
+
+  // Déterminer la section à partir du chemin URL
+  const path = window.location.pathname;
+  let section = 'commandes';
+  if (path.includes('/menu')) section = 'menu';
+  else if (path.includes('/statistiques')) section = 'statistiques';
+  else if (path.includes('/livreurs')) section = 'livreurs';
+  else if (path.includes('/qrcode')) section = 'qrcode';
+  else if (path.includes('/codes-promo')) section = 'codes-promo';
+  else if (path.includes('/pdv')) section = 'pdv';
+  else if (path.includes('/apparence')) section = 'apparence';
+  else if (path.includes('/abonnement')) section = 'abonnement';
+  else if (path.includes('/parametres')) section = 'parametres';
+
+  navigateTo(section);
+
+  // Gérer les clics sur les liens de navigation
+  document.querySelectorAll('.nav-link').forEach(link => {
+    link.addEventListener('click', function(e) {
+      e.preventDefault();
+      const href = this.getAttribute('href') || '';
+      // Extraire la section du chemin complet (ex: /dashboard/menu → menu)
+      const parts = href.replace(/\/$/, '').split('/');
+      const seg = parts[parts.length - 1] || 'commandes';
+      const sectionName = seg === 'dashboard' ? 'commandes' : seg;
+      history.pushState({ section: sectionName }, '', href);
+      navigateTo(sectionName);
+      // Fermer la sidebar mobile
+      const sidebar = document.getElementById('sidebar');
+      const overlay = document.getElementById('sidebar-overlay');
+      if (sidebar) sidebar.classList.add('-translate-x-full');
+      if (overlay) overlay.classList.add('hidden');
+    });
+  });
+
+  // Écouter le bouton "Précédent/Suivant" du navigateur
+  window.addEventListener('popstate', function(e) {
+    const path = window.location.pathname;
+    let sec = 'commandes';
+    if (path.includes('/menu')) sec = 'menu';
+    else if (path.includes('/statistiques')) sec = 'statistiques';
+    else if (path.includes('/livreurs')) sec = 'livreurs';
+    else if (path.includes('/qrcode')) sec = 'qrcode';
+    else if (path.includes('/codes-promo')) sec = 'codes-promo';
+    else if (path.includes('/pdv')) sec = 'pdv';
+    else if (path.includes('/apparence')) sec = 'apparence';
+    else if (path.includes('/abonnement')) sec = 'abonnement';
+    else if (path.includes('/parametres')) sec = 'parametres';
+    navigateTo(sec);
+  });
+
+  // Initialiser le badge notifications si le module est chargé
+  if (typeof initNotifBadge === 'function') initNotifBadge();
+}
+
+function setActiveNavLink(section) {
+  document.querySelectorAll('.nav-link').forEach(link => {
+    link.classList.remove('bg-gray-800', 'text-white');
+    link.classList.add('text-gray-300');
+    const href = link.getAttribute('href') || '';
+    const parts = href.replace(/\/$/, '').split('/');
+    const seg = parts[parts.length - 1] || '';
+    if (seg === section || (section === 'commandes' && seg === 'commandes')) {
+      link.classList.add('bg-gray-800', 'text-white');
+      link.classList.remove('text-gray-300');
+    }
+  });
+}
+
+function navigateTo(section) {
+  if (commandesInterval) { clearInterval(commandesInterval); commandesInterval = null; }
+  if (currentSection === 'commandes' && section !== 'commandes') {
+    teardownRealtime();
+  }
+  currentSection = section;
+  setActiveNavLink(section);
+
+  // Mettre à jour le titre de la page
+  const title = document.getElementById('page-title');
+  const titles = {
+    commandes: 'Commandes',
+    menu: 'Gestion du menu',
+    statistiques: 'Statistiques',
+    livreurs: 'Livreurs',
+    qrcode: 'QR Code',
+    apparence: 'Apparence & Médias',
+    parametres: 'Paramètres',
+    'codes-promo': 'Codes promo',
+    pdv: 'Mon restaurant',
+    abonnement: 'Abonnement'
+  };
+  if (title) title.textContent = titles[section] || section;
+
+  // Afficher/masquer le bouton retour
+  _updateBtnRetour(section);
+
+  // Charger la section correspondante
+  switch (section) {
+    case 'commandes':    loadCommandes();    break;
+    case 'menu':         loadMenu();         break;
+    case 'statistiques': loadStatistiques(); break;
+    case 'livreurs':     loadLivreurs();     break;
+    case 'qrcode':       loadQRCode();       break;
+    case 'apparence':    loadApparence();    break;
+    case 'parametres':   loadParametres();   break;
+    case 'codes-promo':  loadCodesPromo();   break;
+    case 'pdv':          loadPdv();          break;
+    case 'abonnement':   loadAbonnement();   break;
+    default:             loadCommandes();    break;
+  }
+}
+
+function showAuthError() {
+  const content = document.getElementById('dashboard-content');
+  if (content) {
+    content.innerHTML = `<div class="bg-red-50 border border-red-100 rounded-xl p-6 text-center">
+      <i class="fa-solid fa-lock text-2xl text-red-400 mb-3 block"></i>
+      <p class="font-semibold text-red-700">Session expirée</p>
+      <p class="text-sm text-red-500 mt-1">Veuillez vous reconnecter.</p>
+      <a href="/connexion" class="mt-4 inline-block bg-red-600 text-white text-sm font-semibold px-5 py-2.5 rounded-xl hover:bg-red-700">Se connecter</a>
+    </div>`;
+  }
+}
+
+// ==============================
+// SECTION ABONNEMENT
+// ==============================
+function loadAbonnement() {
+  const content = document.getElementById('dashboard-content');
+  if (!content) return;
+  content.innerHTML = `<div id="section-abonnement-content" class="max-w-2xl"></div>`;
+
+  if (typeof initSectionAbonnement === 'function') {
+    initSectionAbonnement();
+  } else {
+    content.innerHTML = `
+      <div class="bg-red-50 border border-red-100 rounded-xl p-4 text-center text-sm text-red-600">
+        <i class="fa-solid fa-circle-exclamation mr-1"></i>
+        Module de paiement indisponible (dashboard-paiement.js non chargé).
+      </div>`;
+  }
+}
+
+// ==============================
+// SECTION COMMANDES
+// ==============================
+async function loadCommandes() {
+  const content = document.getElementById('dashboard-content');
+  if (!content) return;
+  content.innerHTML = `
+    <div class="flex flex-wrap gap-2 mb-5">
+      <button onclick="filtrerCommandes(null)" class="statut-filter-btn active px-3 py-1.5 rounded-lg text-xs font-semibold bg-red-600 text-white">Toutes</button>
+      ${['en_attente','confirmee','en_preparation','en_livraison','livree','annulee'].map(s =>
+        `<button onclick="filtrerCommandes('${s}')" class="statut-filter-btn px-3 py-1.5 rounded-lg text-xs font-semibold border border-gray-200 text-gray-600 hover:border-red-300 hover:text-red-600 transition-colors">${s.replace(/_/g,' ')}</button>`
+      ).join('')}
+      <button onclick="loadCommandes()" class="ml-auto flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-700 border border-gray-200 rounded-lg px-3 py-1.5 transition-colors">
+        <i class="fa-solid fa-rotate-right"></i> Actualiser
+      </button>
+      <button onclick="exportCommandes()" class="flex items-center gap-1.5 text-xs text-green-700 hover:text-green-800 border border-green-200 rounded-lg px-3 py-1.5 transition-colors bg-green-50 hover:bg-green-100">
+        <i class="fa-solid fa-file-csv"></i> Export CSV
+      </button>
+    </div>
+    <div id="commandes-list">
+      <div class="text-center py-12 text-gray-400">
+        <i class="fa-solid fa-circle-notch fa-spin text-2xl mb-3 block"></i>
+        <p class="text-sm">Chargement...</p>
+      </div>
+    </div>`;
+  await fetchCommandes();
+
+  // §2 — Supabase Realtime
+  let tenantId = tenantData?.id ?? null;
+  if (!tenantId) {
+    try {
+      const res = await fetch('/api/v1/dashboard/profil', { credentials: 'include' });
+      if (res.ok) {
+        const profil = await res.json();
+        tenantData = profil;
+        tenantId = profil.id;
+        try {
+          localStorage.setItem('monmenu_tenant', JSON.stringify({
+            id: profil.id, nom: profil.nom, slug: profil.slug,
+            couleur_primaire: profil.couleur_primaire,
+            couleur_secondaire: profil.couleur_secondaire
+          }));
+        } catch {}
+        const nameEl = document.getElementById('tenant-name');
+        if (nameEl) nameEl.textContent = profil.nom || 'Mon Restaurant';
+      }
+    } catch {}
+  }
+
+  if (tenantId) {
+    initRealtimeCommandes(tenantId);
+  } else {
+    _startFallbackPolling();
+  }
+}
+
+async function fetchCommandes() {
+  const listEl = document.getElementById('commandes-list');
+  if (!listEl) return;
+  try {
+    const url = '/api/v1/dashboard/commandes' + (currentFilter ? '?statut=' + currentFilter : '');
+    const res = await fetch(url, { credentials: 'include' });
+    if (res.status === 401) { showAuthError(); return; }
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    renderCommandes(data.commandes || [], listEl, data.total || 0);
+  } catch {
+    listEl.innerHTML = `<div class="bg-red-50 border border-red-100 rounded-xl p-4 text-center text-sm text-red-600">
+      <i class="fa-solid fa-circle-exclamation mr-1"></i> Erreur de chargement.
+      <button onclick="fetchCommandes()" class="underline ml-1">Réessayer</button>
+    </div>`;
+  }
+}
+
+function renderCommandes(commandes, container, total) {
+  _commandeRegistry = {};
+  commandes.forEach(cmd => { _commandeRegistry[cmd.id] = cmd; });
+
+  if (!commandes.length) {
+    container.innerHTML = `<div class="text-center py-16 text-gray-400">
+      <i class="fa-regular fa-clipboard text-5xl mb-3 block opacity-40"></i>
+      <p class="font-medium text-gray-500">Aucune commande ${currentFilter ? 'avec ce statut' : ''}</p>
+      <p class="text-xs mt-1">Les nouvelles commandes apparaissent ici automatiquement.</p>
+    </div>`;
+    return;
+  }
+  const STATUTS = {
+    en_attente:     { label:'En attente',     icon:'fa-clock',        cls:'statut-en_attente' },
+    confirmee:      { label:'Confirmée',      icon:'fa-circle-check', cls:'statut-confirmee' },
+    en_preparation: { label:'En préparation', icon:'fa-fire-burner',  cls:'statut-en_preparation' },
+    en_livraison:   { label:'En livraison',   icon:'fa-motorcycle',   cls:'statut-en_livraison' },
+    livree:         { label:'Livrée',         icon:'fa-check-double', cls:'statut-livree' },
+    annulee:        { label:'Annulée',        icon:'fa-xmark',        cls:'statut-annulee' }
+  };
+  const totalBadge = total > commandes.length
+    ? `<p class="text-xs text-gray-400 mb-3">${total} commande(s) au total — 50 premières affichées</p>`
+    : '';
+  container.innerHTML = totalBadge + commandes.map(cmd => {
+    const statut = STATUTS[cmd.statut] || { label: cmd.statut, icon: 'fa-circle', cls: '' };
+    const items = typeof cmd.items_json === 'string' ? JSON.parse(cmd.items_json) : (cmd.items_json || []);
+    const dateStr = new Date(cmd.created_at).toLocaleString('fr-FR', { day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' });
+    let metadata = {};
+    try { if (cmd.metadata) metadata = JSON.parse(cmd.metadata); } catch {}
+    const remiseInfo = metadata.remise_promo > 0
+      ? `<span class="text-xs text-green-600 bg-green-50 px-2 py-0.5 rounded">-${(metadata.remise_promo||0).toLocaleString('fr-FR')} FCFA promo</span>`
+      : '';
+    const actions = [];
+    if (cmd.statut === 'en_attente') {
+      actions.push(`<button onclick="changerStatut('${cmd.id}','confirmee')" class="bg-blue-600 text-white text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-blue-700"><i class="fa-solid fa-check mr-1"></i>Confirmer</button>`);
+      actions.push(`<button onclick="changerStatut('${cmd.id}','annulee')" class="border border-red-200 text-red-600 text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-red-50">Annuler</button>`);
+    }
+    if (cmd.statut === 'confirmee') {
+      actions.push(`<button onclick="choisirLivreurEtPreparer('${cmd.id}')" class="bg-orange-500 text-white text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-orange-600"><i class="fa-solid fa-fire-burner mr-1"></i>Préparer</button>`);
+    }
+    if (cmd.statut === 'en_preparation') {
+      actions.push(`<button onclick="changerStatut('${cmd.id}','en_livraison')" class="bg-purple-600 text-white text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-purple-700"><i class="fa-solid fa-motorcycle mr-1"></i>En livraison</button>`);
+    }
+    if (cmd.statut === 'en_livraison') {
+      actions.push(`<button onclick="changerStatut('${cmd.id}','livree')" class="bg-green-600 text-white text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-green-700"><i class="fa-solid fa-check-double mr-1"></i>Livrée</button>`);
+    }
+    return `<div class="bg-white border border-gray-100 rounded-xl p-4 hover:shadow-sm transition-shadow mb-3">
+      <div class="flex items-start justify-between gap-3 mb-2">
+        <div>
+          <div class="flex items-center gap-2 mb-0.5">
+            <span class="font-bold text-gray-900">${escHtml(cmd.client_nom)}</span>
+            <span class="text-xs text-gray-400">${dateStr}</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="text-xs text-gray-400 font-mono">#${cmd.id ? cmd.id.slice(0,8).toUpperCase() : '—'}</span>
+            ${cmd.client_telephone ? `<a href="tel:${escHtml(cmd.client_telephone)}" class="text-xs text-blue-600 hover:underline"><i class="fa-solid fa-phone text-xs mr-0.5"></i>${escHtml(cmd.client_telephone)}</a>` : ''}
+          </div>
+        </div>
+        <span class="statut-badge ${statut.cls} flex-shrink-0"><i class="fa-solid ${statut.icon} text-xs"></i> ${statut.label}</span>
+      </div>
+      <div class="text-xs text-gray-600 bg-gray-50 rounded-lg px-3 py-2 mb-3">${items.map(i => `<span>${escHtml(i.nom)} ×${i.quantite}</span>`).join(' · ')}</div>
+      ${cmd.client_adresse ? `<div class="text-xs text-gray-500 mb-2"><i class="fa-solid fa-location-dot mr-1 text-gray-300"></i>${escHtml(cmd.client_adresse)}</div>` : ''}
+      ${cmd.notes ? `<div class="text-xs text-orange-600 bg-orange-50 rounded-lg px-3 py-1.5 mb-2"><i class="fa-solid fa-comment mr-1"></i>${escHtml(cmd.notes)}</div>` : ''}
+      <div class="flex items-center justify-between flex-wrap gap-2">
+        <div class="flex items-center gap-2 flex-wrap">
+          <div class="font-bold text-sm">${(cmd.montant_total||0).toLocaleString('fr-FR')} FCFA</div>
+          ${remiseInfo}
+          ${cmd.frais_livraison > 0 ? `<span class="text-xs text-gray-400">+${(cmd.frais_livraison).toLocaleString('fr-FR')} liv.</span>` : ''}
+        </div>
+        <div class="flex gap-2 flex-wrap">${actions.join('')}</div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// §WhatsApp
+function formatWhatsAppNumber(numeroRaw) {
+  let n = (numeroRaw || '').replace(/[^0-9+]/g, '');
+  if (n.startsWith('00')) n = '+' + n.slice(2);
+  return n.replace(/\D/g, '');
+}
+
+function construireMessageConfirmationClient(cmd) {
+  const items = typeof cmd.items_json === 'string' ? JSON.parse(cmd.items_json) : (cmd.items_json || []);
+  const lignes = items.map(i => `  - ${i.nom} x${i.quantite}`).join('\n');
+  const nomRestaurant = (tenantData && tenantData.nom) ? tenantData.nom : 'notre restaurant';
+  const lienSuivi = window.location.origin + '/suivi/' + cmd.token_suivi;
+
+  let msg = `Bonjour ${cmd.client_nom},\n\n`;
+  msg += `Votre commande chez *${nomRestaurant}* est *confirmée* ✅\n\n`;
+  msg += `*Récapitulatif :*\n${lignes}\n\n`;
+  msg += `*Total :* ${(cmd.montant_total || 0).toLocaleString('fr-FR')} FCFA\n`;
+  if (cmd.frais_livraison > 0) msg += `*Frais de livraison :* ${(cmd.frais_livraison).toLocaleString('fr-FR')} FCFA\n`;
+  msg += `\nSuivez votre commande en temps réel ici :\n${lienSuivi}`;
+  return msg;
+}
+
+function genererLienWhatsAppClient(numero, message) {
+  const numeroNettoye = formatWhatsAppNumber(numero);
+  return `https://wa.me/${numeroNettoye}?text=${encodeURIComponent(message)}`;
+}
+
+// ==============================
+// ASSIGNATION LIVREUR
+// ==============================
+async function choisirLivreurEtPreparer(commandeId) {
+  let livreurs = [];
+  try {
+    const res = await fetch('/api/v1/dashboard/livreurs', { credentials: 'include' });
+    if (res.ok) {
+      const d = await res.json();
+      livreurs = (d.livreurs || []).filter(l => l.actif);
+    }
+  } catch {}
+
+  if (!livreurs.length) {
+    changerStatut(commandeId, 'en_preparation');
+    return;
+  }
+
+  showModal('Mettre en préparation', `
+    <form onsubmit="submitChoixLivreur(event,'${commandeId}')" class="space-y-4">
+      <div>
+        <label class="block text-sm font-semibold text-gray-700 mb-1.5">Assigner un livreur (optionnel)</label>
+        <select id="choix-livreur" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200">
+          <option value="">Ne pas assigner maintenant</option>
+          ${livreurs.map(l => `<option value="${l.id}">${escHtml(l.nom)}</option>`).join('')}
+        </select>
+        <p class="text-xs text-gray-400 mt-1">
+          Si vous assignez un livreur, un message WhatsApp avec l'adresse, l'itinéraire (Maps/Waze)
+          et le montant à encaisser lui sera envoyé automatiquement.
         </p>
-        <div class="flex items-center gap-3 bg-gray-50 rounded-xl px-4 py-3">
-          <code class="font-mono font-bold text-gray-800 text-base tracking-wider flex-1">${esc(s.reference_active)}</code>
-          <button onclick="copierTexte('${esc(s.reference_active)}', this)"
-            class="text-xs border border-gray-200 hover:border-gray-400 px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1.5 text-gray-600 hover:text-gray-900">
-            <i class="fa-solid fa-copy"></i> Copier
+      </div>
+      <button type="submit" class="w-full bg-orange-500 text-white font-bold py-3 rounded-xl hover:bg-orange-600">
+        <i class="fa-solid fa-fire-burner mr-1.5"></i> Mettre en préparation
+      </button>
+    </form>`);
+}
+
+function submitChoixLivreur(e, commandeId) {
+  e.preventDefault();
+  const livreurId = document.getElementById('choix-livreur')?.value || null;
+  closeModal();
+  changerStatut(commandeId, 'en_preparation', livreurId);
+}
+
+async function changerStatut(commandeId, newStatut, livreurId) {
+  const labels = {
+    confirmee: 'Confirmer',
+    en_preparation: 'Mettre en préparation',
+    en_livraison: 'Marquer en livraison',
+    livree: 'Marquer comme livrée',
+    annulee: 'Annuler'
+  };
+  if (!confirm((labels[newStatut] || newStatut) + ' cette commande ?')) return;
+
+  const doitNotifierClient = newStatut === 'confirmee';
+  const doitNotifierLivreur = newStatut === 'en_preparation' && !!livreurId;
+
+  let whatsappWindowClient = null;
+  let whatsappWindowLivreur = null;
+  if (doitNotifierClient) whatsappWindowClient = window.open('about:blank', '_blank');
+  if (doitNotifierLivreur) whatsappWindowLivreur = window.open('about:blank', '_blank');
+
+  try {
+    const body = { statut: newStatut };
+    if (livreurId) body.livreur_id = livreurId;
+
+    const res = await fetch('/api/v1/dashboard/commandes/' + commandeId + '/statut', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+      credentials: 'include',
+      body: JSON.stringify(body)
+    });
+
+    if (res.ok) {
+      const data = await res.json().catch(() => ({}));
+
+      if (doitNotifierClient) {
+        const cmd = _commandeRegistry[commandeId];
+        if (cmd && cmd.client_telephone) {
+          const message = construireMessageConfirmationClient(cmd);
+          const lien = genererLienWhatsAppClient(cmd.client_telephone, message);
+          if (whatsappWindowClient) whatsappWindowClient.location.href = lien;
+          else window.open(lien, '_blank');
+        } else if (whatsappWindowClient) {
+          whatsappWindowClient.close();
+        }
+      }
+
+      if (doitNotifierLivreur) {
+        if (data.lien_whatsapp_livreur) {
+          if (whatsappWindowLivreur) whatsappWindowLivreur.location.href = data.lien_whatsapp_livreur;
+          else window.open(data.lien_whatsapp_livreur, '_blank');
+        } else if (whatsappWindowLivreur) {
+          whatsappWindowLivreur.close();
+        }
+      }
+
+      await fetchCommandes();
+    } else {
+      if (whatsappWindowClient) whatsappWindowClient.close();
+      if (whatsappWindowLivreur) whatsappWindowLivreur.close();
+      alert('Erreur lors de la mise à jour du statut.');
+    }
+  } catch {
+    if (whatsappWindowClient) whatsappWindowClient.close();
+    if (whatsappWindowLivreur) whatsappWindowLivreur.close();
+    alert('Erreur réseau.');
+  }
+}
+
+function filtrerCommandes(statut) {
+  currentFilter = statut;
+  document.querySelectorAll('.statut-filter-btn').forEach(b => {
+    b.classList.remove('bg-red-600', 'text-white');
+    b.classList.add('border', 'border-gray-200', 'text-gray-600');
+  });
+  const activeBtn = statut
+    ? document.querySelector(`[onclick="filtrerCommandes('${statut}')"]`)
+    : document.querySelector(`[onclick="filtrerCommandes(null)"]`);
+  if (activeBtn) {
+    activeBtn.classList.add('bg-red-600', 'text-white');
+    activeBtn.classList.remove('border', 'border-gray-200', 'text-gray-600');
+  }
+  fetchCommandes();
+}
+
+async function exportCommandes() {
+  const dateDebut = new Date(Date.now() - 30 * 86400000).toISOString().split('T')[0];
+  const dateFin = new Date().toISOString().split('T')[0];
+  try {
+    const res = await fetch(`/api/v1/dashboard/commandes/export-csv?date_debut=${dateDebut}&date_fin=${dateFin}`, { credentials: 'include' });
+    if (!res.ok) { alert('Erreur export.'); return; }
+    const blob = await res.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `commandes_${dateFin}.csv`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  } catch { alert('Erreur réseau.'); }
+}
+
+// ==============================
+// SECTION MENU
+// ==============================
+async function loadMenu() {
+  const content = document.getElementById('dashboard-content');
+  content.innerHTML = `<div class="text-center py-8"><i class="fa-solid fa-circle-notch fa-spin text-xl text-gray-400"></i></div>`;
+  try {
+    const res = await fetch('/api/v1/dashboard/menu', { credentials: 'include' });
+    if (!res.ok) throw new Error();
+    const data = await res.json();
+    renderMenuEditor(data.categories || [], content);
+  } catch {
+    content.innerHTML = '<p class="text-red-500 text-sm p-4">Erreur de chargement du menu.</p>';
+  }
+}
+
+function renderMenuEditor(categories, container) {
+  container.innerHTML = `
+    <div class="flex items-center justify-between mb-5">
+      <p class="text-sm text-gray-500">${categories.length} catégorie(s)</p>
+      <button onclick="showAddCategorieModal()" class="bg-red-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-red-700 transition-colors flex items-center gap-1.5">
+        <i class="fa-solid fa-plus text-xs"></i> Nouvelle catégorie
+      </button>
+    </div>
+    ${categories.length === 0 ? `
+      <div class="text-center py-16 border-2 border-dashed border-gray-200 rounded-2xl">
+        <i class="fa-solid fa-book-open text-4xl text-gray-200 mb-4 block"></i>
+        <p class="font-semibold text-gray-500 mb-2">Menu vide</p>
+        <p class="text-sm text-gray-400 mb-5">Commencez par créer votre première catégorie (ex: Entrées, Plats, Boissons).</p>
+        <button onclick="showAddCategorieModal()" class="bg-red-600 text-white text-sm font-semibold px-5 py-2.5 rounded-xl hover:bg-red-700">
+          <i class="fa-solid fa-plus mr-1.5"></i> Créer une catégorie
+        </button>
+      </div>` :
+    categories.map(cat => `
+      <div class="bg-white border border-gray-100 rounded-xl mb-4">
+        <div class="flex items-center justify-between px-5 py-3.5 border-b border-gray-50">
+          <div>
+            <h3 class="font-bold text-gray-900">${escHtml(cat.nom)}</h3>
+            ${cat.description ? `<p class="text-xs text-gray-400">${escHtml(cat.description)}</p>` : ''}
+          </div>
+          <div class="flex gap-2">
+            <button onclick="showAddProduitModal('${cat.id}')" class="text-xs bg-blue-50 text-blue-600 font-semibold px-3 py-1.5 rounded-lg hover:bg-blue-100 transition-colors">
+              <i class="fa-solid fa-plus mr-1"></i>Produit
+            </button>
+            <button onclick="showEditCategorieModal('${cat.id}','${escJs(cat.nom)}')" class="text-xs bg-gray-50 text-gray-600 font-semibold px-3 py-1.5 rounded-lg hover:bg-gray-100">
+              <i class="fa-solid fa-pen text-xs"></i>
+            </button>
+            <button onclick="supprimerCategorie('${cat.id}')" class="text-xs bg-red-50 text-red-500 font-semibold px-3 py-1.5 rounded-lg hover:bg-red-100">
+              <i class="fa-solid fa-trash text-xs"></i>
+            </button>
+          </div>
+        </div>
+        <div class="divide-y divide-gray-50">
+          ${(cat.produits||[]).length === 0 ? `<div class="px-5 py-4 text-xs text-gray-400 italic">Aucun produit.</div>` :
+          (cat.produits||[]).map(p => `
+            <div class="flex items-center gap-4 px-5 py-3 hover:bg-gray-50">
+              ${p.photo_url ? `<img src="${escHtml(p.photo_url)}" alt="${escHtml(p.nom)}" class="w-12 h-12 rounded-lg object-cover flex-shrink-0 border border-gray-100">` :
+                `<div class="w-12 h-12 bg-gray-100 rounded-lg flex items-center justify-center flex-shrink-0"><i class="fa-solid fa-utensils text-gray-300 text-sm"></i></div>`}
+              <div class="flex-1 min-w-0">
+                <div class="font-semibold text-sm text-gray-900 truncate">${escHtml(p.nom)}</div>
+                ${p.description ? `<div class="text-xs text-gray-400 truncate">${escHtml(p.description)}</div>` : ''}
+                <div class="text-xs font-bold text-gray-700 mt-0.5">${(p.prix||0).toLocaleString('fr-FR')} FCFA</div>
+              </div>
+              <div class="flex items-center gap-2 flex-shrink-0">
+                <span class="text-xs px-2 py-0.5 rounded-full cursor-pointer ${p.disponible ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}"
+                  onclick="toggleDisponible('${p.id}',${p.disponible?1:0})" title="${p.disponible?'Désactiver':'Activer'}">${p.disponible?'Dispo':'Indispo'}</span>
+                <button onclick="showEditProduitModal('${p.id}','${escJs(p.nom)}','${escJs(p.description||'')}',${p.prix},'${escJs(p.photo_url||'')}')" class="p-1.5 text-gray-400 hover:text-blue-600" title="Modifier">
+                  <i class="fa-solid fa-pen text-xs"></i>
+                </button>
+                <button onclick="supprimerProduit('${p.id}')" class="p-1.5 text-gray-400 hover:text-red-500" title="Supprimer">
+                  <i class="fa-solid fa-trash text-xs"></i>
+                </button>
+              </div>
+            </div>`).join('')}
+        </div>
+      </div>`).join('')}`;
+}
+
+// --- Catégories modals ---
+function showAddCategorieModal() {
+  showModal('Nouvelle catégorie', `
+    <form onsubmit="submitAddCategorie(event)" class="space-y-4">
+      <div>
+        <label class="block text-sm font-semibold text-gray-700 mb-1.5">Nom *</label>
+        <input id="cat-nom" type="text" required maxlength="100" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200" placeholder="Entrées, Plats, Boissons...">
+      </div>
+      <button type="submit" class="w-full bg-red-600 text-white font-bold py-3 rounded-xl hover:bg-red-700">Créer la catégorie</button>
+    </form>`);
+}
+async function submitAddCategorie(e) {
+  e.preventDefault();
+  const nom = document.getElementById('cat-nom').value.trim();
+  try {
+    const res = await fetch('/api/v1/dashboard/categories', {
+      method: 'POST', headers: {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials: 'include',
+      body: JSON.stringify({ nom })
+    });
+    if (res.ok) { closeModal(); loadMenu(); }
+    else { const d = await res.json(); alert(d.error||'Erreur'); }
+  } catch { alert('Erreur réseau.'); }
+}
+function showEditCategorieModal(catId, nom) {
+  showModal('Modifier la catégorie', `
+    <form onsubmit="submitEditCategorie(event,'${catId}')" class="space-y-4">
+      <div>
+        <label class="block text-sm font-semibold text-gray-700 mb-1.5">Nom *</label>
+        <input id="edit-cat-nom" type="text" required maxlength="100" value="${escHtml(nom)}" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200">
+      </div>
+      <button type="submit" class="w-full bg-blue-600 text-white font-bold py-3 rounded-xl hover:bg-blue-700">Enregistrer</button>
+    </form>`);
+}
+async function submitEditCategorie(e, catId) {
+  e.preventDefault();
+  const nom = document.getElementById('edit-cat-nom').value.trim();
+  try {
+    const res = await fetch('/api/v1/dashboard/categories/' + catId, {
+      method: 'PATCH', headers: {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials: 'include',
+      body: JSON.stringify({ nom })
+    });
+    if (res.ok) { closeModal(); loadMenu(); }
+    else { const d = await res.json(); alert(d.error||'Erreur'); }
+  } catch { alert('Erreur réseau.'); }
+}
+async function supprimerCategorie(catId) {
+  if (!confirm('Supprimer cette catégorie ? Elle doit être vide.')) return;
+  try {
+    const res = await fetch('/api/v1/dashboard/categories/' + catId, {
+      method: 'DELETE', headers: {'X-Requested-With':'XMLHttpRequest'}, credentials: 'include'
+    });
+    if (res.ok) loadMenu();
+    else { const d = await res.json(); alert(d.error||'Impossible de supprimer.'); }
+  } catch { alert('Erreur réseau.'); }
+}
+
+// --- Produits modals ---
+function showAddProduitModal(categorieId) {
+  showModal('Nouveau produit', `
+    <form onsubmit="submitAddProduit(event,'${categorieId}')" class="space-y-4">
+      <div>
+        <label class="block text-sm font-semibold text-gray-700 mb-1.5">Nom *</label>
+        <input id="prod-nom" type="text" required maxlength="200" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200" placeholder="Thiéboudienne, Jus de bissap...">
+      </div>
+      <div>
+        <label class="block text-sm font-semibold text-gray-700 mb-1.5">Description</label>
+        <textarea id="prod-desc" rows="2" maxlength="500" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200 resize-none"></textarea>
+      </div>
+      <div>
+        <label class="block text-sm font-semibold text-gray-700 mb-1.5">Prix (FCFA) *</label>
+        <input id="prod-prix" type="number" required min="0" max="999999" step="50" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200" placeholder="2500">
+      </div>
+      <div>
+        <label class="block text-sm font-semibold text-gray-700 mb-1.5">Photo (optionnel — JPEG/PNG/WebP, max 5 MB)</label>
+        <input id="prod-photo" type="file" accept="image/jpeg,image/png,image/webp" class="w-full text-sm text-gray-600 border border-gray-200 rounded-xl px-3 py-2.5">
+        <div id="upload-progress" class="hidden mt-2 text-xs text-blue-600"><i class="fa-solid fa-circle-notch fa-spin mr-1"></i>Téléversement...</div>
+        <div id="photo-preview" class="hidden mt-2"></div>
+      </div>
+      <button type="submit" class="w-full bg-red-600 text-white font-bold py-3 rounded-xl hover:bg-red-700">Ajouter le produit</button>
+    </form>`);
+}
+async function submitAddProduit(e, categorieId) {
+  e.preventDefault();
+  const nom = document.getElementById('prod-nom').value.trim();
+  const description = document.getElementById('prod-desc').value.trim();
+  const prix = parseFloat(document.getElementById('prod-prix').value);
+  const photoInput = document.getElementById('prod-photo');
+  if (!nom || isNaN(prix)) { alert('Nom et prix requis.'); return; }
+  let photo_url = null;
+  if (photoInput && photoInput.files && photoInput.files[0]) {
+    const uploadDiv = document.getElementById('upload-progress');
+    if (uploadDiv) uploadDiv.classList.remove('hidden');
+    try {
+      const fd = new FormData();
+      fd.append('file', photoInput.files[0]);
+      const upRes = await fetch('/api/v1/dashboard/upload-image', {
+        method: 'POST', headers: {'X-Requested-With':'XMLHttpRequest'}, credentials: 'include', body: fd
+      });
+      if (upRes.ok) {
+        const upData = await upRes.json();
+        photo_url = upData.url;
+        const prev = document.getElementById('photo-preview');
+        if (prev) { prev.innerHTML = `<img src="${upData.url}" class="w-16 h-16 rounded-lg object-cover border border-green-200">`; prev.classList.remove('hidden'); }
+      } else { const err = await upRes.json(); alert('Erreur upload : '+(err.error||'Échec')); }
+    } catch { alert('Erreur upload.'); }
+    if (uploadDiv) uploadDiv.classList.add('hidden');
+  }
+  try {
+    const res = await fetch('/api/v1/dashboard/produits', {
+      method: 'POST', headers: {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials: 'include',
+      body: JSON.stringify({ categorie_id: categorieId, nom, description, prix, disponible: true, photo_url })
+    });
+    if (res.ok) { closeModal(); loadMenu(); }
+    else { const d = await res.json(); alert(d.error||'Erreur'); }
+  } catch { alert('Erreur réseau.'); }
+}
+
+function showEditProduitModal(prodId, nom, description, prix, photoUrl) {
+  showModal('Modifier le produit', `
+    <form onsubmit="submitEditProduit(event,'${prodId}')" class="space-y-4">
+      <div>
+        <label class="block text-sm font-semibold text-gray-700 mb-1.5">Nom *</label>
+        <input id="edit-prod-nom" type="text" required maxlength="200" value="${escHtml(nom)}" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200">
+      </div>
+      <div>
+        <label class="block text-sm font-semibold text-gray-700 mb-1.5">Description</label>
+        <textarea id="edit-prod-desc" rows="2" maxlength="500" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200 resize-none">${escHtml(description)}</textarea>
+      </div>
+      <div>
+        <label class="block text-sm font-semibold text-gray-700 mb-1.5">Prix (FCFA) *</label>
+        <input id="edit-prod-prix" type="number" required min="0" max="999999" step="50" value="${prix}" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200">
+      </div>
+      ${photoUrl ? `<div class="flex items-center gap-3 bg-gray-50 rounded-xl p-3">
+        <img src="${escHtml(photoUrl)}" class="w-12 h-12 rounded-lg object-cover border border-gray-200">
+        <span class="text-xs text-gray-500">Photo actuelle</span>
+      </div>` : ''}
+      <div>
+        <label class="block text-sm font-semibold text-gray-700 mb-1.5">${photoUrl?'Remplacer la photo':'Ajouter une photo'} (optionnel)</label>
+        <input id="edit-prod-photo" type="file" accept="image/jpeg,image/png,image/webp" class="w-full text-sm text-gray-600 border border-gray-200 rounded-xl px-3 py-2.5">
+        <div id="edit-upload-progress" class="hidden mt-2 text-xs text-blue-600"><i class="fa-solid fa-circle-notch fa-spin mr-1"></i>Téléversement...</div>
+      </div>
+      <button type="submit" class="w-full bg-blue-600 text-white font-bold py-3 rounded-xl hover:bg-blue-700">Enregistrer</button>
+    </form>`);
+}
+async function submitEditProduit(e, prodId) {
+  e.preventDefault();
+  const nom = document.getElementById('edit-prod-nom').value.trim();
+  const description = document.getElementById('edit-prod-desc').value.trim();
+  const prix = parseFloat(document.getElementById('edit-prod-prix').value);
+  const photoInput = document.getElementById('edit-prod-photo');
+  if (!nom || isNaN(prix)) { alert('Nom et prix requis.'); return; }
+  let photo_url = undefined;
+  if (photoInput && photoInput.files && photoInput.files[0]) {
+    const prog = document.getElementById('edit-upload-progress');
+    if (prog) prog.classList.remove('hidden');
+    try {
+      const fd = new FormData();
+      fd.append('file', photoInput.files[0]);
+      const upRes = await fetch('/api/v1/dashboard/upload-image', {
+        method: 'POST', headers: {'X-Requested-With':'XMLHttpRequest'}, credentials: 'include', body: fd
+      });
+      if (upRes.ok) { const upData = await upRes.json(); photo_url = upData.url; }
+      else { const err = await upRes.json(); alert('Erreur upload : ' + (err.error || 'Échec')); }
+    } catch { alert('Erreur upload.'); }
+    if (prog) prog.classList.add('hidden');
+  }
+  const payload = { nom, description, prix };
+  if (photo_url !== undefined) payload.photo_url = photo_url;
+  try {
+    const res = await fetch('/api/v1/dashboard/produits/' + prodId, {
+      method: 'PATCH', headers: {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials: 'include',
+      body: JSON.stringify(payload)
+    });
+    if (res.ok) { closeModal(); loadMenu(); }
+    else { const d = await res.json(); alert(d.error||'Erreur'); }
+  } catch { alert('Erreur réseau.'); }
+}
+async function supprimerProduit(prodId) {
+  if (!confirm('Supprimer ce produit définitivement ?')) return;
+  try {
+    const res = await fetch('/api/v1/dashboard/produits/' + prodId, {
+      method: 'DELETE', headers: {'X-Requested-With':'XMLHttpRequest'}, credentials: 'include'
+    });
+    if (res.ok) loadMenu();
+    else { const d = await res.json(); alert(d.error||'Erreur'); }
+  } catch { alert('Erreur réseau.'); }
+}
+async function toggleDisponible(prodId, currentDisponible) {
+  try {
+    const res = await fetch('/api/v1/dashboard/produits/' + prodId, {
+      method: 'PATCH', headers: {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials: 'include',
+      body: JSON.stringify({ disponible: !currentDisponible })
+    });
+    if (!res.ok) { const d = await res.json().catch(()=>({})); alert(d.error || 'Erreur lors du changement de disponibilité.'); return; }
+    loadMenu();
+  } catch { alert('Erreur réseau.'); }
+}
+
+// ==============================
+// SECTION STATISTIQUES
+// ==============================
+async function loadStatistiques() {
+  const content = document.getElementById('dashboard-content');
+  content.innerHTML = `
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+      <div class="bg-white rounded-xl border border-gray-100 p-4 text-center">
+        <div class="text-xs text-gray-500 mb-1">Commandes aujourd'hui</div>
+        <div id="stat-today" class="text-2xl font-extrabold text-gray-900">—</div>
+      </div>
+      <div class="bg-white rounded-xl border border-gray-100 p-4 text-center">
+        <div class="text-xs text-gray-500 mb-1">CA du jour (FCFA)</div>
+        <div id="stat-ca" class="text-2xl font-extrabold text-gray-900">—</div>
+      </div>
+      <div class="bg-white rounded-xl border border-gray-100 p-4 text-center">
+        <div class="text-xs text-gray-500 mb-1">CA du mois (FCFA)</div>
+        <div id="stat-ca-month" class="text-2xl font-extrabold text-red-600">—</div>
+      </div>
+      <div class="bg-white rounded-xl border border-gray-100 p-4 text-center">
+        <div class="text-xs text-gray-500 mb-1">Taux livraison</div>
+        <div id="stat-rate" class="text-2xl font-extrabold text-green-600">—</div>
+      </div>
+    </div>
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
+      <div class="bg-white rounded-xl border border-gray-100 p-4 text-center">
+        <div class="text-xs text-gray-500 mb-1">Commandes ce mois</div>
+        <div id="stat-month" class="text-2xl font-extrabold text-blue-600">—</div>
+      </div>
+      <div class="bg-white rounded-xl border border-gray-100 p-4 text-center">
+        <div class="text-xs text-gray-500 mb-1">Taux annulation</div>
+        <div id="stat-cancel-rate" class="text-2xl font-extrabold text-orange-500">—</div>
+      </div>
+      <div class="bg-white rounded-xl border border-gray-100 p-4 text-center">
+        <div class="text-xs text-gray-500 mb-1">Produits actifs</div>
+        <div id="stat-produits" class="text-2xl font-extrabold text-purple-600">—</div>
+      </div>
+    </div>
+    <div class="bg-white rounded-xl border border-gray-100 p-6 mb-4">
+      <div class="flex items-center justify-between mb-4">
+        <h3 class="font-bold text-gray-900">Évolution sur 30 jours</h3>
+        <div class="flex gap-2">
+          <button onclick="switchChart('commandes')" id="btn-chart-cmd" class="text-xs px-3 py-1.5 rounded-lg bg-red-600 text-white font-semibold">Commandes</button>
+          <button onclick="switchChart('ca')" id="btn-chart-ca" class="text-xs px-3 py-1.5 rounded-lg border border-gray-200 text-gray-600 font-semibold hover:bg-gray-50">CA (FCFA)</button>
+        </div>
+      </div>
+      <canvas id="stats-chart" height="80"></canvas>
+    </div>
+    <div class="bg-white rounded-xl border border-gray-100 p-6">
+      <h3 class="font-bold text-gray-900 mb-4">Répartition par statut</h3>
+      <div id="statuts-chart-container" class="max-w-xs mx-auto">
+        <canvas id="statuts-chart" height="120"></canvas>
+      </div>
+    </div>
+    <p class="text-xs text-gray-400 mt-3 text-center">Données en temps réel depuis la base de données.</p>`;
+
+  try {
+    const res = await fetch('/api/v1/dashboard/stats', { credentials: 'include' });
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data.today !== undefined) document.getElementById('stat-today').textContent = data.today;
+    if (data.ca_today !== undefined) document.getElementById('stat-ca').textContent = (data.ca_today||0).toLocaleString('fr-FR');
+    if (data.ca_month !== undefined) document.getElementById('stat-ca-month').textContent = (data.ca_month||0).toLocaleString('fr-FR');
+    if (data.month !== undefined) document.getElementById('stat-month').textContent = data.month;
+    if (data.taux_livraison !== undefined) document.getElementById('stat-rate').textContent = data.taux_livraison + '%';
+    if (data.taux_annulation !== undefined) document.getElementById('stat-cancel-rate').textContent = data.taux_annulation + '%';
+    if (data.nb_produits !== undefined) document.getElementById('stat-produits').textContent = data.nb_produits;
+    if (window.Chart) {
+      window._statsData = data;
+      window._statsChart = null;
+      renderStatsChart('commandes');
+      const statuts = data.statuts || {};
+      const statLabels = Object.keys(statuts).map(s => s.replace(/_/g,' '));
+      const statValues = Object.values(statuts);
+      if (statValues.length > 0) {
+        const ctxPie = document.getElementById('statuts-chart');
+        if (ctxPie) new Chart(ctxPie, {
+          type: 'doughnut',
+          data: { labels: statLabels, datasets: [{ data: statValues, backgroundColor: ['#F59E0B','#3B82F6','#F97316','#8B5CF6','#22C55E','#EF4444'] }] },
+          options: { responsive: true, plugins: { legend: { position: 'bottom', labels: { padding: 10, font: { size: 11 } } } } }
+        });
+      } else {
+        const ctxPie = document.getElementById('statuts-chart');
+        if (ctxPie) ctxPie.parentElement.innerHTML = '<p class="text-center text-sm text-gray-400 py-4">Aucune commande enregistrée.</p>';
+      }
+    }
+  } catch {}
+}
+
+function renderStatsChart(mode) {
+  const data = window._statsData;
+  if (!data || !window.Chart) return;
+  if (window._statsChart) { window._statsChart.destroy(); }
+  const ctx = document.getElementById('stats-chart');
+  if (!ctx) return;
+  const isCA = mode === 'ca';
+  window._statsChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: data.labels || [],
+      datasets: [{
+        label: isCA ? 'CA (FCFA)' : 'Commandes',
+        data: isCA ? (data.ca_values||[]) : (data.values||[]),
+        borderColor: isCA ? '#22C55E' : '#DC2626',
+        backgroundColor: isCA ? 'rgba(34,197,94,0.06)' : 'rgba(220,38,38,0.06)',
+        borderWidth: 2, tension: 0.4, fill: true,
+        pointBackgroundColor: isCA ? '#22C55E' : '#DC2626', pointRadius: 3
+      }]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => isCA ? (ctx.raw||0).toLocaleString('fr-FR')+' FCFA' : ctx.raw+' commande(s)' } } },
+      scales: { y: { beginAtZero: true, grid: { color: '#F3F4F6' }, ticks: { precision: 0 } }, x: { grid: { display: false }, ticks: { maxTicksLimit: 10 } } }
+    }
+  });
+}
+
+function switchChart(mode) {
+  document.getElementById('btn-chart-cmd').className = 'text-xs px-3 py-1.5 rounded-lg font-semibold ' + (mode==='commandes' ? 'bg-red-600 text-white' : 'border border-gray-200 text-gray-600 hover:bg-gray-50');
+  document.getElementById('btn-chart-ca').className  = 'text-xs px-3 py-1.5 rounded-lg font-semibold ' + (mode==='ca'         ? 'bg-green-600 text-white' : 'border border-gray-200 text-gray-600 hover:bg-gray-50');
+  renderStatsChart(mode);
+}
+
+// ==============================
+// SECTION LIVREURS
+// ==============================
+async function loadLivreurs() {
+  const content = document.getElementById('dashboard-content');
+  content.innerHTML = `<div class="text-center py-8"><i class="fa-solid fa-circle-notch fa-spin text-xl text-gray-400"></i></div>`;
+  try {
+    const res = await fetch('/api/v1/dashboard/livreurs', { credentials: 'include' });
+    if (!res.ok) throw new Error();
+    const data = await res.json();
+    renderLivreurs(data.livreurs||[], content);
+  } catch {
+    content.innerHTML = `<div class="text-center py-10"><p class="text-red-500 text-sm">Erreur de chargement.</p><button onclick="loadLivreurs()" class="mt-3 text-xs text-red-600 underline">Réessayer</button></div>`;
+  }
+}
+function renderLivreurs(livreurs, container) {
+  container.innerHTML = `
+    <div class="flex justify-between items-center mb-5">
+      <p class="text-sm text-gray-500">${livreurs.length} livreur(s) enregistré(s)</p>
+      <button onclick="showAddLivreurModal()" class="bg-red-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-red-700 flex items-center gap-1.5">
+        <i class="fa-solid fa-plus text-xs"></i> Ajouter
+      </button>
+    </div>
+    ${livreurs.length === 0 ? `
+      <div class="text-center py-16 border-2 border-dashed border-gray-200 rounded-2xl">
+        <i class="fa-solid fa-motorcycle text-4xl text-gray-200 mb-4 block"></i>
+        <p class="font-semibold text-gray-500 mb-2">Aucun livreur</p>
+        <p class="text-sm text-gray-400 mb-5">Ajoutez vos livreurs pour leur assigner des commandes.</p>
+        <button onclick="showAddLivreurModal()" class="bg-red-600 text-white text-sm font-semibold px-5 py-2.5 rounded-xl hover:bg-red-700"><i class="fa-solid fa-plus mr-1.5"></i>Ajouter</button>
+      </div>` :
+    `<div class="space-y-3">${livreurs.map(l => `
+      <div class="bg-white border border-gray-100 rounded-xl p-4 flex items-center gap-4">
+        <div class="w-11 h-11 bg-orange-100 rounded-xl flex items-center justify-center flex-shrink-0">
+          <i class="fa-solid fa-motorcycle text-orange-500"></i>
+        </div>
+        <div class="flex-1 min-w-0">
+          <div class="font-semibold text-gray-900">${escHtml(l.nom)}</div>
+          <div class="text-xs text-gray-500">${escHtml(l.whatsapp_number||'—')}</div>
+        </div>
+        <span class="text-xs px-2.5 py-1 rounded-full font-semibold ${l.actif ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}">${l.actif?'Actif':'Inactif'}</span>
+        <button onclick="toggleLivreurActif('${l.id}',${l.actif?1:0})" class="p-1.5 text-gray-400 hover:text-blue-600" title="${l.actif?'Désactiver':'Activer'}">
+          <i class="fa-solid ${l.actif ? 'fa-toggle-on text-green-500' : 'fa-toggle-off'} text-lg"></i>
+        </button>
+        <button onclick="supprimerLivreur('${l.id}')" class="p-1.5 text-gray-400 hover:text-red-500" title="Supprimer">
+          <i class="fa-solid fa-trash text-sm"></i>
+        </button>
+      </div>`).join('')}</div>`}`;
+}
+function showAddLivreurModal() {
+  showModal('Ajouter un livreur', `
+    <form onsubmit="submitAddLivreur(event)" class="space-y-4">
+      <div>
+        <label class="block text-sm font-semibold text-gray-700 mb-1.5">Nom complet *</label>
+        <input id="liv-nom" type="text" required maxlength="100" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200" placeholder="Kofi Mensah">
+      </div>
+      <div>
+        <label class="block text-sm font-semibold text-gray-700 mb-1.5">WhatsApp *</label>
+        <input id="liv-tel" type="tel" required class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200" placeholder="+226 70 00 00 00">
+      </div>
+      <button type="submit" class="w-full bg-red-600 text-white font-bold py-3 rounded-xl hover:bg-red-700">Ajouter le livreur</button>
+    </form>`);
+}
+async function submitAddLivreur(e) {
+  e.preventDefault();
+  const nom = document.getElementById('liv-nom').value.trim();
+  const whatsapp_number = document.getElementById('liv-tel').value.trim();
+  try {
+    const res = await fetch('/api/v1/dashboard/livreurs', {
+      method: 'POST', headers: {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials: 'include',
+      body: JSON.stringify({ nom, whatsapp_number })
+    });
+    if (res.ok) { closeModal(); loadLivreurs(); }
+    else { const d = await res.json(); alert(d.error||'Erreur'); }
+  } catch { alert('Erreur réseau.'); }
+}
+async function toggleLivreurActif(livId, currentActif) {
+  try {
+    await fetch('/api/v1/dashboard/livreurs/' + livId, {
+      method: 'PATCH', headers: {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials: 'include',
+      body: JSON.stringify({ actif: currentActif ? 0 : 1 })
+    });
+    loadLivreurs();
+  } catch { alert('Erreur réseau.'); }
+}
+async function supprimerLivreur(livId) {
+  if (!confirm('Supprimer ce livreur ?')) return;
+  try {
+    const res = await fetch('/api/v1/dashboard/livreurs/' + livId, {
+      method: 'DELETE', headers: {'X-Requested-With':'XMLHttpRequest'}, credentials: 'include'
+    });
+    if (res.ok) loadLivreurs();
+  } catch { alert('Erreur réseau.'); }
+}
+
+// ==============================
+// SECTION QR CODE
+// ==============================
+async function loadQRCode() {
+  const content = document.getElementById('dashboard-content');
+  content.innerHTML = `<div class="text-center py-8"><i class="fa-solid fa-circle-notch fa-spin text-xl text-gray-400"></i></div>`;
+  try {
+    const res = await fetch('/api/v1/dashboard/qrcode', { credentials: 'include' });
+    if (!res.ok) throw new Error();
+    const data = await res.json();
+    content.innerHTML = `
+      <div class="max-w-lg space-y-4">
+        <div class="bg-white rounded-2xl border border-gray-100 p-6 text-center">
+          <h2 class="font-bold text-gray-900 mb-1">QR Code de votre boutique</h2>
+          <p class="text-xs text-gray-500 mb-5">Imprimez-le et affichez-le en salle, sur vos emballages ou en vitrine.</p>
+          <div id="qr-image-wrap" class="w-48 h-48 mx-auto rounded-2xl border border-gray-200 shadow-sm mb-4 bg-white flex items-center justify-center overflow-hidden">
+            <img src="${escHtml(data.qr_display)}" alt="QR Code" class="w-full h-full object-contain p-3"
+              onerror="this.parentElement.innerHTML='<div class=&quot;text-xs text-red-500 p-4&quot;><i class=&quot;fa-solid fa-triangle-exclamation mb-2 block text-lg&quot;></i>QR indisponible pour le moment.<br><button onclick=&quot;loadQRCode()&quot; class=&quot;underline mt-2&quot;>Réessayer</button></div>'">
+          </div>
+          <p class="text-xs text-gray-400 mb-4"><strong>${escHtml(data.boutique_url)}</strong></p>
+          <div class="flex gap-3 justify-center flex-wrap">
+            <a href="${escHtml(data.qr_download_png)}" download="qrcode-${escHtml(data.slug)}.png" target="_blank" rel="noopener"
+              class="flex items-center gap-1.5 bg-gray-900 text-white text-sm font-semibold px-4 py-2 rounded-xl hover:bg-gray-800 transition-colors">
+              <i class="fa-solid fa-download"></i> PNG HD
+            </a>
+            <a href="${escHtml(data.qr_download_svg)}" download="qrcode-${escHtml(data.slug)}.svg" target="_blank" rel="noopener"
+              class="flex items-center gap-1.5 border border-gray-200 text-gray-700 text-sm font-semibold px-4 py-2 rounded-xl hover:bg-gray-50">
+              <i class="fa-solid fa-vector-square"></i> SVG
+            </a>
+            <button onclick="copyLink('${escJs(data.boutique_url)}')"
+              class="flex items-center gap-1.5 border border-gray-200 text-gray-700 text-sm font-semibold px-4 py-2 rounded-xl hover:bg-gray-50">
+              <i class="fa-solid fa-copy"></i> Copier lien
+            </button>
+          </div>
+        </div>
+        <div class="bg-white rounded-2xl border border-gray-100 p-5">
+          <h3 class="font-bold text-gray-900 mb-3">Partager votre boutique</h3>
+          <div class="flex flex-col gap-3">
+            <a href="https://wa.me/?text=${encodeURIComponent('Commandez chez '+data.nom+' : '+data.boutique_url)}" target="_blank"
+              class="flex items-center gap-3 p-3 bg-green-50 border border-green-100 rounded-xl hover:bg-green-100">
+              <i class="fa-brands fa-whatsapp text-green-600 text-xl"></i>
+              <div><div class="font-semibold text-sm text-green-900">WhatsApp</div><div class="text-xs text-green-700">Envoyer le lien à vos clients</div></div>
+            </a>
+            <a href="https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(data.boutique_url)}" target="_blank"
+              class="flex items-center gap-3 p-3 bg-blue-50 border border-blue-100 rounded-xl hover:bg-blue-100">
+              <i class="fa-brands fa-facebook text-blue-600 text-xl"></i>
+              <div><div class="font-semibold text-sm text-blue-900">Facebook</div><div class="text-xs text-blue-700">Publier sur votre page</div></div>
+            </a>
+          </div>
+        </div>
+        <div class="bg-blue-50 border border-blue-100 rounded-2xl p-4">
+          <p class="text-sm font-semibold text-blue-800 mb-2"><i class="fa-solid fa-link mr-1.5"></i>URL de votre boutique</p>
+          <div class="flex items-center gap-2">
+            <code class="flex-1 bg-white border border-blue-200 rounded-lg px-3 py-2 text-xs text-blue-900 font-mono break-all">${escHtml(data.boutique_url)}</code>
+            <button onclick="copyLink('${escJs(data.boutique_url)}')" class="bg-blue-600 text-white text-xs font-semibold px-3 py-2 rounded-lg hover:bg-blue-700 flex-shrink-0">Copier</button>
+          </div>
+        </div>
+      </div>`;
+  } catch {
+    content.innerHTML = '<p class="text-red-500 text-sm p-4">Erreur de chargement du QR Code.</p>';
+  }
+}
+
+function copyLink(url) {
+  navigator.clipboard.writeText(url).then(() => {
+    const btn = event && event.target ? event.target.closest('button') : null;
+    if (btn) { const orig = btn.innerHTML; btn.innerHTML = '<i class="fa-solid fa-check"></i> Copié !'; setTimeout(()=>btn.innerHTML=orig, 2000); }
+    else alert('Copié : ' + url);
+  }).catch(() => alert('Lien : ' + url));
+}
+
+// ==============================
+// SECTION APPARENCE & MÉDIAS
+// ==============================
+async function loadApparence() {
+  const content = document.getElementById('dashboard-content');
+  content.innerHTML = `<div class="text-center py-8"><i class="fa-solid fa-circle-notch fa-spin text-xl text-gray-400"></i></div>`;
+  let tenant = tenantData || {};
+  try {
+    const res = await fetch('/api/v1/dashboard/profil', { credentials: 'include' });
+    if (res.ok) tenant = await res.json();
+  } catch {}
+  content.innerHTML = `
+    <div class="max-w-lg space-y-4">
+      <div class="bg-white rounded-2xl border border-gray-100 p-6">
+        <h2 class="font-bold text-gray-900 mb-5">Couleurs de la boutique</h2>
+        <form onsubmit="saveApparence(event)" class="space-y-5">
+          <div>
+            <label class="block text-sm font-semibold text-gray-700 mb-1.5">Couleur principale</label>
+            <div class="flex items-center gap-3">
+              <input id="app-color-primary" type="color" value="${escHtml(tenant.couleur_primaire||'#DC2626')}" class="w-12 h-12 rounded-xl border border-gray-200 cursor-pointer">
+              <input id="app-color-primary-hex" type="text" value="${escHtml(tenant.couleur_primaire||'#DC2626')}" class="flex-1 border border-gray-200 rounded-xl px-4 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-red-200" placeholder="#DC2626">
+            </div>
+          </div>
+          <div>
+            <label class="block text-sm font-semibold text-gray-700 mb-1.5">Couleur secondaire</label>
+            <div class="flex items-center gap-3">
+              <input id="app-color-secondary" type="color" value="${escHtml(tenant.couleur_secondaire||'#1D4ED8')}" class="w-12 h-12 rounded-xl border border-gray-200 cursor-pointer">
+              <input id="app-color-secondary-hex" type="text" value="${escHtml(tenant.couleur_secondaire||'#1D4ED8')}" class="flex-1 border border-gray-200 rounded-xl px-4 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-red-200" placeholder="#1D4ED8">
+            </div>
+          </div>
+          <p id="app-feedback" class="text-xs hidden rounded-lg px-3 py-2"></p>
+          <button type="submit" class="w-full bg-red-600 text-white font-bold py-3 rounded-xl hover:bg-red-700">
+            <i class="fa-solid fa-floppy-disk mr-1.5"></i> Enregistrer les couleurs
+          </button>
+        </form>
+      </div>
+      <div class="bg-white rounded-2xl border border-gray-100 p-6">
+        <h2 class="font-bold text-gray-900 mb-1">Logo du restaurant</h2>
+        <p class="text-sm text-gray-500 mb-4">PNG/JPG recommandé, fond transparent idéal.</p>
+        ${tenant.logo_url ? `<div class="flex items-center gap-3 mb-4 bg-gray-50 rounded-xl p-3">
+          <img src="${escHtml(tenant.logo_url)}" class="w-16 h-16 rounded-xl object-cover border border-gray-200">
+          <div><p class="text-xs font-semibold text-gray-700">Logo actuel</p><p class="text-xs text-gray-400 break-all">${escHtml(tenant.logo_url)}</p></div>
+        </div>` : ''}
+        <div class="space-y-3">
+          <div>
+            <label class="block text-xs font-semibold text-gray-600 mb-1">Téléverser un fichier</label>
+            <input id="logo-file" type="file" accept="image/jpeg,image/png,image/webp" class="w-full text-sm text-gray-600 border border-gray-200 rounded-xl px-3 py-2.5">
+            <div id="logo-upload-progress" class="hidden mt-2 text-xs text-blue-600"><i class="fa-solid fa-circle-notch fa-spin mr-1"></i>Téléversement...</div>
+          </div>
+          <p class="text-xs text-gray-400 text-center">— ou URL externe —</p>
+          <input id="app-logo" type="url" value="${escHtml(tenant.logo_url||'')}" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200" placeholder="https://...">
+          <p id="logo-feedback" class="text-xs hidden rounded-lg px-3 py-2"></p>
+          <button onclick="saveLogo()" type="button" class="w-full border border-red-200 text-red-600 font-bold py-2.5 rounded-xl hover:bg-red-50 text-sm">
+            <i class="fa-solid fa-floppy-disk mr-1.5"></i> Enregistrer le logo
           </button>
         </div>
       </div>
-    `;
-  }
-
-  // ── Liste des offres disponibles ──
-  let offresHtml = '';
-  if (_plansCache.length > 0) {
-    const plansPayants = _plansCache.filter(p => p.actif && p.prix_mensuel > 0);
-    if (plansPayants.length > 0) {
-      offresHtml = `
-        <div class="bg-white border border-gray-200 rounded-2xl p-5">
-          <h3 class="font-bold text-gray-900 mb-3 text-sm flex items-center gap-2">
-            <i class="fa-solid fa-list-ul text-gray-400"></i>
-            Formules disponibles
-          </h3>
-          <div class="space-y-2">
-            ${plansPayants.map(p => {
-              // FIX-3 : comparaison contre l'id D1 résolu côté serveur
-              // (avant : s.plan_initial_id, un UUID Supabase, ne matchait
-              // jamais un id D1).
-              const isActuel = abonnement?.plan_id === p.id || s.plan_initial_id_d1 === p.id;
-              return `
-                <div class="border ${isActuel ? 'border-red-300 bg-red-50/40' : 'border-gray-100'} rounded-xl p-3 flex items-center justify-between">
-                  <div>
-                    <span class="font-semibold text-gray-900 text-sm">${esc(p.nom)}</span>
-                    ${isActuel ? '<span class="ml-2 text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full">Votre plan</span>' : ''}
-                    <p class="text-xs text-gray-500 mt-0.5">${Number(p.prix_mensuel).toLocaleString('fr-FR')} FCFA/mois</p>
-                  </div>
-                  ${!isActuel && statutAbonnement !== 'en_attente_confirmation' ? `
-                  <button onclick="preselectPlan('${esc(p.id)}')"
-                    class="text-xs bg-red-600 hover:bg-red-700 text-white px-3 py-1.5 rounded-lg transition-colors font-medium">
-                    Choisir
-                  </button>` : ''}
-                </div>
-              `;
-            }).join('')}
+      <div class="bg-white rounded-2xl border border-gray-100 p-6">
+        <h2 class="font-bold text-gray-900 mb-1">Bannière</h2>
+        <p class="text-sm text-gray-500 mb-4">Ratio 16:9 recommandé, max 5 MB.</p>
+        ${tenant.banniere_url ? `<div class="mb-4 rounded-xl overflow-hidden border border-gray-200"><img src="${escHtml(tenant.banniere_url)}" class="w-full h-32 object-cover"></div>` : ''}
+        <div class="space-y-3">
+          <div>
+            <label class="block text-xs font-semibold text-gray-600 mb-1">Téléverser un fichier</label>
+            <input id="banniere-file" type="file" accept="image/jpeg,image/png,image/webp" class="w-full text-sm text-gray-600 border border-gray-200 rounded-xl px-3 py-2.5">
+            <div id="banniere-upload-progress" class="hidden mt-2 text-xs text-blue-600"><i class="fa-solid fa-circle-notch fa-spin mr-1"></i>Téléversement...</div>
           </div>
+          <p class="text-xs text-gray-400 text-center">— ou URL externe —</p>
+          <input id="app-banniere" type="url" value="${escHtml(tenant.banniere_url||'')}" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200" placeholder="https://...">
+          <p id="banniere-feedback" class="text-xs hidden rounded-lg px-3 py-2"></p>
+          <button onclick="saveBanniere()" type="button" class="w-full border border-red-200 text-red-600 font-bold py-2.5 rounded-xl hover:bg-red-50 text-sm">
+            <i class="fa-solid fa-floppy-disk mr-1.5"></i> Enregistrer la bannière
+          </button>
         </div>
-      `;
-    }
-  }
-
-  // ── CTA : soumettre preuve (uniquement si pas déjà en attente) ──
-  if (statutAbonnement !== 'en_attente_confirmation') {
-    actionHtml = `
-      <div class="bg-white border border-gray-200 rounded-2xl p-5" id="bloc-soumettre-preuve">
-        <h3 class="font-bold text-gray-900 mb-1 text-sm flex items-center gap-2">
-          <i class="fa-solid fa-upload text-gray-400"></i>
-          Soumettre ma preuve de paiement
-        </h3>
-        <p class="text-xs text-gray-400 mb-4">
-          Téléversez une capture d'écran de votre reçu de paiement (JPG ou PNG, max 5 Mo).
-        </p>
-        ${construireFormUpload()}
       </div>
-    `;
-  }
-
-  div.innerHTML = statutHtml + referenceHtml + offresHtml + actionHtml;
-
-  if (statutAbonnement !== 'en_attente_confirmation') {
-    setTimeout(() => {
-      const sel = document.getElementById('inp-plan-preuve');
-      if (sel && _plansCache.length) {
-        remplirSelectPlans(sel, _plansCache);
-      } else if (sel) {
-        chargerPlansSelect('inp-plan-preuve');
-      }
-    }, 0);
-  }
-
-  return div;
+    </div>`;
+  document.getElementById('app-color-primary').addEventListener('input', function() { document.getElementById('app-color-primary-hex').value = this.value; });
+  document.getElementById('app-color-secondary').addEventListener('input', function() { document.getElementById('app-color-secondary-hex').value = this.value; });
 }
 
-// ─── Présélection d'un plan dans le formulaire ────────────────────────────────
-
-function preselectPlan(planId) {
-  const sel = document.getElementById('inp-plan-preuve');
-  const bloc = document.getElementById('bloc-soumettre-preuve');
-  if (sel) {
-    sel.value = planId;
-    majAffichagePrix();
-  }
-  if (bloc) {
-    bloc.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  }
-}
-
-// ─── Bloc Moyens de Paiement ──────────────────────────────────────────────────
-
-function construireBlocMoyensPaiement(moyens) {
-  if (!moyens.length) return document.createDocumentFragment();
-
-  const div = document.createElement('div');
-  div.className = 'bg-white border border-gray-200 rounded-2xl p-5 mb-4';
-  div.innerHTML = `
-    <h3 class="font-bold text-gray-900 mb-3 text-sm flex items-center gap-2">
-      <i class="fa-solid fa-mobile-screen text-gray-400"></i>
-      Moyens de paiement acceptés
-    </h3>
-    <div class="space-y-3">
-      ${moyens.map(m => `
-        <div class="border border-gray-100 rounded-xl p-4 hover:bg-gray-50 transition-colors">
-          <div class="flex items-center justify-between mb-2">
-            <span class="font-semibold text-gray-900 text-sm">${esc(m.nom)}</span>
-            ${m.numero ? `
-            <div class="flex items-center gap-2">
-              <code class="text-xs font-mono text-gray-700 bg-gray-100 px-2 py-0.5 rounded">${esc(m.numero)}</code>
-              <button onclick="copierTexte('${esc(m.numero)}', this)"
-                class="text-xs text-gray-400 hover:text-gray-700 border border-gray-200 px-2 py-0.5 rounded">
-                <i class="fa-solid fa-copy"></i>
-              </button>
-            </div>` : ''}
-          </div>
-          ${m.description ? `<p class="text-xs text-gray-500 mb-1">${esc(m.description)}</p>` : ''}
-          ${m.instructions ? `<p class="text-xs text-gray-400 leading-relaxed">${esc(m.instructions)}</p>` : ''}
-        </div>
-      `).join('')}
-    </div>
-  `;
-  return div;
-}
-
-// ─── Formulaire d'upload preuve ───────────────────────────────────────────────
-
-function construireFormUpload() {
-  // FIX-2 : le select "Méthode de paiement" est désormais généré depuis
-  // _moyensCache (chargé depuis /api/v1/moyens-paiement, la même source que
-  // le bloc "Moyens de paiement acceptés" juste au-dessus). Avant, cette
-  // liste était codée en dur dans le JS (incluant "Mobile Money (MTN)",
-  // "Virement bancaire", "Espèces" — aucun de ces trois n'existant dans la
-  // table moyens_paiement réelle) et pouvait donc afficher des options que
-  // le restaurant ne pouvait en réalité pas utiliser. "Autre" reste ajouté
-  // manuellement en secours, pour les cas non couverts par la table.
-  const optionsMethode = _moyensCache.length > 0
-    ? _moyensCache.map(m => `<option value="${esc(m.nom)}">${esc(m.nom)}</option>`).join('')
-    : `<option value="Orange Money">Orange Money</option><option value="Mobile Money (Moov)">Mobile Money (Moov)</option>`;
-
-  return `
-    <div id="upload-zone"
-      class="border-2 border-dashed border-gray-200 rounded-2xl p-8 text-center transition-all cursor-pointer hover:border-red-300 hover:bg-red-50/30"
-      ondragover="handleDragOver(event)"
-      ondragleave="handleDragLeave(event)"
-      ondrop="handleDrop(event)"
-      onclick="document.getElementById('inp-preuve').click()">
-      <div id="upload-placeholder">
-        <i class="fa-solid fa-cloud-arrow-up text-3xl text-gray-300 mb-2 block"></i>
-        <p class="text-sm text-gray-500 font-medium">Glissez votre capture ici ou cliquez pour choisir</p>
-        <p class="text-xs text-gray-400 mt-1">JPG, PNG — maximum 5 Mo</p>
-      </div>
-      <div id="upload-preview" class="hidden">
-        <img id="upload-preview-img" src="" alt="Aperçu preuve" class="max-h-40 mx-auto rounded-xl object-contain mb-2">
-        <p id="upload-preview-name" class="text-xs text-gray-500 truncate max-w-xs mx-auto"></p>
-      </div>
-    </div>
-    <input id="inp-preuve" type="file" accept=".jpg,.jpeg,.png" class="hidden" onchange="previewPreuve(this)">
-
-    <div id="upload-error" class="hidden mt-2 text-xs text-red-600 flex items-center gap-1.5">
-      <i class="fa-solid fa-circle-exclamation"></i>
-      <span id="upload-error-msg"></span>
-    </div>
-
-    <div class="mt-4">
-      <label class="block text-xs font-semibold text-gray-600 mb-1.5">Plan souhaité *</label>
-      <select id="inp-plan-preuve" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200 focus:border-red-400" onchange="majAffichagePrix()">
-        <option value="">Chargement des plans...</option>
-      </select>
-      <p id="affichage-prix-plan" class="mt-1.5 text-xs text-gray-400"></p>
-    </div>
-
-    <div class="mt-3">
-      <label class="block text-xs font-semibold text-gray-600 mb-1.5">Méthode de paiement *</label>
-      <select id="inp-methode-preuve" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200 focus:border-red-400">
-        <option value="">Sélectionner...</option>
-        ${optionsMethode}
-        <option value="Autre">Autre</option>
-      </select>
-    </div>
-
-    <div class="mt-3">
-      <label class="block text-xs font-semibold text-gray-600 mb-1.5">Numéro utilisé pour le paiement *</label>
-      <input id="inp-numero-preuve" type="tel" required maxlength="20"
-        class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200 focus:border-red-400"
-        placeholder="+226 70 00 00 00">
-      <p class="text-xs text-gray-400 mt-1">
-        Le numéro Mobile Money (ou compte) avec lequel le virement a été (ou sera) effectué — indispensable pour vérifier et rapprocher votre paiement.
-      </p>
-    </div>
-
-    <div id="upload-progress" class="hidden mt-4">
-      <div class="h-2 bg-gray-100 rounded-full overflow-hidden">
-        <div id="upload-progress-bar" class="h-full bg-red-500 rounded-full transition-all" style="width: 0%"></div>
-      </div>
-      <p class="text-xs text-gray-400 mt-1 text-center">Envoi en cours...</p>
-    </div>
-
-    <button id="btn-soumettre-preuve" onclick="soumettrePreuvePaiement()"
-      class="mt-4 w-full bg-red-600 hover:bg-red-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2">
-      <i class="fa-solid fa-paper-plane"></i> Soumettre ma preuve
-    </button>
-    <p id="msg-soumettre" class="hidden mt-3 text-sm text-center font-medium rounded-xl p-3"></p>
-  `;
-}
-
-// ─── Affichage prix du plan sélectionné ──────────────────────────────────────
-
-function majAffichagePrix() {
-  const sel = document.getElementById('inp-plan-preuve');
-  const affEl = document.getElementById('affichage-prix-plan');
-  if (!sel || !affEl) return;
-
-  const planId = sel.value;
-  const plan = _plansCache.find(p => p.id === planId);
-
-  if (plan) {
-    affEl.textContent = `Montant : ${Number(plan.prix_mensuel).toLocaleString('fr-FR')} FCFA/mois`;
-  } else {
-    affEl.textContent = '';
-  }
-}
-
-// ─── Drag & Drop ─────────────────────────────────────────────────────────────
-
-function handleDragOver(e) {
+async function saveApparence(e) {
   e.preventDefault();
-  document.getElementById('upload-zone')?.classList.add('border-red-400', 'bg-red-50/50');
-}
-
-function handleDragLeave(e) {
-  document.getElementById('upload-zone')?.classList.remove('border-red-400', 'bg-red-50/50');
-}
-
-function handleDrop(e) {
-  e.preventDefault();
-  document.getElementById('upload-zone')?.classList.remove('border-red-400', 'bg-red-50/50');
-  const file = e.dataTransfer?.files?.[0];
-  if (file) {
-    const inp = document.getElementById('inp-preuve');
-    const dt = new DataTransfer();
-    dt.items.add(file);
-    inp.files = dt.files;
-    previewPreuve(inp);
-  }
-}
-
-// ─── Preview fichier ──────────────────────────────────────────────────────────
-
-let _preuveFichier = null;
-
-function previewPreuve(input) {
-  const file = input.files?.[0];
-  if (!file) return;
-
-  const ext = file.name.toLowerCase().slice(file.name.lastIndexOf('.'));
-  const errEl  = document.getElementById('upload-error');
-  const errMsg = document.getElementById('upload-error-msg');
-
-  if (!EXTENSIONS_VALIDES.includes(ext)) {
-    errMsg.textContent = `Extension non autorisée (${ext}). Utilisez JPG ou PNG.`;
-    errEl.classList.remove('hidden');
-    input.value = '';
-    _preuveFichier = null;
-    return;
-  }
-  if (!MIME_VALIDES.includes(file.type)) {
-    errMsg.textContent = `Type de fichier invalide (${file.type}).`;
-    errEl.classList.remove('hidden');
-    input.value = '';
-    _preuveFichier = null;
-    return;
-  }
-  if (file.size > MAX_TAILLE_FICHIER) {
-    errMsg.textContent = `Fichier trop volumineux (${(file.size/1024/1024).toFixed(1)} Mo). Maximum 5 Mo.`;
-    errEl.classList.remove('hidden');
-    input.value = '';
-    _preuveFichier = null;
-    return;
-  }
-
-  errEl.classList.add('hidden');
-  _preuveFichier = file;
-
-  const reader = new FileReader();
-  reader.onload = (e) => {
-    document.getElementById('upload-preview-img').src = e.target.result;
-    document.getElementById('upload-preview-name').textContent =
-      `Image ${ext.toUpperCase().replace('.', '')} — ${(file.size/1024).toFixed(0)} Ko`;
-    document.getElementById('upload-placeholder').classList.add('hidden');
-    document.getElementById('upload-preview').classList.remove('hidden');
+  const fb = document.getElementById('app-feedback');
+  fb.classList.remove('hidden');
+  const data = {
+    couleur_primaire: document.getElementById('app-color-primary-hex').value.trim() || document.getElementById('app-color-primary').value,
+    couleur_secondaire: document.getElementById('app-color-secondary-hex').value.trim() || document.getElementById('app-color-secondary').value
   };
-  reader.readAsDataURL(file);
-}
-
-// ─── Chargement des plans pour le select ─────────────────────────────────────
-
-function remplirSelectPlans(sel, plans) {
-  const plansFiltres = plans.filter(p => p.actif && p.prix_mensuel > 0);
-  sel.innerHTML = '<option value="">Sélectionner un plan...</option>' +
-    plansFiltres.map(p =>
-      `<option value="${esc(p.id)}">${esc(p.nom)} — ${Number(p.prix_mensuel).toLocaleString('fr-FR')} FCFA/mois</option>`
-    ).join('');
-}
-
-async function chargerPlansSelect(selectId) {
-  const sel = document.getElementById(selectId);
-  if (!sel) return;
   try {
-    const res = await fetch(PLANS_API, {
-      credentials: 'include',
-      headers: { 'X-Requested-With': 'XMLHttpRequest' }
+    const res = await fetch('/api/v1/dashboard/apparence', {
+      method: 'PATCH', headers: {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials: 'include',
+      body: JSON.stringify(data)
     });
-    if (!res.ok) return;
-    const data = await res.json();
-    _plansCache = data.plans ?? [];
-    remplirSelectPlans(sel, _plansCache);
-  } catch {}
-}
-
-// ─── Soumission de la preuve ──────────────────────────────────────────────────
-
-async function soumettrePreuvePaiement() {
-  const btn  = document.getElementById('btn-soumettre-preuve');
-  const msg  = document.getElementById('msg-soumettre');
-  const planId  = document.getElementById('inp-plan-preuve')?.value;
-  const methode = document.getElementById('inp-methode-preuve')?.value;
-  const numeroBrut = document.getElementById('inp-numero-preuve')?.value?.trim();
-
-  if (!_preuveFichier) {
-    afficherErreurUpload('Veuillez sélectionner une image de votre reçu.');
-    return;
-  }
-  if (!planId) {
-    afficherErreurUpload('Sélectionnez le plan souhaité.');
-    return;
-  }
-  if (!methode) {
-    afficherErreurUpload('Sélectionnez la méthode de paiement.');
-    return;
-  }
-  // FIX-3 : numéro expéditeur obligatoire — validation légère côté client
-  // (la validation stricte reste côté serveur, cf. api-paiement.ts).
-  const numeroNettoye = (numeroBrut || '').replace(/[^0-9+]/g, '');
-  if (!numeroNettoye || numeroNettoye.replace(/\D/g, '').length < 8) {
-    afficherErreurUpload('Indiquez le numéro utilisé pour effectuer le paiement (8 chiffres minimum).');
-    return;
-  }
-
-  btn.disabled = true;
-  btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-2"></i>Envoi en cours...';
-  document.getElementById('upload-progress').classList.remove('hidden');
-  document.getElementById('upload-error').classList.add('hidden');
-
-  let pct = 0;
-  const progressInterval = setInterval(() => {
-    pct = Math.min(pct + 12, 85);
-    const bar = document.getElementById('upload-progress-bar');
-    if (bar) bar.style.width = pct + '%';
-  }, 300);
-
-  try {
-    const formData = new FormData();
-    formData.append('preuve', _preuveFichier);
-    formData.append('plan_id', planId);
-    formData.append('methode_paiement', methode);
-    // FIX-3 : numéro utilisé pour le paiement — tarification/traçabilité,
-    // stocké côté serveur dans abonnements.numero_expediteur.
-    formData.append('numero_expediteur', numeroNettoye);
-
-    const res = await apiCallPaiement('/soumettre', {
-      method: 'POST',
-      body: formData
-    });
-
-    clearInterval(progressInterval);
-    const bar = document.getElementById('upload-progress-bar');
-    if (bar) bar.style.width = '100%';
-
-    const data = await res.json();
-
     if (res.ok) {
-      msg.className = 'mt-3 text-sm text-center font-medium rounded-xl p-3 bg-green-50 text-green-700 border border-green-200';
-      msg.textContent = data.message || `✓ Preuve soumise ! Notre équipe vérifiera sous ${SLA_ADMIN_H}h.`;
-      msg.classList.remove('hidden');
-      btn.innerHTML = '<i class="fa-solid fa-check mr-2"></i>Preuve envoyée';
-
-      setTimeout(() => initSectionAbonnement(), 2500);
-    } else {
-      btn.disabled = false;
-      btn.innerHTML = '<i class="fa-solid fa-paper-plane mr-2"></i>Soumettre ma preuve';
-      afficherErreurUpload(data.error || 'Erreur lors de l\'envoi. Réessayez.');
-    }
-  } catch (err) {
-    clearInterval(progressInterval);
-    btn.disabled = false;
-    btn.innerHTML = '<i class="fa-solid fa-paper-plane mr-2"></i>Soumettre ma preuve';
-    afficherErreurUpload('Erreur de connexion. Vérifiez votre réseau.');
-  } finally {
-    setTimeout(() => {
-      document.getElementById('upload-progress')?.classList.add('hidden');
-      const bar = document.getElementById('upload-progress-bar');
-      if (bar) bar.style.width = '0%';
-    }, 1000);
-  }
+      fb.textContent = 'Couleurs enregistrées.'; fb.className = 'text-xs bg-green-50 text-green-700 rounded-lg px-3 py-2';
+      if (tenantData) { tenantData.couleur_primaire = data.couleur_primaire; tenantData.couleur_secondaire = data.couleur_secondaire; localStorage.setItem('monmenu_tenant', JSON.stringify(tenantData)); }
+    } else { const d = await res.json(); fb.textContent = d.error||'Erreur.'; fb.className = 'text-xs bg-red-50 text-red-600 rounded-lg px-3 py-2'; }
+  } catch { fb.textContent = 'Erreur réseau.'; fb.className = 'text-xs bg-red-50 text-red-600 rounded-lg px-3 py-2'; }
 }
 
-function afficherErreurUpload(msg) {
-  const el = document.getElementById('upload-error');
-  const msgEl = document.getElementById('upload-error-msg');
-  if (el && msgEl) {
-    msgEl.textContent = msg;
-    el.classList.remove('hidden');
-  }
+async function _uploadMedia(fileInputId, progressId) {
+  const fileInput = document.getElementById(fileInputId);
+  if (!fileInput || !fileInput.files || !fileInput.files[0]) return null;
+  const prog = document.getElementById(progressId);
+  if (prog) prog.classList.remove('hidden');
+  try {
+    const fd = new FormData(); fd.append('file', fileInput.files[0]);
+    const res = await fetch('/api/v1/dashboard/upload-image', { method: 'POST', headers: {'X-Requested-With':'XMLHttpRequest'}, credentials: 'include', body: fd });
+    if (prog) prog.classList.add('hidden');
+    if (res.ok) { const d = await res.json(); return d.url; }
+    const err = await res.json(); return { error: err.error || 'Échec upload' };
+  } catch { if (prog) prog.classList.add('hidden'); return { error: 'Erreur réseau' }; }
 }
 
-// ─── Modal changement de plan (upgrade/downgrade) ────────────────────
+async function saveLogo() {
+  const fb = document.getElementById('logo-feedback'); fb.classList.remove('hidden');
+  let logo_url = document.getElementById('app-logo').value.trim() || null;
+  const upload = await _uploadMedia('logo-file', 'logo-upload-progress');
+  if (upload && typeof upload === 'string') logo_url = upload;
+  else if (upload && upload.error) { fb.textContent = 'Erreur upload : '+upload.error; fb.className = 'text-xs bg-red-50 text-red-600 rounded-lg px-3 py-2'; return; }
+  try {
+    const res = await fetch('/api/v1/dashboard/apparence', {
+      method: 'PATCH', headers: {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials: 'include',
+      body: JSON.stringify({ logo_url })
+    });
+    if (res.ok) { fb.textContent = logo_url?'Logo mis à jour.':'Logo supprimé.'; fb.className = 'text-xs bg-green-50 text-green-700 rounded-lg px-3 py-2'; if (logo_url) document.getElementById('app-logo').value = logo_url; }
+    else { const d = await res.json(); fb.textContent = d.error||'Erreur.'; fb.className = 'text-xs bg-red-50 text-red-600 rounded-lg px-3 py-2'; }
+  } catch { fb.textContent = 'Erreur réseau.'; fb.className = 'text-xs bg-red-50 text-red-600 rounded-lg px-3 py-2'; }
+}
 
-function ouvrirModalChangementPlan() {
-  document.getElementById('modal-changement-plan')?.remove();
+async function saveBanniere() {
+  const fb = document.getElementById('banniere-feedback'); fb.classList.remove('hidden');
+  let banniere_url = document.getElementById('app-banniere').value.trim() || null;
+  const upload = await _uploadMedia('banniere-file', 'banniere-upload-progress');
+  if (upload && typeof upload === 'string') banniere_url = upload;
+  else if (upload && upload.error) { fb.textContent = 'Erreur upload : '+upload.error; fb.className = 'text-xs bg-red-50 text-red-600 rounded-lg px-3 py-2'; return; }
+  try {
+    const res = await fetch('/api/v1/dashboard/apparence', {
+      method: 'PATCH', headers: {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials: 'include',
+      body: JSON.stringify({ banniere_url })
+    });
+    if (res.ok) { fb.textContent = banniere_url?'Bannière mise à jour.':'Bannière supprimée.'; fb.className = 'text-xs bg-green-50 text-green-700 rounded-lg px-3 py-2'; if (banniere_url) document.getElementById('app-banniere').value = banniere_url; }
+    else { const d = await res.json(); fb.textContent = d.error||'Erreur.'; fb.className = 'text-xs bg-red-50 text-red-600 rounded-lg px-3 py-2'; }
+  } catch { fb.textContent = 'Erreur réseau.'; fb.className = 'text-xs bg-red-50 text-red-600 rounded-lg px-3 py-2'; }
+}
 
-  const plansFiltres = _plansCache.filter(p => p.actif && p.prix_mensuel > 0);
-  if (!plansFiltres.length) {
-    alert('Impossible de charger les plans disponibles. Réessayez.');
-    return;
-  }
-
-  const modal = document.createElement('div');
-  modal.id = 'modal-changement-plan';
-  modal.className = 'fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4';
-  modal.innerHTML = `
-    <div class="bg-white rounded-2xl shadow-2xl max-w-lg w-full max-h-[90vh] overflow-y-auto">
-      <div class="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-        <h2 class="font-bold text-gray-900">Changer de plan</h2>
-        <button onclick="document.getElementById('modal-changement-plan').remove()"
-          class="text-gray-400 hover:text-gray-700 text-xl font-bold">&times;</button>
+// ==============================
+// SECTION PARAMÈTRES
+// ==============================
+async function loadParametres() {
+  const content = document.getElementById('dashboard-content');
+  content.innerHTML = `<div class="text-center py-8"><i class="fa-solid fa-circle-notch fa-spin text-xl text-gray-400"></i></div>`;
+  let tenant = tenantData || {};
+  try {
+    const res = await fetch('/api/v1/dashboard/profil', { credentials: 'include' });
+    if (res.ok) tenant = await res.json();
+  } catch {}
+  content.innerHTML = `
+    <div class="max-w-lg space-y-4">
+      <div class="bg-white rounded-2xl border border-gray-100 p-6">
+        <h2 class="font-bold text-gray-900 mb-5">Informations du restaurant</h2>
+        <form onsubmit="saveParametres(event)" class="space-y-4">
+          <div>
+            <label class="block text-sm font-semibold text-gray-700 mb-1.5">Nom du restaurant</label>
+            <input id="param-nom" type="text" required maxlength="100" value="${escHtml(tenant.nom||'')}" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200">
+          </div>
+          <div>
+            <label class="block text-sm font-semibold text-gray-700 mb-1.5">Numéro WhatsApp</label>
+            <input id="param-whatsapp" type="tel" required
+              pattern="^\\+[0-9]{8,15}$"
+              title="Format international requis, avec indicatif pays. Exemple : +22670000000"
+              value="${escHtml(tenant.whatsapp_number||'')}" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200" placeholder="+226 70 00 00 00">
+            <p class="text-xs text-gray-400 mt-1">Indispensable : indicatif pays inclus (ex : +226 pour le Burkina Faso).</p>
+          </div>
+          <div>
+            <label class="block text-sm font-semibold text-gray-700 mb-1.5">URL de votre boutique</label>
+            <div class="flex items-center bg-gray-50 border border-gray-200 rounded-xl px-4 py-3">
+              <span class="text-sm text-gray-400">monmenu.app/</span>
+              <span class="text-sm font-bold text-gray-900">${escHtml(tenant.slug||'—')}</span>
+            </div>
+            <p class="text-xs text-gray-400 mt-1">Le slug ne peut pas être modifié.</p>
+          </div>
+          <div>
+            <label class="block text-sm font-semibold text-gray-700 mb-1.5">Domaine personnalisé (optionnel)</label>
+            <input id="param-domaine" type="text" value="${escHtml(tenant.domaine_perso||'')}" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200" placeholder="monrestaurant.com">
+            <p class="text-xs text-gray-400 mt-1">Configurez un CNAME vers <code>monmenu.app</code> chez votre registrar.</p>
+          </div>
+          <p id="param-feedback" class="text-xs hidden rounded-lg px-3 py-2"></p>
+          <button type="submit" class="w-full bg-red-600 text-white font-bold py-3 rounded-xl hover:bg-red-700">
+            <i class="fa-solid fa-floppy-disk mr-1.5"></i> Enregistrer
+          </button>
+        </form>
       </div>
-      <div class="p-6">
-        <p class="text-sm text-gray-600 mb-4">
-          Sélectionnez le plan vers lequel vous souhaitez migrer.
-          Le changement prend effet à la prochaine période de facturation après confirmation admin.
-        </p>
-        <div class="space-y-3 mb-4">
-          ${plansFiltres.map(p => `
-            <label class="flex items-start gap-3 border border-gray-200 rounded-xl p-4 cursor-pointer hover:border-red-300 hover:bg-red-50/30 transition-colors">
-              <input type="radio" name="plan-changement" value="${esc(p.id)}"
-                class="mt-0.5 text-red-600 focus:ring-red-200">
-              <div class="flex-1">
-                <div class="flex items-center justify-between">
-                  <span class="font-semibold text-gray-900 text-sm">${esc(p.nom)}</span>
-                  <span class="text-sm font-bold text-red-600">${Number(p.prix_mensuel).toLocaleString('fr-FR')} FCFA/mois</span>
-                </div>
-                ${p.fonctionnalites?.sous_titre ? `<p class="text-xs text-gray-500 mt-0.5">${esc(p.fonctionnalites.sous_titre)}</p>` : ''}
-              </div>
-            </label>
-          `).join('')}
+      <div class="bg-white rounded-2xl border border-gray-100 p-6">
+        <h3 class="font-bold text-gray-900 mb-1">Plan actuel</h3>
+        <div class="flex items-center justify-between mt-3">
+          <div>
+            <span class="inline-flex items-center gap-1.5 bg-blue-100 text-blue-800 text-sm font-bold px-3 py-1 rounded-lg">
+              <i class="fa-solid fa-star text-xs"></i> ${escHtml(tenant.plan_nom||'Gratuit')}
+            </span>
+            <p class="text-xs text-gray-500 mt-1">Statut : <strong>${escHtml(tenant.statut||'essai')}</strong> • ${tenant.total_commandes||0} commande(s) total</p>
+          </div>
+          <a href="/dashboard/abonnement" onclick="navigateTo('abonnement');return false;" class="text-xs text-red-600 font-semibold hover:underline">Gérer l'abonnement →</a>
         </div>
-        <p class="text-xs text-gray-400 mb-4">
-          <i class="fa-solid fa-circle-info mr-1"></i>Périodicité : mensuel (uniquement)
-        </p>
-        <p id="msg-changement-plan" class="hidden text-xs p-3 rounded-xl mb-3"></p>
-        <button onclick="soumettreChangementPlan()"
-          class="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 rounded-xl transition-colors">
-          <i class="fa-solid fa-arrows-rotate mr-2"></i>Demander ce plan
+      </div>
+      <div class="bg-white rounded-2xl border border-gray-100 p-6">
+        <h3 class="font-bold text-gray-900 mb-1">Sécurité</h3>
+        <p class="text-sm text-gray-500 mb-4">Réinitialisez votre mot de passe si nécessaire.</p>
+        <button onclick="demanderResetPassword()" class="border border-gray-200 text-gray-700 font-semibold text-sm px-4 py-2 rounded-xl hover:bg-gray-50">
+          <i class="fa-solid fa-key mr-1.5"></i> Demander un lien de réinitialisation
         </button>
-        <p class="text-xs text-gray-400 text-center mt-3">
-          Une preuve de paiement sera requise pour finaliser le changement.
-        </p>
       </div>
-    </div>
-  `;
-  document.body.appendChild(modal);
-
-  modal.addEventListener('click', (e) => {
-    if (e.target === modal) modal.remove();
-  });
+      <div class="bg-red-50 border border-red-100 rounded-2xl p-6">
+        <h3 class="font-bold text-red-800 mb-1">Zone dangereuse</h3>
+        <p class="text-sm text-red-600 mb-4">La suppression est irréversible. Toutes vos données seront effacées.</p>
+        <button onclick="confirmerSuppression()" class="border border-red-300 text-red-600 font-semibold text-sm px-4 py-2 rounded-xl hover:bg-red-100">
+          <i class="fa-solid fa-trash mr-1.5"></i> Demander la suppression du compte
+        </button>
+      </div>
+    </div>`;
 }
-
-async function soumettreChangementPlan() {
-  const planId = document.querySelector('input[name="plan-changement"]:checked')?.value;
-  const msgEl = document.getElementById('msg-changement-plan');
-
-  if (!planId) {
-    if (msgEl) {
-      msgEl.textContent = 'Veuillez sélectionner un plan.';
-      msgEl.className = 'text-xs p-3 rounded-xl mb-3 bg-red-50 text-red-600';
-      msgEl.classList.remove('hidden');
-    }
-    return;
-  }
-
-  document.getElementById('modal-changement-plan')?.remove();
-
-  const blocSoumettre = document.getElementById('bloc-soumettre-preuve');
-  if (blocSoumettre) {
-    blocSoumettre.scrollIntoView({ behavior: 'smooth', block: 'center' });
-
-    const sel = document.getElementById('inp-plan-preuve');
-    if (sel) {
-      sel.value = planId;
-      majAffichagePrix();
-    }
-  }
-}
-
-// ─── Historique des abonnements ───────────────────────────────────────────────
-
-function construireHistorique(abonnements) {
-  const statutLabels = {
-    actif:                  '<span class="bg-green-100 text-green-700 px-2 py-0.5 rounded-full text-xs font-semibold">Actif</span>',
-    en_attente_confirmation:'<span class="bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full text-xs font-semibold">En attente</span>',
-    expire:                 '<span class="bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full text-xs font-semibold">Expiré</span>',
-    annule:                 '<span class="bg-red-100 text-red-500 px-2 py-0.5 rounded-full text-xs font-semibold">Annulé</span>',
-    rejete:                 '<span class="bg-red-100 text-red-500 px-2 py-0.5 rounded-full text-xs font-semibold">Rejeté</span>',
-    en_retard:              '<span class="bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full text-xs font-semibold">En retard</span>',
+async function saveParametres(e) {
+  e.preventDefault();
+  const fb = document.getElementById('param-feedback'); fb.classList.remove('hidden');
+  const data = {
+    nom: document.getElementById('param-nom').value.trim(),
+    whatsapp_number: formatWhatsAppNumberAvecPlus(document.getElementById('param-whatsapp').value.trim()),
+    domaine_perso: document.getElementById('param-domaine')?.value?.trim() || null
   };
-
-  const section = document.createElement('div');
-  section.className = 'bg-white border border-gray-200 rounded-2xl overflow-hidden';
-  section.innerHTML = `
-    <div class="px-5 py-4 border-b border-gray-100">
-      <h3 class="font-bold text-gray-900 text-sm">Historique des abonnements</h3>
-    </div>
-    <div class="overflow-x-auto">
-      <table class="w-full text-sm">
-        <thead>
-          <tr class="text-xs text-gray-500 bg-gray-50 uppercase">
-            <th class="px-4 py-3 text-left">Plan</th>
-            <th class="px-4 py-3 text-left hidden md:table-cell">Période</th>
-            <th class="px-4 py-3 text-left hidden sm:table-cell">Montant</th>
-            <th class="px-4 py-3 text-left">Statut</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${abonnements.map(a => `
-            <tr class="border-t border-gray-50 hover:bg-gray-50/50">
-              <td class="px-4 py-3 font-medium text-gray-800">${esc(a.plan_nom || a.plan_id || '—')}</td>
-              <td class="px-4 py-3 text-gray-500 hidden md:table-cell text-xs">
-                ${formatDate(a.date_debut)} → ${formatDate(a.date_fin)}
-              </td>
-              <td class="px-4 py-3 text-gray-600 hidden sm:table-cell">${formatMontant(a.montant_paye)}</td>
-              <td class="px-4 py-3">
-                ${statutLabels[a.statut] || esc(a.statut)}
-                ${a.motif_rejet ? `<div class="text-xs text-red-400 mt-0.5" title="${esc(a.motif_rejet)}">Motif: ${esc(a.motif_rejet.slice(0,40))}...</div>` : ''}
-              </td>
-            </tr>
-          `).join('')}
-        </tbody>
-      </table>
-    </div>
-  `;
-  return section;
-}
-
-// ─── Notifications paiement ───────────────────────────────────────────────────
-
-async function afficherNotificationsPaiement() {
-  const container = document.getElementById('notifs-paiement-list');
-  if (!container) return;
-
   try {
-    const res = await apiCallPaiement('/notifications');
-    if (!res.ok) { container.innerHTML = ''; return; }
-    const data = await res.json();
-
-    if (!data.notifications?.length) {
-      container.innerHTML = '<p class="text-xs text-gray-400 py-4 text-center">Aucune notification.</p>';
-      return;
-    }
-
-    const colorMap = {
-      success: 'bg-green-50 border-green-200 text-green-800',
-      warning: 'bg-yellow-50 border-yellow-200 text-yellow-800',
-      error:   'bg-red-50 border-red-200 text-red-800',
-      info:    'bg-blue-50 border-blue-200 text-blue-800',
-    };
-    const iconMap = {
-      success: 'fa-circle-check text-green-500',
-      warning: 'fa-triangle-exclamation text-yellow-500',
-      error:   'fa-circle-xmark text-red-500',
-      info:    'fa-circle-info text-blue-500',
-    };
-
-    container.innerHTML = data.notifications.map(n => `
-      <div class="border rounded-xl p-3 mb-2 flex items-start gap-2 ${colorMap[n.type] || colorMap.info}">
-        <i class="fa-solid ${iconMap[n.type] || iconMap.info} mt-0.5 flex-shrink-0"></i>
-        <div class="flex-1">
-          ${n.titre ? `<p class="text-xs font-semibold">${esc(n.titre)}</p>` : ''}
-          <p class="text-xs">${esc(n.message)}</p>
-          <p class="text-xs opacity-60 mt-0.5">${formatDate(n.created_at)}</p>
-        </div>
-        ${n.action ? `<a href="${esc(n.action.href)}" class="text-xs font-medium underline whitespace-nowrap">${esc(n.action.label)}</a>` : ''}
-      </div>
-    `).join('');
-  } catch {}
-}
-
-// ─── Utilitaire copier ────────────────────────────────────────────────────────
-
-function copierTexte(texte, btnEl) {
-  navigator.clipboard?.writeText(texte).then(() => {
-    if (btnEl) {
-      const original = btnEl.innerHTML;
-      btnEl.innerHTML = '<i class="fa-solid fa-check text-green-600"></i> Copié !';
-      setTimeout(() => { btnEl.innerHTML = original; }, 2000);
-    }
-  });
-}
-
-// ─── Initialisation automatique ──────────────────────────────────────────────
-
-document.addEventListener('DOMContentLoaded', async () => {
-  try {
-    const res = await fetch(PLANS_API, {
-      credentials: 'include',
-      headers: { 'X-Requested-With': 'XMLHttpRequest' }
+    const res = await fetch('/api/v1/dashboard/parametres', {
+      method: 'PATCH', headers: {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials: 'include',
+      body: JSON.stringify(data)
     });
     if (res.ok) {
-      const data = await res.json();
-      _plansCache = data.plans ?? [];
-    }
-  } catch {}
+      if (tenantData) { tenantData.nom = data.nom; tenantData.whatsapp_number = data.whatsapp_number; localStorage.setItem('monmenu_tenant', JSON.stringify(tenantData)); }
+      const nameEl = document.getElementById('tenant-name');
+      if (nameEl) nameEl.textContent = data.nom;
+      fb.textContent = 'Informations mises à jour.'; fb.className = 'text-xs bg-green-50 text-green-700 rounded-lg px-3 py-2';
+    } else { const d = await res.json(); fb.textContent = d.error||'Erreur.'; fb.className = 'text-xs bg-red-50 text-red-600 rounded-lg px-3 py-2'; }
+  } catch { fb.textContent = 'Erreur réseau.'; fb.className = 'text-xs bg-red-50 text-red-600 rounded-lg px-3 py-2'; }
+}
 
-  if (window.location.pathname === '/dashboard/abonnement') {
-    await initSectionAbonnement();
-  }
-  else if (document.getElementById('inp-plan-preuve')) {
-    const sel = document.getElementById('inp-plan-preuve');
-    if (_plansCache.length) {
-      remplirSelectPlans(sel, _plansCache);
-    }
-  }
-});
+function formatWhatsAppNumberAvecPlus(numeroRaw) {
+  let n = (numeroRaw || '').replace(/[^0-9+]/g, '');
+  if (n.startsWith('00')) n = '+' + n.slice(2);
+  if (n && !n.startsWith('+')) n = '+' + n;
+  return n;
+}
 
-// ─── Exports globaux ─────────────────────────────────────────────────────────
-window.initBandeauxPaiement    = initBandeauxPaiement;
-window.initSectionAbonnement   = initSectionAbonnement;
-window.soumettrePreuvePaiement = soumettrePreuvePaiement;
-window.afficherNotificationsPaiement = afficherNotificationsPaiement;
-window.handleDragOver  = handleDragOver;
-window.handleDragLeave = handleDragLeave;
-window.handleDrop      = handleDrop;
-window.previewPreuve   = previewPreuve;
-window.copierTexte     = copierTexte;
-window.ouvrirModalChangementPlan = ouvrirModalChangementPlan;
-window.soumettreChangementPlan   = soumettreChangementPlan;
-window.majAffichagePrix = majAffichagePrix;
-window.preselectPlan    = preselectPlan;
+function demanderResetPassword() { alert('Contactez le support : support@monmenu.app'); }
+function confirmerSuppression() {
+  if (confirm('ATTENTION : Irréversible. Confirmer ?')) alert('Demande enregistrée. Notre équipe vous contactera dans 48h.');
+}
+
+// ==============================
+// SECTION CODES PROMO
+// ==============================
+async function loadCodesPromo() {
+  const content = document.getElementById('dashboard-content');
+  content.innerHTML = `<div class="text-center py-8"><i class="fa-solid fa-circle-notch fa-spin text-xl text-gray-400"></i></div>`;
+  try {
+    const res = await fetch('/api/v1/dashboard/codes-promo', { credentials: 'include' });
+    if (!res.ok) throw new Error();
+    const data = await res.json();
+    renderCodesPromo(data.codes||[], content);
+  } catch {
+    content.innerHTML = '<p class="text-red-500 text-sm p-4">Erreur de chargement des codes promo.</p>';
+  }
+}
+function renderCodesPromo(codes, container) {
+  const now = new Date();
+  container.innerHTML = `
+    <div class="flex items-center justify-between mb-5 flex-wrap gap-2">
+      <p class="text-sm text-gray-500">${codes.length} code(s) promo</p>
+      <div class="flex gap-2">
+        <button onclick="exportCodesPromo()" class="flex items-center gap-1.5 text-xs text-green-700 hover:text-green-800 border border-green-200 rounded-lg px-3 py-1.5 transition-colors bg-green-50 hover:bg-green-100">
+          <i class="fa-solid fa-file-csv"></i> Exporter
+        </button>
+        <button onclick="showAddCodePromoModal()" class="bg-red-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-red-700 flex items-center gap-1.5">
+          <i class="fa-solid fa-plus text-xs"></i> Nouveau code
+        </button>
+      </div>
+    </div>
+    ${codes.length === 0 ? `
+      <div class="text-center py-16 border-2 border-dashed border-gray-200 rounded-2xl">
+        <i class="fa-solid fa-ticket text-4xl text-gray-200 mb-4 block"></i>
+        <p class="font-semibold text-gray-500 mb-2">Aucun code promo</p>
+        <p class="text-sm text-gray-400 mb-5">Créez des codes de réduction pour fidéliser vos clients.</p>
+        <button onclick="showAddCodePromoModal()" class="bg-red-600 text-white text-sm font-semibold px-5 py-2.5 rounded-xl hover:bg-red-700">Créer un code promo</button>
+      </div>` :
+    `<div class="bg-white border border-gray-100 rounded-xl overflow-hidden">
+      <div class="divide-y divide-gray-50">
+        ${codes.map(c => {
+          const expire = c.date_fin ? new Date(c.date_fin) < now : false;
+          const epuise = c.usage_max && c.usage_actuel >= c.usage_max;
+          const actif = c.actif && !expire && !epuise;
+          return `<div class="flex items-center gap-4 px-5 py-4 hover:bg-gray-50">
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center gap-2">
+                <span class="font-bold text-gray-900 font-mono text-sm">${escHtml(c.code)}</span>
+                <span class="text-xs px-2 py-0.5 rounded-full ${actif?'bg-green-100 text-green-700':expire?'bg-orange-100 text-orange-600':'bg-gray-100 text-gray-500'}">
+                  ${actif?'Actif':expire?'Expiré':epuise?'Épuisé':'Inactif'}
+                </span>
+              </div>
+              <div class="text-xs text-gray-500 mt-0.5">
+                ${c.type==='pourcentage' ? c.valeur+'% de réduction' : (c.valeur||0).toLocaleString('fr-FR')+' FCFA de réduction'}
+                ${c.date_fin ? ' • Expire le '+new Date(c.date_fin).toLocaleDateString('fr-FR') : ''}
+                ${c.usage_max ? ' • '+c.usage_actuel+'/'+c.usage_max+' util.' : ' • '+c.usage_actuel+' util.'}
+              </div>
+            </div>
+            <button onclick="copierCodePromo('${escJs(c.code)}')" class="p-2 text-gray-400 hover:text-blue-600" title="Copier le code">
+              <i class="fa-solid fa-copy text-sm"></i>
+            </button>
+            <button onclick="supprimerCodePromo('${c.id}')" class="p-2 text-gray-400 hover:text-red-500" title="Supprimer">
+              <i class="fa-solid fa-trash text-sm"></i>
+            </button>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>`}`;
+}
+function showAddCodePromoModal() {
+  showModal('Nouveau code promo', `
+    <form onsubmit="submitAddCodePromo(event)" class="space-y-4">
+      <div>
+        <label class="block text-sm font-semibold text-gray-700 mb-1.5">Code *</label>
+        <input id="promo-code" type="text" required maxlength="20" placeholder="BIENVENUE20" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-red-200 uppercase" oninput="this.value=this.value.toUpperCase()">
+        <p class="text-xs text-gray-400 mt-1">3-20 caractères alphanumériques.</p>
+      </div>
+      <div>
+        <label class="block text-sm font-semibold text-gray-700 mb-1.5">Type *</label>
+        <select id="promo-type" onchange="updatePromoValeurMax()" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200">
+          <option value="pourcentage">Pourcentage (%)</option>
+          <option value="montant_fixe">Montant fixe (FCFA)</option>
+        </select>
+      </div>
+      <div>
+        <label class="block text-sm font-semibold text-gray-700 mb-1.5">Valeur *</label>
+        <input id="promo-valeur" type="number" required min="1" max="100" step="1" placeholder="20" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200">
+        <p id="promo-valeur-hint" class="text-xs text-gray-400 mt-1">Max 100%</p>
+      </div>
+      <div>
+        <label class="block text-sm font-semibold text-gray-700 mb-1.5">Date d'expiration (optionnel)</label>
+        <input id="promo-datefin" type="date" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200">
+      </div>
+      <div>
+        <label class="block text-sm font-semibold text-gray-700 mb-1.5">Utilisations max (optionnel)</label>
+        <input id="promo-max" type="number" min="1" placeholder="vide = illimité" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200">
+      </div>
+      <button type="submit" class="w-full bg-red-600 text-white font-bold py-3 rounded-xl hover:bg-red-700">Créer le code promo</button>
+    </form>`);
+}
+function updatePromoValeurMax() {
+  const type = document.getElementById('promo-type')?.value;
+  const input = document.getElementById('promo-valeur');
+  const hint = document.getElementById('promo-valeur-hint');
+  if (!input||!hint) return;
+  if (type==='pourcentage') { input.max=100; input.placeholder='20'; hint.textContent='Max 100%'; }
+  else { input.max=9999999; input.placeholder='1000'; hint.textContent='Montant en FCFA'; }
+}
+async function submitAddCodePromo(e) {
+  e.preventDefault();
+  const code = document.getElementById('promo-code').value.trim().toUpperCase();
+  const type = document.getElementById('promo-type').value;
+  const valeur = parseFloat(document.getElementById('promo-valeur').value);
+  const date_fin = document.getElementById('promo-datefin').value || null;
+  const usage_max = document.getElementById('promo-max').value ? parseInt(document.getElementById('promo-max').value) : null;
+  try {
+    const res = await fetch('/api/v1/dashboard/codes-promo', {
+      method: 'POST', headers: {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, credentials: 'include',
+      body: JSON.stringify({ code, type, valeur, date_fin, usage_max })
+    });
+    if (res.ok) {
+      const d = await res.json();
+      closeModal();
+      loadCodesPromo();
+      if (d && d.code) copierCodePromo(d.code, true);
+    } else { const d = await res.json(); alert(d.error||'Erreur'); }
+  } catch { alert('Erreur réseau.'); }
+}
+async function supprimerCodePromo(promoId) {
+  if (!confirm('Supprimer ce code promo ?')) return;
+  try {
+    const res = await fetch('/api/v1/dashboard/codes-promo/' + promoId, { method: 'DELETE', headers: {'X-Requested-With':'XMLHttpRequest'}, credentials: 'include' });
+    if (res.ok) loadCodesPromo();
+  } catch { alert('Erreur réseau.'); }
+}
+
+function copierCodePromo(code, silencieux) {
+  navigator.clipboard.writeText(code).then(() => {
+    if (silencieux) return;
+    const toast = document.createElement('div');
+    toast.className = 'fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-gray-900 text-white text-sm px-4 py-2.5 rounded-xl shadow-lg';
+    toast.innerHTML = '<i class="fa-solid fa-check mr-1.5"></i>Code « ' + escHtml(code) + ' » copié !';
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 1800);
+  }).catch(() => alert('Code : ' + code));
+}
+
+async function exportCodesPromo() {
+  try {
+    const res = await fetch('/api/v1/dashboard/codes-promo/export-csv', { credentials: 'include' });
+    if (!res.ok) { alert('Erreur export.'); return; }
+    const blob = await res.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'codes-promo.csv';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  } catch { alert('Erreur réseau.'); }
+}
+
+// ==============================
+// SECTION PDV — Mon restaurant
+// ==============================
+async function loadPdv() {
+  const content = document.getElementById('dashboard-content');
+  content.innerHTML = `<div class="text-center py-8"><i class="fa-solid fa-circle-notch fa-spin text-xl text-gray-400"></i></div>`;
+  try {
+    const res = await fetch('/api/v1/dashboard/pdv', { credentials: 'include' });
+    if (!res.ok) throw new Error();
+    const data = await res.json();
+    renderPdvConfig(data.pdv, content);
+  } catch {
+    content.innerHTML = '<p class="text-red-500 text-sm p-4">Erreur de chargement du point de vente.</p>';
+  }
+}
+
+function parsePdvHoraires(raw) {
+  if (!raw) return {};
+  try { return typeof raw === 'string' ? JSON.parse(raw) : raw; } catch { return {}; }
+}
+
+function renderPdvConfig(pdv, container) {
+  container.innerHTML = `
+    <div class="max-w-lg space-y-4">
+      <div class="bg-white rounded-2xl border border-gray-100 p-6">
+        <h2 class="font-bold text-gray-900 mb-1">Point de vente</h2>
+        <p class="text-sm text-gray-500 mb-5">Configurez l'adresse et les coordonnées GPS.</p>
+        <form onsubmit="savePdv(event)" class="space-y-4">
+          <div>
+            <label class="block text-sm font-semibold text-gray-700 mb-1.5">Nom du point de vente</label>
+            <input id="pdv-nom" type="text" maxlength="100" value="${escHtml(pdv?.nom||'')}" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200" placeholder="Restaurant principal">
+          </div>
+          <div>
+            <label class="block text-sm font-semibold text-gray-700 mb-1.5">Adresse complète</label>
+            <input id="pdv-adresse" type="text" maxlength="200" value="${escHtml(pdv?.adresse||'')}" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200" placeholder="Quartier, rue, ville...">
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block text-sm font-semibold text-gray-700 mb-1.5">Latitude GPS</label>
+              <input id="pdv-lat" type="number" step="0.000001" min="-90" max="90" value="${pdv?.latitude||''}" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200" placeholder="12.3569">
+            </div>
+            <div>
+              <label class="block text-sm font-semibold text-gray-700 mb-1.5">Longitude GPS</label>
+              <input id="pdv-lon" type="number" step="0.000001" min="-180" max="180" value="${pdv?.longitude||''}" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200" placeholder="-1.5353">
+            </div>
+          </div>
+          <button type="button" onclick="useMyLocation()" class="w-full border border-gray-200 text-gray-700 font-semibold text-sm py-2.5 rounded-xl hover:bg-gray-50 flex items-center justify-center gap-2">
+            <i class="fa-solid fa-location-crosshairs"></i> Utiliser ma position actuelle
+          </button>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block text-sm font-semibold text-gray-700 mb-1.5">Tarif base (FCFA)</label>
+              <input id="pdv-tarif-base" type="number" min="0" max="99999" step="100" value="${pdv?.tarif_livraison_base??500}" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200">
+              <p class="text-xs text-gray-400 mt-1">Frais fixes min.</p>
+            </div>
+            <div>
+              <label class="block text-sm font-semibold text-gray-700 mb-1.5">Tarif par km (FCFA)</label>
+              <input id="pdv-tarif-km" type="number" min="0" max="9999" step="50" value="${pdv?.tarif_par_km??200}" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200">
+              <p class="text-xs text-gray-400 mt-1">Frais par km.</p>
+            </div>
+          </div>
+          <div>
+            <label class="block text-sm font-semibold text-gray-700 mb-2">Horaires d'ouverture</label>
+            <div id="pdv-horaires-container" class="bg-gray-50 rounded-xl p-3"></div>
+            <p class="text-xs text-gray-400 mt-1.5">Ces horaires déterminent le badge « Ouvert / Fermé » sur votre boutique.</p>
+          </div>
+          <p id="pdv-feedback" class="text-xs hidden rounded-lg px-3 py-2"></p>
+          <button type="submit" class="w-full bg-red-600 text-white font-bold py-3 rounded-xl hover:bg-red-700">
+            <i class="fa-solid fa-floppy-disk mr-1.5"></i> Enregistrer
+          </button>
+        </form>
+      </div>
+      ${pdv?.latitude && pdv?.longitude ?
+      `<div class="bg-green-50 border border-green-100 rounded-2xl p-4 text-sm text-green-700">
+        <i class="fa-solid fa-circle-check mr-1.5"></i>GPS configuré : <strong>${pdv.latitude}, ${pdv.longitude}</strong><br>
+        Frais de livraison calculés automatiquement.</div>` :
+      `<div class="bg-orange-50 border border-orange-100 rounded-2xl p-4 text-sm text-orange-700">
+        <i class="fa-solid fa-triangle-exclamation mr-1.5"></i>GPS non configuré. Le calcul des frais de livraison nécessite vos coordonnées GPS.</div>`}
+    </div>`;
+  renderPdvHorairesEditor(parsePdvHoraires(pdv?.horaires));
+}
+
+function renderPdvHorairesEditor(horaires) {
+  const container = document.getElementById('pdv-horaires-container');
+  if (!container) return;
+  container.innerHTML = JOURS_SEMAINE.map(jour => {
+    const entry = horaires[jour] || {};
+    const ouvert = entry.ouvert !== false;
+    const debut = entry.debut || '08:00';
+    const fin = entry.fin || '22:00';
+    return `<div class="flex items-center gap-3 py-2.5 border-b border-gray-200/70 last:border-0">
+      <div class="w-20 text-sm font-medium text-gray-700 flex-shrink-0">${JOURS_LABELS[jour]}</div>
+      <label class="relative inline-flex items-center cursor-pointer flex-shrink-0">
+        <input type="checkbox" id="pdv-h-${jour}-ouvert" class="sr-only peer" ${ouvert ? 'checked' : ''} onchange="_togglePdvHoraire('${jour}')">
+        <div class="w-9 h-5 bg-gray-300 rounded-full peer peer-checked:bg-red-600 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-4"></div>
+      </label>
+      <div id="pdv-h-${jour}-times" class="flex items-center gap-1.5 flex-1 ${ouvert ? '' : 'hidden'}">
+        <input type="time" id="pdv-h-${jour}-debut" value="${debut}" class="border border-gray-200 rounded-lg px-2 py-1.5 text-xs w-[6.5rem] bg-white">
+        <span class="text-gray-400 text-xs">–</span>
+        <input type="time" id="pdv-h-${jour}-fin" value="${fin}" class="border border-gray-200 rounded-lg px-2 py-1.5 text-xs w-[6.5rem] bg-white">
+      </div>
+      <span id="pdv-h-${jour}-closed" class="${ouvert ? 'hidden' : ''} text-xs text-gray-400 italic ml-auto">Fermé</span>
+    </div>`;
+  }).join('');
+}
+
+function _togglePdvHoraire(jour) {
+  const checked = document.getElementById('pdv-h-' + jour + '-ouvert').checked;
+  document.getElementById('pdv-h-' + jour + '-times').classList.toggle('hidden', !checked);
+  document.getElementById('pdv-h-' + jour + '-closed').classList.toggle('hidden', checked);
+}
+
+function collecterPdvHoraires() {
+  const horaires = {};
+  JOURS_SEMAINE.forEach(jour => {
+    const ouvertEl = document.getElementById('pdv-h-' + jour + '-ouvert');
+    const ouvert = ouvertEl ? ouvertEl.checked : false;
+    horaires[jour] = {
+      ouvert,
+      debut: ouvert ? document.getElementById('pdv-h-' + jour + '-debut').value : null,
+      fin: ouvert ? document.getElementById('pdv-h-' + jour + '-fin').value : null
+    };
+  });
+  return horaires;
+}
+
+function useMyLocation() {
+  if (!navigator.geolocation) { alert('Géolocalisation non supportée.'); return; }
+  navigator.geolocation.getCurrentPosition(pos => {
+    document.getElementById('pdv-lat').value = pos.coords.latitude.toFixed(6);
+    document.getElementById('pdv-lon').value = pos.coords.longitude.toFixed(6);
+    const fb = document.getElementById('pdv-feedback');
+    fb.textContent = 'Position : ' + pos.coords.latitude.toFixed(4) + ', ' + pos.coords.longitude.toFixed(4);
+    fb.className = 'text-xs bg-green-50 text-green-700 rounded-lg px-3 py-2'; fb.classList.remove('hidden');
+  }, () => alert('Impossible d\'obtenir votre position.'));
+}
+async function savePdv(e) {
+  e.preventDefault();
+  const fb = document.getElementById('pdv-feedback');
+  const data = {
+    nom: document.getElementById('pdv-nom').value.trim(),
+    adresse: document.getElementById('pdv-adresse').value.trim(),
+    latitude: parseFloat(document.getElementById('pdv-lat').value)||null,
+    lon
