@@ -1,5 +1,25 @@
 // src/pages/dashboard.ts
-// v1.7.0 — AJOUT bouton retour (#btn-retour) + cloche notifications (#btn-notif)
+// v1.8.0 — FIX CYCLE-10 : /static/js/auth-fetch.js n'était JAMAIS chargé.
+//
+// BUG TROUVÉ : dashboard.js (dashFetch) et dashboard-paiement.js
+// (apiCallPaiement) utilisent tous deux `window.fetchAvecSession` s'il
+// existe, avec fallback silencieux sur fetch() brut sinon. Le fichier
+// /static/js/auth-fetch.js — qui DÉFINIT window.fetchAvecSession et gère
+// le rafraîchissement automatique du cookie httpOnly sb-access-token
+// (expire au bout de 1h) via POST /api/v1/auth/refresh — existe bien sur
+// le serveur mais n'était référencé par AUCUNE balise <script> ici.
+// Conséquence : window.fetchAvecSession était TOUJOURS undefined, donc
+// TOUTES les requêtes authentifiées du dashboard retombaient sur fetch()
+// standard, sans jamais rafraîchir la session — chaque section du
+// dashboard recommençait donc à afficher "Session expirée" après 1h
+// d'usage, quel que soit le nombre de corrections apportées par ailleurs
+// à dashboard.js.
+//
+// FIX : ajout de <script src="/static/js/auth-fetch.js"></script> AVANT
+// dashboard.js et dashboard-paiement.js (ordre requis, documenté dans
+// l'en-tête de auth-fetch.js lui-même).
+//
+// v1.7.0 (conservé) — bouton retour (#btn-retour) + cloche notifications (#btn-notif)
 import { renderHead } from '../components/head'
 
 export function renderDashboardPage(
@@ -186,6 +206,13 @@ export function renderDashboardPage(
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <!-- §2 — Supabase JS client (clé anon uniquement) pour Realtime postgres_changes -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+  <!-- FIX CYCLE-10 — auth-fetch.js DOIT être chargé avant dashboard.js et
+       dashboard-paiement.js : il définit window.fetchAvecSession, utilisé
+       par dashFetch() et apiCallPaiement() pour rafraîchir automatiquement
+       le cookie de session (expire au bout de 1h). Sans cette balise,
+       window.fetchAvecSession restait undefined et TOUT le dashboard
+       retombait sur fetch() brut, sans jamais renouveler la session. -->
+  <script src="/static/js/auth-fetch.js"></script>
   <script src="/static/js/dashboard.js"></script>
   <!-- Module paiement : bandeau + section abonnement (audit 04-plan-implementation.md §B) -->
   <script src="/static/js/dashboard-paiement.js"></script>
