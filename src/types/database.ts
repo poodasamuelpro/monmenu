@@ -5,6 +5,13 @@
 // - Tenant : ajout statut 'en_attente_confirmation' (indirect via abonnement), paiement_en_attente_depuis
 // - Abonnement : ajout de tous les champs paiement manuel (migration 007)
 // - NotificationRestaurant : nouvelle table (migration 008)
+//
+// AJOUT — module FCM (push notifications mobile) : 3 nouvelles variables
+// d'environnement Cloudflare Workers dans Env (FCM_PROJECT_ID,
+// FCM_CLIENT_EMAIL, FCM_PRIVATE_KEY), utilisées par src/lib/fcm.ts.
+// Toutes optionnelles : si absentes, sendFcmNotification/sendFcmToTenant
+// (lib/fcm.ts) se désactivent silencieusement sans jamais faire échouer
+// une route (voir fcmConfigure() dans lib/fcm.ts).
 
 export interface Pays {
   id: string
@@ -323,6 +330,16 @@ export interface NewsletterSubscriber {
   created_at: string
 }
 
+// AJOUT — Token FCM d'un device (app mobile) — migration 013
+export interface FcmToken {
+  id: string
+  tenant_id: string
+  token: string
+  platform: 'android' | 'ios' | 'web'
+  created_at: string
+  updated_at: string
+}
+
 // Contexte Cloudflare Workers
 export type Env = {
   DB: D1Database
@@ -348,6 +365,12 @@ export type Env = {
   ADMIN_WEBHOOK_SECRET?: string // secret partagé pour appels admin → web
   // BUG-012 CORRIGÉ — ADMIN_TASK_SECRET pour les tâches cron manuelles (api-admin-tasks.ts)
   ADMIN_TASK_SECRET?: string // secret transmis dans header X-Admin-Task-Secret
+  // AJOUT module FCM — Push notifications mobile (voir lib/fcm.ts).
+  // Toutes optionnelles : si absentes, lib/fcm.ts se désactive en silence
+  // (aucune route existante n'échoue si FCM n'est pas encore configuré).
+  FCM_PROJECT_ID?: string     // ex: 'monmenumanager' (google-services.json → project_id) — Text
+  FCM_CLIENT_EMAIL?: string   // JSON compte de service Firebase Admin → client_email — Secret
+  FCM_PRIVATE_KEY?: string    // JSON compte de service Firebase Admin → private_key (avec \n) — Secret
 }
 
 export interface CartItem {
