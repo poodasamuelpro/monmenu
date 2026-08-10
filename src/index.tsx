@@ -262,21 +262,21 @@ Elle permet aux restaurateurs de créer leur boutique digitale en quelques minut
 et de recevoir les commandes directement sur WhatsApp — sans commission.
 
 ## Sections principales
-- Accueil : https://monmenu.app/
-- Blog : https://monmenu.app/blog
-- Contact : https://monmenu.app/contact
-- Inscription restaurant : https://monmenu.app/inscription
-- Connexion dashboard : https://monmenu.app/connexion
+- Accueil : https://monmenu.com/
+- Blog : https://monmenu.com/blog
+- Contact : https://monmenu.com/contact
+- Inscription restaurant : https://monmenu.com/inscription
+- Connexion dashboard : https://monmenu.com/connexion
 
 ## Pages légales
-- CGU : https://monmenu.app/legal/cgu
-- Confidentialité : https://monmenu.app/legal/confidentialite
-- Mentions légales : https://monmenu.app/legal/mentions
-- Cookies : https://monmenu.app/legal/cookies
+- CGU : https://monmenu.com/legal/cgu
+- Confidentialité : https://monmenu.com/legal/confidentialite
+- Mentions légales : https://monmenu.com/legal/mentions
+- Cookies : https://monmenu.com/legal/cookies
 
 ## Boutiques restaurants
 Chaque restaurant inscrit dispose d'une boutique publique accessible via :
-https://monmenu.app/{slug-du-restaurant}
+https://monmenu.com/{slug-du-restaurant}
 
 ## API publique
 - Commandes : POST /api/v1/commandes
