@@ -195,7 +195,7 @@ export function renderCreerComptePage(nomProjet: string): string {
             placeholder="Chez Fatou, La Bonne Table..."
             oninput="updateSlug()">
           <div class="mt-1.5 text-xs text-gray-400">
-            URL : monmenu.app/<span id="slug-display" class="text-red-600 font-semibold">votre-restaurant</span>
+            URL : monmenu.com/<span id="slug-display" class="text-red-600 font-semibold">votre-restaurant</span>
           </div>
         </div>
 
