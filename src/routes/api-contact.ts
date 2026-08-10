@@ -6,13 +6,13 @@
 // jamais envoyer le message nulle part. Elle envoie désormais réellement
 // le message par email (Brevo) vers l'adresse de contact officielle
 // MonMenu, configurée dynamiquement via D1 config_globale (voir
-// lib/email.ts et lib/supabase.ts — aucune adresse codée en dur ici).
+// lib/brevo.ts et lib/supabase.ts — aucune adresse codée en dur ici).
 
 import { Hono } from 'hono'
 import { z } from 'zod'
 import type { Env } from '../types/database'
 import { setSecurityHeaders, checkRateLimit } from '../lib/security'
-import { envoyerEmailContact } from '../lib/email'
+import { envoyerEmailContact } from '../lib/brevo'
 
 export const contactRouter = new Hono<{ Bindings: Env }>()
 
