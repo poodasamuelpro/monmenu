@@ -1,5 +1,17 @@
 // Module d'envoi email Brevo avec rotation intelligente de clés API
 // Section 12 du cahier des charges
+//
+// AJOUT — L'expéditeur (email + nom) n'est plus codé en dur : il est lu
+// dynamiquement depuis D1 config_globale (clés 'email_expediteur' et
+// 'nom_expediteur', voir lib/supabase.ts), au même titre que nom_projet /
+// whatsapp_support. Tant que 'email_expediteur' n'est pas configuré,
+// l'expéditeur retombe automatiquement sur l'adresse de contact
+// (email_contact) — ce qui fonctionne avec la vérification "expéditeur
+// unique" de Brevo, sans authentification de domaine. Cela permet de
+// changer de domaine (ex: passage de .app à .com) ou de reconfigurer
+// Brevo sans aucune modification de code ni redéploiement.
+
+import { getEmailExpediteur, getNomExpediteur, getEmailContact } from './supabase'
 
 interface EmailPayload {
   to: Array<{ email: string; name?: string }>
@@ -100,6 +112,8 @@ async function sendWithKey(
 export async function sendEmail(
   payload: EmailPayload,
   env: {
+    DB: D1Database
+    KV_CACHE?: KVNamespace
     BREVO_API_KEY_1: string
     BREVO_API_KEY_2: string
     BREVO_API_KEY_3: string
@@ -108,9 +122,11 @@ export async function sendEmail(
 ): Promise<{ success: boolean; error?: string }> {
   initKeys(env)
 
+  // AJOUT — expéditeur dynamique (D1 config_globale) : plus aucune valeur
+  // codée en dur ici. Voir lib/supabase.ts (getEmailExpediteur / getNomExpediteur).
   const sender = senderOverride ?? {
-    email: 'noreply@monmenu.app',
-    name: 'MonMenu'
+    email: await getEmailExpediteur(env),
+    name: await getNomExpediteur(env)
   }
 
   // Tenter chaque clé disponible
@@ -128,4 +144,58 @@ export async function sendEmail(
     success: false,
     error: 'Toutes les clés Brevo sont épuisées. Vérifier les quotas.'
   }
+}
+
+// AJOUT — Helper dédié à l'envoi du message du formulaire de contact public
+// (voir routes/api-contact.ts) vers l'adresse de contact officielle
+// MonMenu, configurée dynamiquement via D1 config_globale
+// (getEmailContact — clé 'email_contact'). Aucune adresse codée en dur.
+export async function envoyerEmailContact(
+  env: {
+    DB: D1Database
+    KV_CACHE?: KVNamespace
+    BREVO_API_KEY_1: string
+    BREVO_API_KEY_2: string
+    BREVO_API_KEY_3: string
+  },
+  formulaire: { nom: string; email: string; profil: string; sujet: string; message: string }
+): Promise<{ success: boolean; error?: string }> {
+  const emailContact = await getEmailContact(env)
+  const nomExpediteurAffiche = await getNomExpediteur(env)
+
+  const htmlContent = `
+    <h2>Nouveau message — Formulaire de contact ${escapeHtml(nomExpediteurAffiche)}</h2>
+    <p><strong>Nom :</strong> ${escapeHtml(formulaire.nom)}</p>
+    <p><strong>Email/Téléphone :</strong> ${escapeHtml(formulaire.email)}</p>
+    <p><strong>Profil :</strong> ${escapeHtml(formulaire.profil)}</p>
+    <p><strong>Sujet :</strong> ${escapeHtml(formulaire.sujet)}</p>
+    <p><strong>Message :</strong></p>
+    <p>${escapeHtml(formulaire.message).replace(/\n/g, '<br>')}</p>
+  `
+  const textContent = `Nouveau message — Formulaire de contact ${nomExpediteurAffiche}
+Nom : ${formulaire.nom}
+Email/Téléphone : ${formulaire.email}
+Profil : ${formulaire.profil}
+Sujet : ${formulaire.sujet}
+Message :
+${formulaire.message}`
+
+  return sendEmail(
+    {
+      to: [{ email: emailContact }],
+      subject: `[Contact ${nomExpediteurAffiche}] ${formulaire.sujet} — ${formulaire.nom}`,
+      htmlContent,
+      textContent
+    },
+    env
+  )
+}
+
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;')
 }
