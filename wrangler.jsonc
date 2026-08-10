@@ -40,8 +40,10 @@
   // Variables non sensibles — PUBLIC_BASE_URL utilisée par le cron pour
   // savoir quelle URL capturer (lib/screenshot.ts).
   // CORRIGÉ 2026-07-30 — pointée vers l'URL workers.dev actuelle tant que
-  // le domaine définitif monmenu.app n'est pas branché en production.
-  // À remettre sur "https://monmenu.app" une fois le domaine final actif.
+  // le domaine définitif monmenu.com n'est pas acheté et branché en production.
+  // À remettre sur "https://monmenu.com" une fois le domaine final actif
+  // (voir la procédure : Cloudflare DNS + Custom Domain sur le Worker +
+  // authentification du domaine côté Brevo).
   "vars": {
     "PUBLIC_BASE_URL": "https://monmenu.poodasamuelpro.workers.dev"
   },
