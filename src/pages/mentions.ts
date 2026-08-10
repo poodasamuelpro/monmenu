@@ -4,7 +4,7 @@ export function getMentionsContent(nomProjet: string, year: number) {
 <p><strong>${nomProjet}</strong><br>
 Plateforme de services numériques pour la restauration<br>
 Siège social : Ouagadougou, Burkina Faso<br>
-Contact : <a href="mailto:contact@monmenu.app" class="text-red-600 hover:underline">contact@monmenu.app</a></p>
+Contact : <a href="mailto:contact.monmenu@gmail.com" class="text-red-600 hover:underline">contact.monmenu@gmail.com</a></p>
 
 <h2 class="text-xl font-bold text-gray-900 mt-8 mb-3">Hébergement et Infrastructure</h2>
 <p>La plateforme est hébergée sur des infrastructures cloud de premier plan, garantissant une haute disponibilité et une sécurité optimale des données, avec des serveurs situés dans des centres de données sécurisés.</p>
