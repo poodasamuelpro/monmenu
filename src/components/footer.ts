@@ -32,7 +32,7 @@ export function renderFooter(nomProjet: string): string {
             class="w-9 h-9 bg-gray-800 hover:bg-pink-600 rounded-lg flex items-center justify-center transition-colors">
             <i class="fa-brands fa-instagram text-xs" aria-hidden="true"></i>
           </a>
-          <a href="https://wa.me/22600000000?text=Bonjour%20MonMenu"
+          <a href="https://wa.me/22677980264?text=Bonjour%20MonMenu"
             target="_blank" rel="noopener noreferrer"
             aria-label="WhatsApp ${nomProjet}"
             class="w-9 h-9 bg-gray-800 hover:bg-green-600 rounded-lg flex items-center justify-center transition-colors">
@@ -66,7 +66,7 @@ export function renderFooter(nomProjet: string): string {
         <ul class="space-y-2.5 text-sm">
           <li><a href="/contact" class="hover:text-white transition-colors">Contactez-nous</a></li>
           <li><a href="/#faq" class="hover:text-white transition-colors">FAQ</a></li>
-          <li><a href="mailto:support@monmenu.app" class="hover:text-white transition-colors">Support technique</a></li>
+          <li><a href="mailto:contact.monmenu@gmail.com" class="hover:text-white transition-colors">Support technique</a></li>
         </ul>
       </nav>
 
