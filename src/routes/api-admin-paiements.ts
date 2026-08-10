@@ -16,6 +16,16 @@
  *   FIX-F — Messages harmonisés avec SLA_ADMIN_HEURES (48h) /
  *           FENETRE_ACCES_HEURES (72h), au lieu de texte "72h" en dur.
  *
+ * AJOUT FCM (2026-08-10) :
+ *   Push notification au restaurant (app mobile MonMenu Manager) en
+ *   complément du canal WhatsApp existant, sur confirmation et rejet de
+ *   paiement. Best-effort, non-bloquant (waitUntil + .catch), ne peut pas
+ *   faire échouer la réponse HTTP. Voir src/lib/fcm.ts.
+ *   ⚠️ Nécessite que Env (src/types/database.ts) expose bien
+ *   FCM_PROJECT_ID / FCM_CLIENT_EMAIL / FCM_PRIVATE_KEY — à ajouter
+ *   séparément si ce n'est pas déjà fait, sinon le fichier ne compilera
+ *   pas (c.env n'aura pas ces propriétés).
+ *
  * NOTE IMPORTANTE (déjà correct AVANT cette correction, pas d'action requise) :
  *   Le rejet (POST /rejeter) passe déjà l'abonnement en statut 'annule'
  *   IMMÉDIATEMENT (pas d'attente du cron), ET redescend tenant.statut à
@@ -55,6 +65,7 @@ import { setSecurityHeaders } from '../lib/security'
 import { formaterDate, SLA_ADMIN_HEURES, FENETRE_ACCES_HEURES } from '../lib/paiement'
 import { resoudreIdSupabaseDepuisPlanD1 } from '../lib/plans'
 import { notifierPaiementConfirme, notifierPaiementRejete } from '../lib/whatsapp'
+import { sendFcmToTenant } from '../lib/fcm'
 
 const adminPaiementsRouter = new Hono<{ Bindings: Env }>()
 
@@ -253,6 +264,19 @@ adminPaiementsRouter.post('/confirmer', async (c) => {
     })
   }
 
+  // AJOUT FCM — Push au restaurant (app mobile), en complément du WhatsApp
+  // + de la notif in-app ci-dessous. Best-effort, ne bloque jamais la
+  // réponse HTTP. Utilise c.executionCtx.waitUntil pour laisser l'envoi se
+  // terminer après la réponse (même pattern que api-commandes.ts).
+  c.executionCtx.waitUntil(
+    sendFcmToTenant(c.env, adminClient, abonnement.tenant_id, {
+      title: '✅ Paiement confirmé !',
+      body: `Votre abonnement${planNom ? ` ${planNom}` : ''} est maintenant actif.`,
+      data: { type: 'paiement', statut: 'actif', abonnement_id },
+      channelId: 'payment_channel'
+    }).catch(() => {})
+  )
+
   // 6. Notification in-app restaurant
   await adminClient
     .from('notifications_restaurant')
@@ -369,6 +393,25 @@ adminPaiementsRouter.post('/rejeter', async (c) => {
         console.warn('[admin-paiements/rejeter] WhatsApp échoué:', err?.message)
       })
     }
+
+    // AJOUT FCM — Push au restaurant, en complément du WhatsApp + notif
+    // in-app ci-dessous. Placé hors du bloc `if (tenant.whatsapp_number)`
+    // ci-dessus à dessein : le push ne dépend pas d'avoir un numéro
+    // WhatsApp renseigné, seulement d'avoir un token FCM enregistré
+    // (table fcm_tokens). Best-effort, ne bloque jamais la réponse HTTP.
+    c.executionCtx.waitUntil(
+      sendFcmToTenant(c.env, adminClient, abonnement.tenant_id, {
+        title: '❌ Preuve de paiement rejetée',
+        body: 'Veuillez soumettre une nouvelle preuve de paiement.',
+        data: {
+          type: 'paiement',
+          statut: 'rejete',
+          abonnement_id,
+          motif: motif.trim().slice(0, 200)
+        },
+        channelId: 'payment_channel'
+      }).catch(() => {})
+    )
 
     await adminClient
       .from('notifications_restaurant')
