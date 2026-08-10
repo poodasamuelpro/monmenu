@@ -138,7 +138,7 @@ export function renderInscriptionPage(nomProjet: string): string {
               Votre URL de boutique
             </div>
             <div class="text-sm font-bold text-gray-900">
-              monmenu.app/<span id="slug-preview" class="text-red-600">votre-restaurant</span>
+              monmenu.com/<span id="slug-preview" class="text-red-600">votre-restaurant</span>
             </div>
           </div>
 
