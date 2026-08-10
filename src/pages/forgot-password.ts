@@ -7,7 +7,7 @@ export function renderForgotPasswordPage(nomProjet: string): string {
     `Récupérez l'accès à votre tableau de bord ${nomProjet} via un code OTP envoyé par email.`,
     nomProjet,
     '',
-    'https://monmenu.app/mot-de-passe-oublie'
+    'https://monmenu.com/mot-de-passe-oublie'
   )}
 <body class="min-h-screen bg-gray-50 flex items-center justify-center px-4 transition-colors">
   <div class="w-full max-w-md">
