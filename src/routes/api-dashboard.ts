@@ -61,6 +61,18 @@
 //   champs "nom" et "whatsapp_number", auparavant silencieusement ignorés
 //   côté serveur alors que le mobile (et le dashboard web) laissaient
 //   croire à l'utilisateur que la modification avait été enregistrée.
+//
+// AJOUT (module FCM — push notifications mobile, 10/08) —
+//   POST   /fcm-token — enregistre/rafraîchit le token FCM du device
+//          courant (appelé par FCMService.init() côté mobile).
+//   DELETE /fcm-token — supprime le token FCM (appelé par
+//          logoutWithFCMCleanup() côté mobile, avant déconnexion).
+//   Ces deux routes réutilisent verifyAuth() (accès complet requis, comme
+//   le reste du dashboard) et sont donc déjà couvertes par le middleware
+//   CSRF global du router : le mobile passe toujours par
+//   Authorization: Bearer, qui est explicitement exempté du header
+//   X-Requested-With — aucune configuration supplémentaire nécessaire.
+//   Voir src/lib/fcm.ts pour l'envoi effectif des notifications.
 
 import { Hono } from 'hono'
 import { getCookie } from 'hono/cookie'
@@ -1876,6 +1888,79 @@ dashboardRouter.patch('/notifications/tout-lire', async (c) => {
   if (error) return c.json({ error: 'Erreur mise à jour notifications.', detail: error.message }, 500)
 
   return c.json({ success: true, nb_mises_a_jour: count ?? 0 })
+})
+
+// ============================================================
+// Routes FCM — Push notifications mobile (voir lib/fcm.ts)
+// Tokens stockés dans la table Supabase fcm_tokens (migration 013).
+// ============================================================
+
+// ---- POST /api/v1/dashboard/fcm-token — Enregistrer le token FCM du device ----
+// Appelée par FCMService.init() côté mobile (onTokenReceived) et à chaque
+// rafraîchissement de token (onTokenRefresh). Le CSRF middleware global de
+// ce router exige X-Requested-With SAUF si un header Authorization: Bearer
+// est présent — le mobile utilise déjà Bearer (api_service.dart), donc
+// aucune exception supplémentaire n'est nécessaire ici.
+dashboardRouter.post('/fcm-token', async (c) => {
+  setSecurityHeaders(c)
+  const auth = await verifyAuth(c)
+  if (!auth) return c.json({ error: 'Non authentifié.' }, 401)
+
+  let body: { token?: string; platform?: string }
+  try { body = await c.req.json() } catch { return c.json({ error: 'JSON invalide.' }, 400) }
+
+  const { token, platform } = body
+  if (!token || typeof token !== 'string' || token.length < 100) {
+    return c.json({ error: 'Token FCM invalide.' }, 422)
+  }
+  const platformValide = ['android', 'ios', 'web'].includes(platform ?? '') ? (platform as string) : 'android'
+
+  const adminClient = createSupabaseAdminClient(c.env)
+
+  const { error } = await adminClient
+    .from('fcm_tokens')
+    .upsert({
+      tenant_id: auth.tenant_id,
+      token,
+      platform: platformValide,
+      updated_at: new Date().toISOString()
+    }, { onConflict: 'token' })
+
+  if (error) {
+    console.error('[FCM] Erreur upsert token:', error.message)
+    return c.json({ error: 'Erreur lors de l\'enregistrement du token.' }, 500)
+  }
+
+  return c.json({ success: true })
+})
+
+// ---- DELETE /api/v1/dashboard/fcm-token — Supprimer le token (déconnexion) ----
+// Appelée par logoutWithFCMCleanup() côté mobile, AVANT la fermeture de
+// session, pour éviter de continuer à recevoir des push sur un compte
+// déconnecté. SEC-03 : la suppression est scopée au tenant_id du JWT
+// (un tenant authentifié ne peut supprimer que ses propres tokens).
+dashboardRouter.delete('/fcm-token', async (c) => {
+  setSecurityHeaders(c)
+  const auth = await verifyAuth(c)
+  if (!auth) return c.json({ error: 'Non authentifié.' }, 401)
+
+  const token = c.req.query('token')
+  if (!token) return c.json({ error: 'Token requis (query param).' }, 422)
+
+  const adminClient = createSupabaseAdminClient(c.env)
+
+  const { error } = await adminClient
+    .from('fcm_tokens')
+    .delete()
+    .eq('token', decodeURIComponent(token))
+    .eq('tenant_id', auth.tenant_id)
+
+  if (error) {
+    console.error('[FCM] Erreur suppression token:', error.message)
+    return c.json({ error: 'Erreur lors de la suppression du token.' }, 500)
+  }
+
+  return c.json({ success: true })
 })
 
 export { dashboardRouter }
