@@ -1866,4 +1866,80 @@ function useMyLocation() {
 // Latitude/longitude : chaîne vide → null (pas 0, pour ne pas écraser une
 // coordonnée valide à l'équateur/méridien avec une valeur "manquante" mal
 // interprétée) ; sinon parseFloat. Les horaires viennent de
-// collecterPdvHoraires() (déjà présent plus haut
+// collecterPdvHoraires() (déjà présent plus haut dans ce fichier).
+// Validation cliente des bornes GPS alignée sur celle du backend
+// (-90/90 pour latitude, -180/180 pour longitude), pour donner un
+// feedback immédiat sans aller-retour réseau inutile. Passe par
+// dashFetch() (et non fetch() brut) pour bénéficier du rafraîchissement
+// automatique de session (FIX-2), contrairement à l'ancienne version.
+async function savePdv(e) {
+  e.preventDefault();
+  const fb = document.getElementById('pdv-feedback');
+  const submitBtn = document.getElementById('pdv-submit-btn');
+  if (fb) fb.classList.add('hidden');
+  if (submitBtn) submitBtn.disabled = true;
+
+  const latRaw = document.getElementById('pdv-lat').value.trim();
+  const lonRaw = document.getElementById('pdv-lon').value.trim();
+
+  const data = {
+    nom: document.getElementById('pdv-nom').value.trim(),
+    adresse: document.getElementById('pdv-adresse').value.trim(),
+    latitude: latRaw === '' ? null : parseFloat(latRaw),
+    longitude: lonRaw === '' ? null : parseFloat(lonRaw),
+    tarif_livraison_base: parseFloat(document.getElementById('pdv-tarif-base').value) || 0,
+    tarif_par_km: parseFloat(document.getElementById('pdv-tarif-km').value) || 0,
+    horaires: JSON.stringify(collecterPdvHoraires())
+  };
+
+  if (data.latitude !== null && (isNaN(data.latitude) || data.latitude < -90 || data.latitude > 90)) {
+    if (fb) {
+      fb.textContent = 'Latitude invalide (doit être comprise entre -90 et 90).';
+      fb.className = 'text-xs bg-red-50 text-red-600 rounded-lg px-3 py-2';
+      fb.classList.remove('hidden');
+    }
+    if (submitBtn) submitBtn.disabled = false;
+    return;
+  }
+  if (data.longitude !== null && (isNaN(data.longitude) || data.longitude < -180 || data.longitude > 180)) {
+    if (fb) {
+      fb.textContent = 'Longitude invalide (doit être comprise entre -180 et 180).';
+      fb.className = 'text-xs bg-red-50 text-red-600 rounded-lg px-3 py-2';
+      fb.classList.remove('hidden');
+    }
+    if (submitBtn) submitBtn.disabled = false;
+    return;
+  }
+
+  try {
+    const res = await dashFetch('/api/v1/dashboard/pdv', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+      body: JSON.stringify(data)
+    });
+    const result = await res.json().catch(() => ({}));
+
+    if (res.ok) {
+      if (fb) {
+        fb.textContent = result.created ? 'Point de vente créé.' : 'Point de vente mis à jour.';
+        fb.className = 'text-xs bg-green-50 text-green-700 rounded-lg px-3 py-2';
+        fb.classList.remove('hidden');
+      }
+      await loadPdv();
+    } else {
+      if (fb) {
+        fb.textContent = result.error || 'Erreur lors de l\'enregistrement.';
+        fb.className = 'text-xs bg-red-50 text-red-600 rounded-lg px-3 py-2';
+        fb.classList.remove('hidden');
+      }
+      if (submitBtn) submitBtn.disabled = false;
+    }
+  } catch {
+    if (fb) {
+      fb.textContent = 'Erreur réseau.';
+      fb.className = 'text-xs bg-red-50 text-red-600 rounded-lg px-3 py-2';
+      fb.classList.remove('hidden');
+    }
+    if (submitBtn) submitBtn.disabled = false;
+  }
+}
