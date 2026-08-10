@@ -16,6 +16,8 @@ import { screenshotsRouter } from './routes/api-screenshots'
 import { paiementRouter } from './routes/api-paiement'
 import { adminTasksRouter } from './routes/api-admin-tasks'
 import { adminPaiementsRouter } from './routes/api-admin-paiements'
+// AJOUT — Route publique du formulaire de contact (envoi email réel via Brevo)
+import { contactRouter } from './routes/api-contact'
 import { setSecurityHeaders } from './lib/security'
 import { getNomProjet, getWhatsAppSupport, createSupabaseAdminClient, createSupabaseClient } from './lib/supabase'
 // CYCLE-4 — logique d'accès unifiée (voir src/lib/acces-tenant.ts)
@@ -147,6 +149,8 @@ app.route('/api/v1/screenshots', screenshotsRouter)
 app.route('/api/v1/paiement', paiementRouter)
 app.route('/api/v1/admin/tasks', adminTasksRouter)
 app.route('/api/v1/admin/paiements', adminPaiementsRouter)
+// AJOUT — Formulaire de contact public (envoi email réel)
+app.route('/api/v1/contact', contactRouter)
 
 // ─── Endpoint PUBLIC GET /api/v1/moyens-paiement ──────────────────
 app.get('/api/v1/moyens-paiement', async (c) => {
