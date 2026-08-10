@@ -9,7 +9,7 @@ export function renderContactPage(nomProjet: string, whatsappSupport: string = '
   const waNumber = whatsappSupport.replace(/[^0-9]/g, '')
   const waLink = waNumber
     ? `https://wa.me/${waNumber}?text=Bonjour%20${encodeURIComponent(nomProjet)}%2C%20j%27ai%20une%20question%20:`
-    : 'https://wa.me/22600000000'
+    : 'https://wa.me/22677980264'
 
   return `${renderHead(
     `Contact — ${nomProjet}`,
@@ -49,13 +49,13 @@ export function renderContactPage(nomProjet: string, whatsappSupport: string = '
         </a>
 
         <!-- Email -->
-        <a href="mailto:support@monmenu.app"
+        <a href="mailto:contact.monmenu@gmail.com"
           class="border border-blue-200 bg-blue-50 rounded-2xl p-5 flex flex-col items-center text-center hover:shadow-md transition-all group hover:border-blue-400">
           <div class="w-14 h-14 bg-blue-600 rounded-2xl flex items-center justify-center text-white mb-3 shadow-sm group-hover:scale-105 transition-transform">
             <i class="fa-regular fa-envelope text-2xl" aria-hidden="true"></i>
           </div>
           <div class="font-bold text-gray-900 mb-1">Email</div>
-          <div class="text-sm text-gray-600 mb-2">support@monmenu.app</div>
+          <div class="text-sm text-gray-600 mb-2">contact.monmenu@gmail.com</div>
           <div class="text-xs text-blue-600 font-semibold">Réponse sous 24h</div>
         </a>
       </div>
