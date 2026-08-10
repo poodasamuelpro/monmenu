@@ -21,7 +21,7 @@ export function renderArticlePage(nomProjet: string, article: ArticleDetail): st
   }
 
   // SEO étendu pour les articles de blog
-  const articleUrl = `https://monmenu.app/blog/${article.titre.toLowerCase().replace(/\s+/g, '-')}`
+  const articleUrl = `https://monmenu.com/blog/${article.titre.toLowerCase().replace(/\s+/g, '-')}`
   return `${renderHead(
     `${article.titre} — ${nomProjet}`,
     article.extrait,
