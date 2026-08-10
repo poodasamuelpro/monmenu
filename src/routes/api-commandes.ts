@@ -27,6 +27,13 @@
 // Les liens Maps/Waze apparaissent désormais dans les deux canaux dès lors
 // que client_latitude/client_longitude sont fournis — ce qui est maintenant
 // garanti côté boutique.js (géolocalisation obligatoire en livraison).
+//
+// AJOUT (module FCM — push notifications mobile, 10/08) — En complément du
+// canal WhatsApp existant, une notification push FCM est envoyée à TOUS
+// les devices mobiles enregistrés du tenant (table fcm_tokens) dès qu'une
+// nouvelle commande est créée. Best-effort, via c.executionCtx.waitUntil(),
+// ne bloque jamais et ne fait jamais échouer la réponse HTTP — mêmes
+// garanties que le canal WhatsApp existant. Voir src/lib/fcm.ts.
 
 import { Hono } from 'hono'
 import type { Env } from '../types/database'
@@ -46,6 +53,7 @@ import {
 import { calculerFraisLivraison } from '../lib/delivery'
 import { sendEmail } from '../lib/brevo'
 import { createSupabaseClient, createSupabaseClientWithToken, createSupabaseAdminClient } from '../lib/supabase'
+import { sendFcmToTenant } from '../lib/fcm'
 
 const commandesRouter = new Hono<{ Bindings: Env }>()
 
@@ -340,6 +348,26 @@ commandesRouter.post('/', async (c) => {
   // ne bloque jamais la réponse HTTP renvoyée au client).
   c.executionCtx.waitUntil(
     envoyerNotificationWhatsApp(tenantRow.whatsapp_number, messageWhatsApp, env)
+  )
+
+  // AJOUT — Canal 3 : push FCM à tous les devices mobiles du tenant, en
+  // complément du canal WhatsApp ci-dessus. Best-effort, ne bloque jamais
+  // la réponse HTTP et ne fait jamais échouer la création de commande
+  // même si FCM n'est pas configuré ou si l'envoi échoue (voir
+  // fcmConfigure() dans lib/fcm.ts, qui retourne silencieusement si
+  // FCM_PROJECT_ID/FCM_CLIENT_EMAIL/FCM_PRIVATE_KEY sont absents).
+  c.executionCtx.waitUntil(
+    sendFcmToTenant(env, adminClient, data.tenant_id, {
+      title: `🛒 Nouvelle commande — ${data.client_nom}`,
+      body: `${montantTotal.toLocaleString('fr-FR')} FCFA`,
+      data: {
+        type: 'commande',
+        commandeId: commandeId,
+        client: data.client_nom,
+        montant: String(montantTotal)
+      },
+      channelId: 'commandes_channel'
+    }).catch(() => {})
   )
 
   // Canal 2 — lien de redirection wa.me, TOUJOURS renvoyé : c'est lui que
