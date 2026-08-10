@@ -137,6 +137,51 @@ export async function getWhatsAppSupport(
 }
 
 /**
+ * AJOUT — Récupérer l'adresse email de contact officielle MonMenu depuis
+ * D1 config_globale (clé 'email_contact'). Aucune adresse codée en dur
+ * dans le reste du code : tout passe par cette fonction, modifiable à
+ * tout moment depuis la config_globale sans redéploiement.
+ * Fallback sur l'adresse Gmail officielle actuelle tant qu'un domaine
+ * propre (.com) n'est pas configuré.
+ */
+export async function getEmailContact(
+  env: { DB: D1Database; KV_CACHE?: KVNamespace }
+): Promise<string> {
+  return (await getConfigGlobale('email_contact', env)) ?? 'contact.monmenu@gmail.com'
+}
+
+/**
+ * AJOUT — Récupérer l'adresse email d'expéditeur (utilisée par Brevo pour
+ * l'envoi des emails transactionnels) depuis D1 config_globale (clé
+ * 'email_expediteur'). Si non configurée, retombe sur l'adresse de contact
+ * (getEmailContact) — ce qui fonctionne avec la vérification "expéditeur
+ * unique" de Brevo, sans nécessiter l'authentification complète d'un
+ * domaine (SPF/DKIM). Une fois le domaine .com vérifié dans Brevo, il
+ * suffit de renseigner 'email_expediteur' dans config_globale (ex:
+ * noreply@monmenu.com) — aucun changement de code requis.
+ */
+export async function getEmailExpediteur(
+  env: { DB: D1Database; KV_CACHE?: KVNamespace }
+): Promise<string> {
+  const configuree = await getConfigGlobale('email_expediteur', env)
+  if (configuree) return configuree
+  return getEmailContact(env)
+}
+
+/**
+ * AJOUT — Récupérer le nom affiché de l'expéditeur (Brevo) depuis D1
+ * config_globale (clé 'nom_expediteur'). Fallback sur le nom du projet
+ * (getNomProjet) si non configuré.
+ */
+export async function getNomExpediteur(
+  env: { DB: D1Database; KV_CACHE?: KVNamespace }
+): Promise<string> {
+  const configure = await getConfigGlobale('nom_expediteur', env)
+  if (configure) return configure
+  return getNomProjet(env)
+}
+
+/**
  * §6.5 — Masque les détails d'erreur Supabase en production.
  * En développement, retourne le message complet pour faciliter le débogage.
  * En production, log côté serveur uniquement et retourne un message générique.
