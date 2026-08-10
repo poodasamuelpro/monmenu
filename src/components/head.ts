@@ -4,10 +4,14 @@
 // i18n retiré — og:locale forcé à fr_FR
 // Dark mode retiré — mode clair forcé
 // Design tokens centralisés via design-tokens.css + Tailwind config unifiée
+//
+// AJOUT — Domaine de la plateforme passé de monmenu.app à monmenu.com
+// (BASE_URL, DEFAULT_OG_IMAGE, et toutes les URLs de repli dans les
+// fonctions JSON-LD ci-dessous).
 // =============================================================
 
 export interface HeadSeoOptions {
-  /** URL canonique absolue (ex: https://monmenu.app/blog/mon-article) */
+  /** URL canonique absolue (ex: https://monmenu.com/blog/mon-article) */
   canonicalUrl?: string
   /** URL de l'image Open Graph (1200×630 recommandé) */
   ogImage?: string
@@ -29,9 +33,9 @@ export interface HeadSeoOptions {
   articleAuthor?: string
 }
 
-const DEFAULT_OG_IMAGE = 'https://monmenu.app/static/img/og-image.png'
+const DEFAULT_OG_IMAGE = 'https://monmenu.com/static/img/og-image.png'
 const DEFAULT_TWITTER_SITE = '@monmenu_app'
-const BASE_URL = 'https://monmenu.app'
+const BASE_URL = 'https://monmenu.com'
 
 export function renderHead(
   title: string,
@@ -148,8 +152,8 @@ export function jsonLdOrganization(nomProjet: string): Record<string, unknown> {
     '@context': 'https://schema.org',
     '@type': 'Organization',
     name: nomProjet,
-    url: 'https://monmenu.app',
-    logo: 'https://monmenu.app/static/img/og-image.png',
+    url: 'https://monmenu.com',
+    logo: 'https://monmenu.com/static/img/og-image.png',
     sameAs: [],
     contactPoint: {
       '@type': 'ContactPoint',
@@ -165,10 +169,10 @@ export function jsonLdWebSite(nomProjet: string): Record<string, unknown> {
     '@context': 'https://schema.org',
     '@type': 'WebSite',
     name: nomProjet,
-    url: 'https://monmenu.app',
+    url: 'https://monmenu.com',
     potentialAction: {
       '@type': 'SearchAction',
-      target: { '@type': 'EntryPoint', urlTemplate: 'https://monmenu.app/blog?q={search_term_string}' },
+      target: { '@type': 'EntryPoint', urlTemplate: 'https://monmenu.com/blog?q={search_term_string}' },
       'query-input': 'required name=search_term_string'
     }
   }
@@ -189,7 +193,7 @@ export function jsonLdArticle(opts: {
     '@type': 'BlogPosting',
     headline: opts.title,
     description: opts.description,
-    image: opts.imageUrl ?? 'https://monmenu.app/static/img/og-image.png',
+    image: opts.imageUrl ?? 'https://monmenu.com/static/img/og-image.png',
     datePublished: opts.datePublished ?? undefined,
     author: opts.author
       ? { '@type': 'Person', name: opts.author }
@@ -197,7 +201,7 @@ export function jsonLdArticle(opts: {
     publisher: {
       '@type': 'Organization',
       name: opts.nomProjet,
-      logo: { '@type': 'ImageObject', url: 'https://monmenu.app/static/img/og-image.png' }
+      logo: { '@type': 'ImageObject', url: 'https://monmenu.com/static/img/og-image.png' }
     },
     mainEntityOfPage: { '@type': 'WebPage', '@id': opts.url }
   }
@@ -224,7 +228,7 @@ export function jsonLdRestaurant(opts: {
     '@type': 'Restaurant',
     name: opts.nom,
     description: opts.description ?? `Commandez en ligne chez ${opts.nom}`,
-    image: opts.logoUrl ?? 'https://monmenu.app/static/img/og-image.png',
+    image: opts.logoUrl ?? 'https://monmenu.com/static/img/og-image.png',
     url: opts.url,
     ...(opts.adresse || opts.ville ? {
       address: {
