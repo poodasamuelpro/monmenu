@@ -1,5 +1,12 @@
 // =============================================================
 // PAGE CONTACT — FR uniquement, sans dark mode
+//
+// AJOUT — submitContact() envoie désormais réellement le message vers
+// POST /api/v1/contact (voir routes/api-contact.ts), qui l'achemine par
+// email (Brevo) vers l'adresse de contact officielle configurée
+// dynamiquement via D1 config_globale. Avant cette correction, le
+// formulaire affichait un faux message de succès après un simple délai,
+// sans jamais transmettre le message.
 // =============================================================
 import { renderHead } from '../components/head'
 import { renderNav } from '../components/nav'
@@ -158,22 +165,41 @@ export function renderContactPage(nomProjet: string, whatsappSupport: string = '
 
       const nom = document.getElementById('contact-nom').value.trim();
       const email = document.getElementById('contact-email').value.trim();
+      const profil = document.getElementById('contact-profil').value;
+      const sujet = document.getElementById('contact-sujet').value;
       const message = document.getElementById('contact-message').value.trim();
 
       if (!nom || !email || !message) {
         feedback.textContent = 'Veuillez remplir tous les champs obligatoires.';
         feedback.className = 'px-4 py-3 rounded-xl text-sm bg-red-50 text-red-700 border border-red-200';
+        feedback.classList.remove('hidden');
         btn.disabled = false;
         btn.innerHTML = '<i class="fa-solid fa-paper-plane"></i><span>Envoyer le message</span>';
         return;
       }
 
-      await new Promise(r => setTimeout(r, 1500));
+      try {
+        const res = await fetch('/api/v1/contact', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ nom, email, profil, sujet, message })
+        });
+        const data = await res.json();
 
-      feedback.textContent = '✓ Message envoyé avec succès. Nous vous répondrons dans les 24 heures à l\'adresse : ' + email;
-      feedback.className = 'px-4 py-3 rounded-xl text-sm bg-green-50 text-green-700 border border-green-200';
+        if (res.ok && data.success) {
+          feedback.textContent = '✓ Message envoyé avec succès. Nous vous répondrons dans les 24 heures à l\\'adresse : ' + email;
+          feedback.className = 'px-4 py-3 rounded-xl text-sm bg-green-50 text-green-700 border border-green-200';
+          e.target.reset();
+        } else {
+          feedback.textContent = data.error || 'Une erreur est survenue. Réessayez ou contactez-nous par WhatsApp.';
+          feedback.className = 'px-4 py-3 rounded-xl text-sm bg-red-50 text-red-700 border border-red-200';
+        }
+      } catch (err) {
+        feedback.textContent = 'Erreur réseau. Réessayez ou contactez-nous par WhatsApp.';
+        feedback.className = 'px-4 py-3 rounded-xl text-sm bg-red-50 text-red-700 border border-red-200';
+      }
+
       feedback.classList.remove('hidden');
-      e.target.reset();
       btn.disabled = false;
       btn.innerHTML = '<i class="fa-solid fa-paper-plane"></i><span>Envoyer le message</span>';
     }
