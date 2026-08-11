@@ -1,53 +1,29 @@
 // API Tenants (Restaurants) — gestion publique + dashboard
 // ARCHITECTURE :
-//   • D1 (Cloudflare) → SITE WEB uniquement : config_globale, pays, plans
-//   • Supabase (PostgreSQL) → APPLICATION : tenants, menu, points_de_vente, etc.
+//   • D1 (Cloudflare) → SITE WEB uniquement : config_globale, pays
+//   • Supabase (PostgreSQL) → APPLICATION : tenants, menu, points_de_vente,
+//     plans, supplements, etc.
 //
-// AJOUT (statut essai/actif) — GET / renvoie maintenant les tenants 'actif'
-// ET 'essai' (non expiré), triés avec 'actif' en priorité. POST / calcule
-// désormais essai_expire_le à la création (durée fixée par la constante
-// ESSAI_DUREE_JOURS, voir lib/constants.ts — pas de config en base pour
-// cette valeur, elle change rarement et un redéploiement suffit).
+// MIGRATION PLANS — POST / (création tenant, route legacy conservée pour
+// compatibilité) résout désormais le plan Gratuit directement dans
+// Supabase via chargerPlanGratuit() (src/lib/plans.ts). Plus aucune
+// requête D1 pour les plans.
 //
-// CORRECTION 2026-07-30 — le filtre `.or()` de GET / traitait un
-// essai_expire_le NULL comme "expiré" (car ni statut=actif, ni
-// essai_expire_le > now n'étaient vrais), ce qui excluait à tort tout
-// tenant en essai créé sans cette date renseignée (ex: insertion
-// manuelle en base, ou ancien flux d'inscription). Ajout de la
-// condition essai_expire_le.is.null pour traiter "pas de date" comme
-// "n'expire pas", au lieu de l'exclure silencieusement de la liste
-// publique.
-//
-// CORRECTION 2026-07-31 — POST / (création tenant) récupérait l'ID du
-// plan gratuit directement depuis D1 :
-//   SELECT id FROM plans WHERE nom = 'Gratuit' ... (dans D1)
-// et injectait cet ID D1 tel quel dans tenants.plan_id (Supabase), qui
-// attend en réalité l'UUID Supabase du plan (le même bug que celui déjà
-// corrigé côté api-auth.ts). Résultat : tenants.plan_id ne correspondait
-// à aucune ligne dans la table Supabase `plans`, cassant tout lookup ou
-// jointure ultérieure sur le plan du tenant.
-// Fix : on récupère toujours l'ID du plan gratuit depuis D1 (source de
-// vérité pour la config des plans), puis on résout l'UUID Supabase
-// correspondant via la colonne de correspondance `d1_plan_id` sur la
-// table Supabase `plans`, exactement comme dans api-auth.ts. Si aucune
-// correspondance n'est trouvée, planId reste `null` plutôt que
-// d'insérer un identifiant invalide.
+// AJOUT — GET /:slug/menu inclut désormais les suppléments actifs de
+// chaque produit (table `supplements`), pour que la boutique publique
+// puisse les proposer au client à l'ajout au panier.
 
 import { Hono } from 'hono'
 import type { Env } from '../types/database'
 import { setSecurityHeaders } from '../lib/security'
 import { createSupabaseAdminClient } from '../lib/supabase'
 import { ESSAI_DUREE_JOURS } from '../lib/constants'
+import { chargerPlanGratuit } from '../lib/plans'
 
 const tenantsRouter = new Hono<{ Bindings: Env }>()
 
 // =============================================================
 // GET /api/v1/tenants — Liste publique des restaurants partenaires
-// Inclut désormais 'actif' ET 'essai' non expiré, triés avec
-// 'actif' en priorité (carrousel page d'accueil). Un essai expiré
-// n'apparaît jamais, même si le cron nocturne (api-cron.ts) a du
-// retard — la condition essai_expire_le est vérifiée à chaque
-// requête, indépendamment du cron.
 // =============================================================
 tenantsRouter.get('/', async (c) => {
   setSecurityHeaders(c)
@@ -75,13 +51,8 @@ tenantsRouter.get('/', async (c) => {
     .in('statut', ['actif', 'essai'])
     .is('deleted_at', null)
     .not('logo_url', 'is', null)
-    // Filet de sécurité côté requête : un essai expiré n'apparaît
-    // jamais, même si le cron n'est pas encore passé.
-    // CORRECTION 2026-07-30 — essai_expire_le.is.null ajouté : un
-    // tenant en essai sans date d'expiration renseignée ne doit pas
-    // être traité comme expiré, mais comme "n'expire pas".
     .or(`statut.eq.actif,essai_expire_le.gt.${nowIso},essai_expire_le.is.null`)
-    .order('statut', { ascending: true }) // 'actif' avant 'essai' (alphabétique)
+    .order('statut', { ascending: true })
     .order('updated_at', { ascending: false })
     .limit(limit)
 
@@ -175,6 +146,9 @@ tenantsRouter.get('/:slug', async (c) => {
 })
 
 // GET /api/v1/tenants/:slug/menu — Menu public complet
+// AJOUT — chaque produit inclut désormais son tableau `supplements`
+// (uniquement ceux actifs, non supprimés), en une seule requête groupée
+// (pas de N+1 par produit).
 tenantsRouter.get('/:slug/menu', async (c) => {
   setSecurityHeaders(c)
   const slug = c.req.param('slug')
@@ -219,10 +193,29 @@ tenantsRouter.get('/:slug/menu', async (c) => {
 
   if (catError) return c.json({ error: 'Erreur récupération menu.', detail: catError.message }, 500)
 
+  // AJOUT — suppléments actifs, groupés par produit, une seule requête.
+  const produitIds = (produits ?? []).map((p: any) => p.id)
+  const supplementsByProduit = new Map<string, Array<{ id: string; nom: string; prix: number }>>()
+  if (produitIds.length > 0) {
+    const { data: supplementsData } = await adminClient
+      .from('supplements')
+      .select('id, produit_id, nom, prix, ordre_affichage')
+      .in('produit_id', produitIds)
+      .eq('actif', true)
+      .is('deleted_at', null)
+      .order('ordre_affichage', { ascending: true })
+
+    for (const s of (supplementsData ?? [])) {
+      const list = supplementsByProduit.get(s.produit_id) ?? []
+      list.push({ id: s.id, nom: s.nom, prix: s.prix })
+      supplementsByProduit.set(s.produit_id, list)
+    }
+  }
+
   const produitsByCategorie = new Map<string, any[]>()
   for (const produit of (produits ?? [])) {
     const list = produitsByCategorie.get(produit.categorie_id) ?? []
-    list.push(produit)
+    list.push({ ...produit, supplements: supplementsByProduit.get(produit.id) ?? [] })
     produitsByCategorie.set(produit.categorie_id, list)
   }
 
@@ -267,15 +260,18 @@ tenantsRouter.get('/:slug/qrcode', async (c) => {
   })
 })
 
-// POST /api/v1/tenants — Créer un tenant (inscription restaurant)
-// NOTE: Ce endpoint est conservé pour compatibilité mais l'inscription principale
-//       passe par api-auth.ts (POST /api/v1/auth/register) qui crée Supabase Auth + tenant
+// POST /api/v1/tenants — Créer un tenant (inscription restaurant, route legacy)
+// NOTE: Ce endpoint est conservé pour compatibilité mais l'inscription
+// principale passe par api-auth.ts (POST /api/v1/auth/register).
+//
+// MIGRATION PLANS — résolution du plan Gratuit directement dans Supabase
+// via chargerPlanGratuit() (src/lib/plans.ts). Plus de lookup D1.
 tenantsRouter.post('/', async (c) => {
   setSecurityHeaders(c)
 
   const ip = c.req.header('CF-Connecting-IP') ?? 'unknown'
-  const { checkRateLimit, TenantSchema, sanitizeSlug } = await import('../lib/security')
-  const rateLimit = await checkRateLimit(`inscription:${ip}`, 5, 3600000) // 5/heure
+  const { checkRateLimit, TenantSchema } = await import('../lib/security')
+  const rateLimit = await checkRateLimit(`inscription:${ip}`, 5, 3600000)
   if (!rateLimit.allowed) {
     return c.json({ error: 'Trop de tentatives. Réessayez dans une heure.' }, 429)
   }
@@ -305,32 +301,11 @@ tenantsRouter.post('/', async (c) => {
     return c.json({ error: 'Ce nom de boutique est déjà utilisé.' }, 409)
   }
 
-  // CORRECTION 2026-07-31 — Résolution du plan gratuit en 2 temps :
-  //   1) D1 = source de vérité pour la config des plans (nom, ordre_affichage)
-  //   2) Supabase `plans` = table applicative, avec sa propre colonne `id`
-  //      (UUID) et une colonne `d1_plan_id` qui référence l'id D1 ci-dessus.
-  // tenants.plan_id (Supabase) doit contenir l'UUID Supabase, jamais l'id D1.
-  let planId: string | null = null
+  // MIGRATION — plan Gratuit résolu directement dans Supabase.
+  const planGratuit = await chargerPlanGratuit(c.env)
+  const planId = planGratuit?.id ?? null
+
   let paysId: string | null = null
-  try {
-    const planGratuitD1 = await c.env.DB
-      .prepare("SELECT id FROM plans WHERE nom = 'Gratuit' OR ordre_affichage = 0 LIMIT 1")
-      .first<{ id: string }>()
-
-    if (planGratuitD1?.id) {
-      const { data: planSupabase, error: planLookupError } = await adminClient
-        .from('plans')
-        .select('id')
-        .eq('d1_plan_id', planGratuitD1.id)
-        .maybeSingle()
-
-      if (planLookupError) {
-        console.error('[Tenants] Erreur résolution plan Supabase:', planLookupError.message)
-      }
-      planId = planSupabase?.id ?? null
-    }
-  } catch { /* plans table may not exist yet */ }
-
   try {
     const pays = await c.env.DB
       .prepare("SELECT id FROM pays WHERE code_iso = 'BF' LIMIT 1")
@@ -340,9 +315,6 @@ tenantsRouter.post('/', async (c) => {
 
   const tenantId = crypto.randomUUID()
   const now = new Date().toISOString()
-
-  // AJOUT — date de fin d'essai calculée à la création, durée fixe
-  // (ESSAI_DUREE_JOURS, voir lib/constants.ts).
   const essaiExpireLe = new Date(Date.now() + ESSAI_DUREE_JOURS * 86400000).toISOString()
 
   const { error: insertError } = await adminClient
