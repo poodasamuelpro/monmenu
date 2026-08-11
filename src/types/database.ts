@@ -1,10 +1,18 @@
 // Types TypeScript alignés sur le schéma Supabase
 // Régénérer avec : supabase gen types typescript
 //
-// AJOUT 2026-07-29 : types mis à jour pour le module paiement manuel
-// - Tenant : ajout statut 'en_attente_confirmation' (indirect via abonnement), paiement_en_attente_depuis
-// - Abonnement : ajout de tous les champs paiement manuel (migration 007)
-// - NotificationRestaurant : nouvelle table (migration 008)
+// MIGRATION PLANS — Supabase `plans` est désormais l'unique source de
+// vérité (nom, prix, fonctionnalités). D1 n'est plus consulté pour les
+// plans nulle part dans le code. tenants.plan_id, tenants.plan_initial_id
+// et abonnements.plan_id contiennent tous le MÊME UUID Supabase natif —
+// plus de résolution d1_plan_id ↔ UUID nécessaire dans le code applicatif.
+//
+// AJOUT — Suppléments (migration 014) : un produit peut avoir des
+// suppléments configurables (nom + prix), activables/désactivables par
+// le restaurant, proposés au client à l'ajout au panier. Le prix des
+// suppléments est TOUJOURS recalculé côté serveur à la commande — jamais
+// fait confiance au prix envoyé par le client (même logique que le code
+// promo existant).
 //
 // AJOUT — module FCM (push notifications mobile) : 3 nouvelles variables
 // d'environnement Cloudflare Workers dans Env (FCM_PROJECT_ID,
@@ -25,9 +33,15 @@ export interface Pays {
   created_at: string
 }
 
+// MIGRATION — Plan vit désormais exclusivement dans Supabase. La colonne
+// `id` est l'UUID Supabase natif, utilisé PARTOUT (tenants.plan_id,
+// tenants.plan_initial_id, abonnements.plan_id). `d1_plan_id` est
+// conservée en base pour référence historique mais n'est plus lue par
+// aucun code applicatif après cette migration.
 export interface Plan {
   id: string
   nom: string
+  description?: string | null
   prix_mensuel: number
   prix_annuel: number
   devise: string
@@ -37,6 +51,7 @@ export interface Plan {
   fonctionnalites: Record<string, boolean | number | string>
   actif: boolean
   ordre_affichage: number
+  d1_plan_id?: string | null
   created_at: string
   updated_at: string
 }
@@ -52,13 +67,11 @@ export interface Tenant {
   couleur_secondaire: string
   whatsapp_number: string
   domaine_perso: string | null
-  // CYCLE-3 : ajout statut 'en_attente_paiement_initial' (tenant plan payant, preuve non soumise)
   statut: 'actif' | 'inactif' | 'suspendu' | 'essai' | 'en_attente_paiement_initial'
   essai_expire_le: string | null
+  // MIGRATION — UUID Supabase natif de la table `plans` (plus de résolution D1)
   plan_id: string | null
-  // CYCLE-3 : plan choisi à l'inscription avant confirmation paiement
   plan_initial_id?: string | null
-  // AJOUT migration 007 — suivi paiement en attente
   paiement_en_attente_depuis: string | null
   reference_paiement_active: string | null
   metadata: Record<string, unknown>
@@ -67,36 +80,25 @@ export interface Tenant {
   deleted_at: string | null
 }
 
-// Historique de paiement / abonnement — utilisé par le cron (api-cron.ts)
-// pour vérifier qu'un tenant en essai expiré n'a pas déjà un abonnement
-// payé avant de le faire passer à 'inactif'.
-//
-// AJOUT migration 007 — champs complets du flux paiement manuel
 export interface Abonnement {
   id: string
   tenant_id: string
+  // MIGRATION — UUID Supabase natif du plan (table `plans`), plus jamais
+  // un slug D1 (ex: "plan_faso"). Stocké tel quel depuis /soumettre.
   plan_id: string
-  // AJOUT : 'en_retard' et 'en_attente_confirmation' (migration 007)
   statut: 'actif' | 'expire' | 'annule' | 'en_retard' | 'en_attente_confirmation'
   date_debut: string
   date_fin: string | null
-  // CYCLE-3 : periodicite exclusivement mensuel
   periodicite?: 'mensuel' | null
-  // Champs paiement manuel
   montant_paye?: number | null
   devise?: string | null
   methode_paiement?: string | null
-  // Référence de rapprochement (SEC-10 : n'autorise rien seule)
   reference_paiement?: string | null
-  // Clé R2 de la preuve (jamais l'URL publique — cf. SEC-06)
   preuve_paiement_url?: string | null
-  // Fenêtre 72h
   soumis_le?: string | null
   delai_confirmation_expire_le?: string | null
-  // Audit trail confirmation (SEC-04)
   confirme_par?: string | null
   confirme_le?: string | null
-  // Audit trail rejet
   rejete_par?: string | null
   rejete_le?: string | null
   motif_rejet?: string | null
@@ -104,7 +106,6 @@ export interface Abonnement {
   updated_at?: string | null
 }
 
-// Notification in-app restaurant — migration 008
 export interface NotificationRestaurant {
   id: string
   tenant_id: string
@@ -158,6 +159,23 @@ export interface VarianteProduit {
   prix_supplement: number
 }
 
+// AJOUT — Supplément d'un produit (migration 014). Configuré par le
+// restaurant dans le dashboard (section Menu → bouton Suppléments d'un
+// produit), activable/désactivable indépendamment, proposé au client au
+// moment de l'ajout au panier sur la boutique publique.
+export interface Supplement {
+  id: string
+  tenant_id: string
+  produit_id: string
+  nom: string
+  prix: number
+  actif: boolean
+  ordre_affichage: number
+  created_at: string
+  updated_at: string
+  deleted_at: string | null
+}
+
 export interface Produit {
   id: string
   tenant_id: string
@@ -170,6 +188,7 @@ export interface Produit {
   ordre_affichage: number
   metadata: Record<string, unknown>
   variantes?: VarianteProduit[]
+  supplements?: Supplement[]
   created_at: string
   updated_at: string
 }
@@ -183,6 +202,15 @@ export interface Livreur {
   created_at: string
 }
 
+// AJOUT — Supplément sélectionné sur une ligne de commande (snapshot au
+// moment de la commande — nom/prix figés même si le supplément change
+// ou est désactivé ensuite côté dashboard).
+export interface SupplementCommandeJson {
+  supplement_id: string
+  nom: string
+  prix: number
+}
+
 export interface ItemCommandeJson {
   produit_id: string
   nom: string
@@ -191,6 +219,7 @@ export interface ItemCommandeJson {
   variante_id?: string
   variante_nom?: string
   prix_supplement?: number
+  supplements?: SupplementCommandeJson[]
   sous_total: number
 }
 
@@ -243,20 +272,17 @@ export interface StatsJournalieres {
   tenant_id: string
   date: string
   nb_commandes: number
-  // Colonnes originales (migration 001)
   ca_total: number
   produit_top_id: string | null
   taux_annulation: number
-  // Colonnes ajoutées par migration 010 — utilisées par api-cron.ts
-  chiffre_affaires: number            // Alias actif de ca_total côté cron
-  frais_livraison_total: number       // Total frais de livraison
+  chiffre_affaires: number
+  frais_livraison_total: number
   top_produits: Array<{ produit_id: string; nom: string; quantite: number }>
   nb_commandes_livrees: number
   nb_commandes_annulees: number
   updated_at?: string | null
 }
 
-// Type interface pour les moyens de paiement (migration 012)
 export interface MoyenPaiement {
   id: string
   code: string
@@ -330,7 +356,6 @@ export interface NewsletterSubscriber {
   created_at: string
 }
 
-// AJOUT — Token FCM d'un device (app mobile) — migration 013
 export interface FcmToken {
   id: string
   tenant_id: string
@@ -357,20 +382,14 @@ export type Env = {
   MAPBOX_TOKEN?: string
   OPENWEATHER_API_KEY?: string
   ENVIRONMENT?: 'development' | 'production'
-  // AJOUT — capture d'écran boutique (voir lib/screenshot.ts, api-cron.ts)
-  PUBLIC_BASE_URL?: string   // origine publique utilisée par le cron (var, pas secret)
-  THUMIO_API_KEY?: string    // optionnel — clé thum.io pour plus de quota/fiabilité (secret)
-  // AJOUT module paiement — URL de base du dashboard admin (pour appels inter-services)
-  ADMIN_BASE_URL?: string    // ex: https://admin.monmenu.app
-  ADMIN_WEBHOOK_SECRET?: string // secret partagé pour appels admin → web
-  // BUG-012 CORRIGÉ — ADMIN_TASK_SECRET pour les tâches cron manuelles (api-admin-tasks.ts)
-  ADMIN_TASK_SECRET?: string // secret transmis dans header X-Admin-Task-Secret
-  // AJOUT module FCM — Push notifications mobile (voir lib/fcm.ts).
-  // Toutes optionnelles : si absentes, lib/fcm.ts se désactive en silence
-  // (aucune route existante n'échoue si FCM n'est pas encore configuré).
-  FCM_PROJECT_ID?: string     // ex: 'monmenumanager' (google-services.json → project_id) — Text
-  FCM_CLIENT_EMAIL?: string   // JSON compte de service Firebase Admin → client_email — Secret
-  FCM_PRIVATE_KEY?: string    // JSON compte de service Firebase Admin → private_key (avec \n) — Secret
+  PUBLIC_BASE_URL?: string
+  THUMIO_API_KEY?: string
+  ADMIN_BASE_URL?: string
+  ADMIN_WEBHOOK_SECRET?: string
+  ADMIN_TASK_SECRET?: string
+  FCM_PROJECT_ID?: string
+  FCM_CLIENT_EMAIL?: string
+  FCM_PRIVATE_KEY?: string
 }
 
 export interface CartItem {
@@ -382,6 +401,7 @@ export interface CartItem {
   variante_id?: string
   variante_nom?: string
   prix_supplement?: number
+  supplements?: SupplementCommandeJson[]
 }
 
 export interface Cart {
