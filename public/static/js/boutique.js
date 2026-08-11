@@ -1,13 +1,18 @@
 // MonMenu — Boutique restaurant (JS côté client)
-// v1.3.0 — FIX 2026-07-30 : géolocalisation rendue OBLIGATOIRE en mode
-// livraison. Avant ce fix, la validation acceptait "adresse texte OU
-// coordonnées GPS", ce qui permettait de valider une commande sans position
-// GPS dès lors qu'une adresse était tapée manuellement. Résultat : le
-// message WhatsApp envoyé au restaurant n'avait ni lien Google Maps ni lien
-// Waze (ces liens ne peuvent être construits qu'à partir de coordonnées).
-// Désormais : adresse ET coordonnées sont toutes les deux requises pour
-// livraison, et le bouton "Confirmer" reste désactivé tant que la position
-// n'est pas connue.
+// v1.4.0 — AJOUT : suppléments proposés à l'ajout au panier.
+//
+// Chaque produit peut désormais porter un tableau `supplements` (renvoyé
+// par GET /api/v1/tenants/:slug/menu). Si le produit a au moins un
+// supplément actif, un clic sur "+" ouvre une modal de sélection au lieu
+// d'ajouter directement au panier — comportement inchangé pour les
+// produits SANS supplément (ajout direct, comme avant).
+//
+// Chaque combinaison produit + suppléments distincts devient une ligne de
+// panier séparée (ex: "Pizza + Fromage" et "Pizza" simple sont deux
+// lignes distinctes), pour ne jamais fusionner par erreur des choix
+// différents. Au moment de la commande, seuls les IDs de suppléments sont
+// envoyés au serveur — jamais leur prix (recalculé côté serveur, voir
+// api-commandes.ts).
 'use strict';
 
 let tenantId = '';
@@ -20,24 +25,15 @@ let fraisLivraison = 0;
 let clientLat = null;
 let clientLon = null;
 
-// §Horaires — Statut d'ouverture calculé côté client depuis pdv_horaires
-// (renvoyé par GET /api/v1/tenants/:slug). Optimiste par défaut (true) tant
-// que les données n'ont pas encore été chargées, pour ne pas faire clignoter
-// l'UI. Recalculé après loadTenant() puis toutes les 60s pour rester exact
-// même si l'utilisateur reste longtemps sur la page (ex: passage de l'heure
-// de fermeture pendant la navigation).
 let boutiqueOuverte = true;
 let _statutIntervalId = null;
 
-// §Suivi — id de l'intervalle qui rafraîchit périodiquement le badge de
-// statut du bouton "Suivre ma commande" (voir actualiserBadgeSuivi()).
 let _suiviIntervalId = null;
 
 // Registre des produits (utilisé par renderProduitCard() pour retrouver
-// les infos produit lors d'un clic +/- sans passer par du JSON inline).
+// les infos produit — y compris ses suppléments — lors d'un clic +/-).
 let _produitRegistry = {};
 
-// Libellés de statut affichés sur le bouton flottant de suivi (bas gauche).
 const STATUT_LABELS = {
   en_attente: 'En attente',
   confirmee: 'Confirmée',
@@ -47,8 +43,6 @@ const STATUT_LABELS = {
   annulee: 'Annulée'
 };
 
-// Écouteur unique (délégation d'événements) sur le conteneur du menu pour
-// les boutons +/- des cartes produits (data-action="add"/"remove").
 let _menuListenerAttache = false;
 function attacherEcouteurMenu() {
   if (_menuListenerAttache) return;
@@ -61,9 +55,16 @@ function attacherEcouteurMenu() {
     const action = btn.getAttribute('data-action');
     if (!produitId) return;
     if (action === 'add') {
-      if (!boutiqueOuverte) return; // sécurité : jamais d'ajout hors horaires
+      if (!boutiqueOuverte) return;
       const produit = _produitRegistry[produitId];
-      if (produit) addToCart(produit);
+      if (!produit) return;
+      // AJOUT — si le produit a des suppléments actifs, ouvrir la modal
+      // de sélection au lieu d'ajouter directement au panier.
+      if (produit.supplements && produit.supplements.length > 0) {
+        ouvrirModalSupplements(produit);
+      } else {
+        addToCart(produit);
+      }
     } else if (action === 'remove') {
       removeFromCart(produitId);
     }
@@ -71,19 +72,16 @@ function attacherEcouteurMenu() {
   _menuListenerAttache = true;
 }
 
-// ---- Carte Leaflet (§1.1) ----
 let livraisonMap = null;
 let livraisonMarker = null;
 
-// --- Code promo state ---
-let promoAppliquee = null; // { code, type, valeur, remise } ou null
+let promoAppliquee = null;
 
-// Devises
 const DEVISE = 'FCFA';
 
 // ---- Init ----
 async function initBoutique(tid, slug) {
-  tenantId = ''; // Sera rempli par loadTenant()
+  tenantId = '';
   tenantSlug = slug;
   loadCart();
   await Promise.all([loadTenant(), loadMenu()]);
@@ -95,8 +93,6 @@ async function initBoutique(tid, slug) {
   observerFooterPourPanierFlottant();
   initBackToTop();
 
-  // Revérifie le statut d'ouverture toutes les 60s (ex : l'utilisateur reste
-  // sur la page au moment précis de l'ouverture/fermeture du restaurant).
   if (_statutIntervalId) clearInterval(_statutIntervalId);
   _statutIntervalId = setInterval(() => {
     const etaitOuvert = boutiqueOuverte;
@@ -157,7 +153,7 @@ async function loadMenu() {
   } catch (e) { console.error('loadMenu', e); }
 }
 
-// ---- Statut d'ouverture (miroir client de calculerStatutHoraire() côté serveur) ----
+// ---- Statut d'ouverture ----
 function estOuvertMaintenant(horaireRaw) {
   if (!horaireRaw) return false;
   let horaires;
@@ -178,14 +174,13 @@ function estOuvertMaintenant(horaireRaw) {
 
   const debut = entry.debut || entry.start || null;
   const fin = entry.fin || entry.end || null;
-  if (!debut || !fin) return true; // ouvert toute la journée si pas de plage précisée
+  if (!debut || !fin) return true;
 
   const [hD, mD] = debut.split(':').map(Number);
   const [hF, mF] = fin.split(':').map(Number);
   const nowMin = now.getHours() * 60 + now.getMinutes();
   const debutMin = hD * 60 + mD;
   let finMin = hF * 60 + mF;
-  // Gère le cas d'une fermeture après minuit (ex: 10:00 - 00:00 → traité comme 24:00)
   if (finMin <= debutMin) finMin += 24 * 60;
 
   return nowMin >= debutMin && nowMin < finMin;
@@ -194,13 +189,11 @@ function estOuvertMaintenant(horaireRaw) {
 function actualiserStatutOuverture() {
   boutiqueOuverte = tenantData ? estOuvertMaintenant(tenantData.pdv_horaires) : true;
 
-  // Met à jour la pastille de statut dans l'en-tête si elle existe déjà en DOM
   const badge = document.getElementById('statut-horaire-badge');
   if (badge) {
     badge.classList.toggle('statut-ferme', !boutiqueOuverte);
   }
 
-  // Bandeau d'avertissement au-dessus du menu, uniquement si fermé
   const avertissement = document.getElementById('boutique-fermee-avertissement');
   if (avertissement) avertissement.classList.toggle('hidden', boutiqueOuverte);
 }
@@ -261,14 +254,16 @@ function attacherEcouteurCategories() {
   _catListenerAttache = true;
 }
 
-// Carte produit — photo carrée (taille fixe, toujours recadrée en object-cover
-// pour que le rendu reste identique quelle que soit la taille/format de la
-// photo fournie par le restaurant), nom + description, puis "Prix — montant".
-// §Horaires — Si la boutique est fermée, TOUT bouton d'ajout disparaît,
-// quel que soit le statut `disponible` du produit : impossible de commander.
+// Carte produit — AJOUT : le registre stocke désormais aussi les
+// suppléments du produit (utilisés par ouvrirModalSupplements()). Un
+// petit badge "+ options" apparaît sur la photo si le produit a des
+// suppléments actifs, pour signaler visuellement qu'un choix suivra.
 function renderProduitCard(p) {
   const quantiteInCart = getQuantiteInCart(p.id);
-  _produitRegistry[p.id] = { id: p.id, nom: p.nom, prix: p.prix, photo_url: p.photo_url };
+  _produitRegistry[p.id] = {
+    id: p.id, nom: p.nom, prix: p.prix, photo_url: p.photo_url,
+    supplements: p.supplements || []
+  };
 
   let controles;
   if (!boutiqueOuverte) {
@@ -291,8 +286,11 @@ function renderProduitCard(p) {
       </button>`;
   }
 
-  // §Images — carte produit légèrement réduite : ratio 4/3 (au lieu du
-  // carré plein) pour un rendu un peu plus compact sur mobile.
+  const aDesSupplements = p.supplements && p.supplements.length > 0;
+  const badgeOptions = (aDesSupplements && boutiqueOuverte && p.disponible)
+    ? `<span class="absolute top-2 left-2 text-[10px] font-semibold text-white px-2 py-1 rounded-lg shadow-sm" style="background-color:${PRIMARY_COLOR}">+ options</span>`
+    : '';
+
   const assombri = (!p.disponible || !boutiqueOuverte) ? 'opacity-60' : '';
 
   return `
@@ -302,6 +300,7 @@ function renderProduitCard(p) {
         ? `<img src="${escHtml(p.photo_url)}" alt="${escHtml(p.nom)}" class="w-full h-full object-cover" loading="lazy">`
         : `<div class="w-full h-full flex items-center justify-center"><i class="fa-solid fa-utensils text-3xl text-gray-300"></i></div>`
       }
+      ${badgeOptions}
       ${controles}
     </div>
     <div class="p-3 flex flex-col flex-1">
@@ -316,14 +315,18 @@ function renderProduitCard(p) {
 }
 
 function getQuantiteInCart(produitId) {
-  const item = cart.items.find(i => i.produit_id === produitId);
-  return item ? item.quantite : 0;
+  // AJOUT — additionne toutes les lignes de ce produit, quelle que soit
+  // la combinaison de suppléments (le badge quantité sur la carte reste
+  // un total global, la distinction par supplément vit dans le panier).
+  return cart.items
+    .filter(i => i.produit_id === produitId)
+    .reduce((sum, i) => sum + i.quantite, 0);
 }
 
 // ---- Panier actions ----
 function addToCart(produit) {
-  if (!boutiqueOuverte) return; // double sécurité
-  const existing = cart.items.find(i => i.produit_id === produit.id);
+  if (!boutiqueOuverte) return;
+  const existing = cart.items.find(i => i.produit_id === produit.id && !i._supKey);
   if (existing) {
     existing.quantite++;
   } else {
@@ -340,23 +343,56 @@ function addToCart(produit) {
   renderMenu();
 }
 
-function removeFromCart(produitId) {
-  const idx = cart.items.findIndex(i => i.produit_id === produitId);
-  if (idx === -1) return;
-  if (cart.items[idx].quantite > 1) {
-    cart.items[idx].quantite--;
+// AJOUT — Variante d'ajout au panier avec suppléments sélectionnés. Une
+// ligne panier distincte est créée par combinaison de suppléments
+// (identifiée par `_supKey`, la liste triée des IDs), pour ne jamais
+// fusionner par erreur "Pizza + Fromage" avec "Pizza" simple ou "Pizza +
+// Olives". Si la même combinaison exacte est reprise, la quantité de la
+// ligne existante est incrémentée au lieu de dupliquer la ligne.
+function addToCartAvecSupplements(produit, supplements) {
+  if (!boutiqueOuverte) return;
+  const supIds = supplements.map(s => s.supplement_id).sort().join(',');
+  const existing = cart.items.find(i => i.produit_id === produit.id && (i._supKey || '') === supIds);
+  if (existing) {
+    existing.quantite++;
   } else {
-    cart.items.splice(idx, 1);
+    const totalSupplements = supplements.reduce((s, x) => s + x.prix, 0);
+    cart.items.push({
+      produit_id: produit.id,
+      nom: produit.nom,
+      prix: produit.prix,
+      prix_supplement: totalSupplements,
+      supplements: supplements,
+      _supKey: supIds,
+      quantite: 1,
+      photo_url: produit.photo_url || null
+    });
   }
   saveCart();
   updateCartUI();
   renderMenu();
 }
 
-// §Horaires — Le bouton panier flottant reste visible si des articles sont
-// déjà dedans (pour permettre de finaliser une commande passée avant la
-// fermeture), mais on affiche un badge "Fermé" dessus et le checkout est
-// bloqué dans openCheckout(). S'il est vide et fermé, on le masque.
+function removeFromCart(produitId) {
+  // Retire en priorité une ligne SANS supplément si elle existe (clic
+  // simple sur "-"), sinon la première ligne trouvée pour ce produit —
+  // cas rare car le bouton "-" affiché sur la carte produit ne cible que
+  // le badge de quantité global ; le détail par ligne se gère depuis le
+  // panier (modal) via addToCart/removeFromCart standard sur cette ligne.
+  const idx = cart.items.findIndex(i => i.produit_id === produitId && !i._supKey);
+  const idxFallback = idx !== -1 ? idx : cart.items.findIndex(i => i.produit_id === produitId);
+  const finalIdx = idx !== -1 ? idx : idxFallback;
+  if (finalIdx === -1) return;
+  if (cart.items[finalIdx].quantite > 1) {
+    cart.items[finalIdx].quantite--;
+  } else {
+    cart.items.splice(finalIdx, 1);
+  }
+  saveCart();
+  updateCartUI();
+  renderMenu();
+}
+
 function updateCartUI() {
   const count = getCartCount();
   const total = getCartTotal();
@@ -371,11 +407,58 @@ function updateCartUI() {
   if (cartFermeTag) cartFermeTag.classList.toggle('hidden', boutiqueOuverte);
 }
 
-// ---- Suivi de commande (bouton flottant bas de page, à gauche) ----
-// FIX suivi — Le bouton reste affiché en permanence dès qu'une commande a
-// été passée sur cet appareil, sans limite de temps. Il affiche soit
-// "Suivre ma commande" (statut inconnu), soit le libellé exact du statut
-// (ex : "En préparation"), rafraîchi périodiquement.
+// ---- AJOUT — Modal de sélection des suppléments ----
+function ouvrirModalSupplements(produit) {
+  document.getElementById('modal-supplements')?.remove();
+  const modal = document.createElement('div');
+  modal.id = 'modal-supplements';
+  modal.className = 'fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 p-0 sm:p-4';
+  modal.innerHTML = `
+    <div class="bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl max-w-md w-full max-h-[85vh] overflow-y-auto">
+      <div class="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+        <h2 class="font-bold text-gray-900">${escHtml(produit.nom)}</h2>
+        <button onclick="document.getElementById('modal-supplements').remove()" class="text-gray-400 hover:text-gray-700 text-xl font-bold" aria-label="Fermer">&times;</button>
+      </div>
+      <div class="p-5">
+        <p class="text-sm text-gray-500 mb-3">Ajoutez des suppléments (facultatif) :</p>
+        <div class="space-y-2 mb-5">
+          ${produit.supplements.map(s => `
+            <label class="flex items-center justify-between border border-gray-200 rounded-xl px-4 py-3 cursor-pointer hover:border-red-300 has-[:checked]:border-red-500 has-[:checked]:bg-red-50">
+              <span class="flex items-center gap-2">
+                <input type="checkbox" data-sup-id="${escHtml(s.id)}" data-sup-prix="${s.prix}" data-sup-nom="${escHtml(s.nom)}" class="text-red-600 rounded">
+                <span class="text-sm font-medium">${escHtml(s.nom)}</span>
+              </span>
+              <span class="text-sm font-semibold text-gray-600">+${formatMontant(s.prix)}</span>
+            </label>`).join('')}
+        </div>
+        <button onclick="confirmerAjoutAvecSupplements('${escHtml(produit.id)}')" class="w-full text-white font-bold py-3.5 rounded-xl transition-colors" style="background-color:${PRIMARY_COLOR}">
+          Ajouter au panier
+        </button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+  modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
+}
+
+function confirmerAjoutAvecSupplements(produitId) {
+  const produit = _produitRegistry[produitId];
+  if (!produit) return;
+  const modal = document.getElementById('modal-supplements');
+  const checked = modal ? Array.from(modal.querySelectorAll('input[data-sup-id]:checked')) : [];
+  const supplements = checked.map(el => ({
+    supplement_id: el.getAttribute('data-sup-id'),
+    nom: el.getAttribute('data-sup-nom'),
+    prix: parseFloat(el.getAttribute('data-sup-prix'))
+  }));
+  modal?.remove();
+  if (supplements.length === 0) {
+    addToCart(produit);
+  } else {
+    addToCartAvecSupplements(produit, supplements);
+  }
+}
+
+// ---- Suivi de commande ----
 function afficherBoutonSuiviSiCommandeRecente() {
   try {
     const raw = localStorage.getItem('monmenu_dernier_suivi_' + tenantSlug);
@@ -390,17 +473,12 @@ function afficherBoutonSuiviSiCommandeRecente() {
     if (label) label.textContent = STATUT_LABELS[info.statut] || 'Suivre ma commande';
     if (wrap) wrap.classList.remove('hidden');
 
-    // Rafraîchit tout de suite, puis toutes les 30s tant que la page reste ouverte.
     actualiserBadgeSuivi(info.url_suivi);
     if (_suiviIntervalId) clearInterval(_suiviIntervalId);
     _suiviIntervalId = setInterval(() => actualiserBadgeSuivi(info.url_suivi), 30000);
   } catch {}
 }
 
-// FIX suivi — Interroge l'API de suivi public pour afficher un statut à jour
-// sur le bouton "Suivre ma commande" (ex : "En préparation"). Échec
-// silencieux (réseau, commande introuvable...) : le bouton garde simplement
-// son dernier libellé connu.
 async function actualiserBadgeSuivi(urlSuivi) {
   const token = (urlSuivi || '').split('/').filter(Boolean).pop();
   if (!token) return;
@@ -413,7 +491,6 @@ async function actualiserBadgeSuivi(urlSuivi) {
     const labelEl = document.getElementById('track-order-label');
     if (labelEl) labelEl.textContent = label;
 
-    // Persiste le dernier statut connu (utile au prochain chargement de page).
     try {
       const raw = localStorage.getItem('monmenu_dernier_suivi_' + tenantSlug);
       if (raw) {
@@ -425,10 +502,6 @@ async function actualiserBadgeSuivi(urlSuivi) {
   } catch {}
 }
 
-// §UX — Masque les boutons flottants (panier + suivi) lorsque le footer
-// entre dans le viewport (évite qu'ils se superposent visuellement aux
-// horaires/contact du footer, ce qui rendait la lecture confuse en bas de
-// page).
 function observerFooterPourPanierFlottant() {
   const footer = document.querySelector('footer');
   const cartBtn = document.getElementById('cart-btn');
@@ -462,7 +535,7 @@ function scrollToTop() {
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
-// ---- Modals ----
+// ---- Modals panier/checkout ----
 function openCart() {
   renderCartModal();
   document.getElementById('cart-modal').classList.remove('hidden');
@@ -474,6 +547,8 @@ function closeCart() {
   document.body.style.overflow = '';
 }
 
+// AJOUT — chaque ligne de panier affiche désormais ses suppléments choisis
+// (le cas échéant) sous le nom du produit.
 function renderCartModal() {
   const itemsEl = document.getElementById('cart-items');
   const footerEl = document.getElementById('cart-footer');
@@ -485,34 +560,39 @@ function renderCartModal() {
     return;
   }
 
-  itemsEl.innerHTML = cart.items.map(item => `
+  itemsEl.innerHTML = cart.items.map((item, idx) => `
     <div class="flex items-center gap-3 py-3">
       <div class="flex-1 min-w-0">
         <div class="font-semibold text-sm text-gray-900">${escHtml(item.nom)}</div>
-        <div class="text-xs text-gray-500">${formatMontant(item.prix)} l'unité</div>
+        ${item.supplements && item.supplements.length ? `<div class="text-xs text-gray-400 truncate">+ ${item.supplements.map(s => escHtml(s.nom)).join(', ')}</div>` : ''}
+        <div class="text-xs text-gray-500">${formatMontant(item.prix + (item.prix_supplement||0))} l'unité</div>
       </div>
       <div class="flex items-center gap-2 bg-gray-50 rounded-xl p-1">
-        <button data-cart-action="remove" data-produit-id="${escHtml(item.produit_id)}" class="w-7 h-7 rounded-lg flex items-center justify-center text-gray-600 hover:bg-gray-200 font-bold">−</button>
+        <button data-cart-action="remove" data-cart-idx="${idx}" class="w-7 h-7 rounded-lg flex items-center justify-center text-gray-600 hover:bg-gray-200 font-bold">−</button>
         <span class="text-sm font-bold w-6 text-center">${item.quantite}</span>
-        <button data-cart-action="add" data-produit-id="${escHtml(item.produit_id)}" class="w-7 h-7 rounded-xl flex items-center justify-center text-white font-bold" style="background-color:${PRIMARY_COLOR}">+</button>
+        <button data-cart-action="add" data-cart-idx="${idx}" class="w-7 h-7 rounded-xl flex items-center justify-center text-white font-bold" style="background-color:${PRIMARY_COLOR}">+</button>
       </div>
-      <div class="text-sm font-bold w-20 text-right">${formatMontant(item.prix * item.quantite)}</div>
+      <div class="text-sm font-bold w-20 text-right">${formatMontant((item.prix + (item.prix_supplement||0)) * item.quantite)}</div>
     </div>
   `).join('');
 
   itemsEl.querySelectorAll('[data-cart-action]').forEach(btn => {
     btn.addEventListener('click', () => {
       if (!boutiqueOuverte) return;
-      const produitId = btn.getAttribute('data-produit-id');
+      const idx = parseInt(btn.getAttribute('data-cart-idx'), 10);
       const action = btn.getAttribute('data-cart-action');
+      const item = cart.items[idx];
+      if (!item) return;
       if (action === 'add') {
-        const item = cart.items.find(i => i.produit_id === produitId);
-        if (item) addToCart({ id: item.produit_id, nom: item.nom, prix: item.prix, photo_url: item.photo_url });
+        item.quantite++;
       } else {
-        removeFromCart(produitId);
+        if (item.quantite > 1) item.quantite--;
+        else cart.items.splice(idx, 1);
       }
+      saveCart();
       renderCartModal();
       updateCartUI();
+      renderMenu();
     });
   });
 
@@ -530,9 +610,6 @@ function renderCartModal() {
   `;
 }
 
-// §Horaires — Verrou final avant ouverture du formulaire de paiement :
-// même si l'état a changé entre-temps (fermeture pendant la navigation),
-// impossible d'ouvrir le checkout hors horaires.
 function openCheckout() {
   if (!boutiqueOuverte) {
     alert('Le restaurant est actuellement fermé. Vous pourrez commander pendant ses horaires d\'ouverture.');
@@ -547,7 +624,6 @@ function openCheckout() {
     radio.addEventListener('change', onLivraisonTypeChange);
   });
   const isLivraison = document.querySelector('input[name="livraison-type"]:checked')?.value === 'livraison';
-  // FIX — état initial du bouton Confirmer selon que la position est déjà connue
   mettreAJourEtatSubmit();
   if (isLivraison) {
     setTimeout(() => initCartelivraison(), 200);
@@ -581,11 +657,6 @@ function onLivraisonTypeChange() {
   updateCheckoutRecap();
 }
 
-// FIX — Verrouille/déverrouille le bouton "Confirmer" du formulaire de
-// commande selon que la position GPS est connue (mode livraison
-// uniquement). Empêche de soumettre une commande livraison sans
-// coordonnées, ce qui garantit que le message WhatsApp final contiendra
-// toujours les liens Maps/Waze quand il s'agit d'une livraison.
 function mettreAJourEtatSubmit() {
   const submitBtn = document.getElementById('submit-btn');
   const hintEl = document.getElementById('position-manquante-hint');
@@ -601,7 +672,7 @@ function mettreAJourEtatSubmit() {
   if (hintEl) hintEl.classList.toggle('hidden', !positionManquante);
 }
 
-// ---- Carte Leaflet interactive (§1.1) ----
+// ---- Carte Leaflet interactive ----
 function initCartelivraison() {
   const container = document.getElementById('carte-livraison');
   if (!container) return;
@@ -771,7 +842,7 @@ function updateCheckoutRecap() {
   if (el_tot) el_tot.textContent = (isLivraison && fraisLivraison === 0) ? 'À calculer' : formatMontant(total);
 }
 
-// ---- Géolocalisation client (auto + bouton manuel) ----
+// ---- Géolocalisation client ----
 function geolocaliser() {
   const detailEl = document.getElementById('frais-livraison-detail');
   if (!navigator.geolocation) {
@@ -829,20 +900,8 @@ async function calculerFraisLivraison() {
 }
 
 // ---- Soumettre la commande ----
-// FIX WhatsApp — À la confirmation, la commande doit rediriger vers WhatsApp
-// du RESTAURANT avec le récap pré-rempli (lien_whatsapp renvoyé par
-// POST /api/v1/commandes), en plus de la redirection vers la page de suivi.
-// Le lien_whatsapp est construit CÔTÉ SERVEUR (genererMessageCommande dans
-// lib/whatsapp.ts) et contient désormais TOUJOURS les liens Google Maps et
-// Waze dès lors que client_latitude/client_longitude sont fournis — ce qui
-// est maintenant garanti par la validation stricte ci-dessous (FIX
-// 2026-07-30 : géolocalisation obligatoire en livraison).
-//
-// Pour éviter le blocage popup des navigateurs (qui n'autorisent l'ouverture
-// de fenêtre que si elle a lieu de façon SYNCHRONE dans le même geste
-// utilisateur, i.e. le clic sur "Confirmer"), on ouvre un onglet vide
-// immédiatement, AVANT le fetch, puis on le redirige vers le vrai lien
-// WhatsApp une fois la réponse serveur reçue.
+// AJOUT — chaque item envoyé au serveur inclut désormais supplement_ids
+// (IDs uniquement, jamais le prix — recalculé côté serveur).
 async function submitOrder(e) {
   e.preventDefault();
 
@@ -863,10 +922,6 @@ async function submitOrder(e) {
 
   const isEmporter = modeType === 'emporter';
 
-  // FIX 2026-07-30 — En mode livraison, l'ADRESSE et les COORDONNÉES GPS
-  // sont désormais TOUTES LES DEUX obligatoires (et non plus l'une ou
-  // l'autre). C'est ce qui garantit que le message WhatsApp final contient
-  // toujours les liens Google Maps / Waze.
   if (!isEmporter) {
     if (clientLat === null || clientLon === null) {
       alert('La position GPS est obligatoire pour la livraison. Merci d\'autoriser la géolocalisation ou de déplacer le repère sur la carte.');
@@ -882,7 +937,6 @@ async function submitOrder(e) {
   btn.disabled = true;
   btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Envoi en cours...';
 
-  // FIX popup — ouverture synchrone de l'onglet WhatsApp, dans le clic.
   const whatsappWindow = window.open('about:blank', '_blank');
 
   const idempotencyKey = crypto.randomUUID();
@@ -895,7 +949,11 @@ async function submitOrder(e) {
     client_adresse: isEmporter ? null : adresse,
     client_latitude: isEmporter ? null : clientLat,
     client_longitude: isEmporter ? null : clientLon,
-    items: cart.items.map(item => ({ produit_id: item.produit_id, quantite: item.quantite })),
+    items: cart.items.map(item => ({
+      produit_id: item.produit_id,
+      quantite: item.quantite,
+      supplement_ids: (item.supplements || []).map(s => s.supplement_id)
+    })),
     mode_paiement: 'especes_livraison',
     mode_livraison: isEmporter ? 'emporter' : 'livraison',
     idempotency_key: idempotencyKey,
@@ -928,9 +986,6 @@ async function submitOrder(e) {
         } catch {}
       }
 
-      // FIX WhatsApp — redirige l'onglet ouvert plus haut vers le lien
-      // WhatsApp réel (restaurant), pré-rempli avec le récap de commande
-      // (adresse + Maps + Waze désormais garantis pour toute livraison).
       if (data.lien_whatsapp) {
         const lienCorrige = corrigerLienWhatsApp(data.lien_whatsapp);
         if (whatsappWindow) {
@@ -942,7 +997,6 @@ async function submitOrder(e) {
         whatsappWindow.close();
       }
 
-      // La page principale du client va vers le suivi de commande.
       window.location.href = data.url_suivi || '/';
     } else {
       if (whatsappWindow) whatsappWindow.close();
@@ -958,10 +1012,6 @@ async function submitOrder(e) {
   }
 }
 
-// §WhatsApp — Filet de sécurité côté client : si le lien renvoyé par le
-// serveur contient un numéro mal formaté (ex: wa.me/00226..., espaces,
-// tirets...), on le corrige avant redirection. Ne peut pas ajouter un
-// indicatif pays manquant — seule la correction de format est possible ici.
 function corrigerLienWhatsApp(lien) {
   try {
     const url = new URL(lien);
@@ -981,13 +1031,10 @@ function corrigerLienWhatsApp(lien) {
     }
     return url.toString();
   } catch {
-    return lien; // URL invalide : on laisse tel quel plutôt que de casser la redirection
+    return lien;
   }
 }
 
-// §WhatsApp — Même logique de normalisation que côté serveur (boutique.ts) :
-// retire tout ce qui n'est pas chiffre/+, convertit un préfixe "00" en "+"
-// puis retire le "+" (wa.me n'accepte que des chiffres).
 function formatWhatsAppNumber(numeroRaw) {
   let n = (numeroRaw || '').replace(/[^0-9+]/g, '');
   if (n.startsWith('00')) n = '+' + n.slice(2);
@@ -1022,3 +1069,5 @@ window.geolocaliser = geolocaliser;
 window.appliquerCodePromo = appliquerCodePromo;
 window.retirerCodePromo = retirerCodePromo;
 window.scrollToTop = scrollToTop;
+window.ouvrirModalSupplements = ouvrirModalSupplements;
+window.confirmerAjoutAvecSupplements = confirmerAjoutAvecSupplements;
