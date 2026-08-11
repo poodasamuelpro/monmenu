@@ -1,78 +1,27 @@
 // API Dashboard — Routes protégées pour le tableau de bord restaurant
 // ARCHITECTURE :
-//   • D1 (Cloudflare) → SITE WEB uniquement : config_globale, pays, plans
-//   • Supabase (PostgreSQL) → APPLICATION : tenants, commandes, menu, livreurs, etc.
-// §2 — Toutes les routes acceptent désormais le token via cookie httpOnly
-//      "sb-access-token" (flux navigateur) OU header Authorization: Bearer
-//      (clients API/mobile), avec le cookie prioritaire.
+//   • D1 (Cloudflare) → SITE WEB uniquement : config_globale, pays
+//   • Supabase (PostgreSQL) → APPLICATION : tenants, commandes, menu,
+//     livreurs, plans, supplements, etc.
+//
+// §2 — Auth via cookie httpOnly "sb-access-token" (flux navigateur) OU
+//      header Authorization: Bearer (clients API/mobile), cookie prioritaire.
 // §2.CSRF — Protection CSRF sur les routes d'écriture (POST/PATCH/DELETE).
 //
-// CORRECTIONS CYCLE-4 :
-//   FIX-A — verifyAuth() n'utilise plus sa propre liste blanche de statuts
-//   ('actif','essai' uniquement). Elle délègue désormais à
-//   verifierAccesTenant() (src/lib/acces-tenant.ts), LOGIQUE UNIQUE partagée
-//   avec api-paiement.ts et index.ts. Conséquence concrète : un tenant dont
-//   l'essai est expiré MAIS dont une preuve de paiement est en cours de
-//   vérification (fenêtre de 72h) garde désormais un accès COMPLET au
-//   dashboard (commandes, menu, stats...), pas seulement à la page
-//   Abonnement — c'est la règle métier demandée : "il a droit à tout sans
-//   souci" pendant cette fenêtre.
-//   Le mode 'paiement_initial' (jamais payé) reste volontairement exclu de
-//   verifyAuth() : ce tenant n'a accès qu'aux routes /api/v1/paiement/*.
+// MIGRATION PLANS — GET /profil et PATCH /parametres résolvent désormais
+// le plan directement via chargerPlan() (src/lib/plans.ts, Supabase
+// uniquement). Plus de résolution D1.
 //
-//   FIX-B — GET /profil : bug corrigé — cette route utilisait verifyAuth()
-//   qui bloque (401) un tenant en 'en_attente_paiement_initial'. Résultat :
-//   le nom du restaurant n'apparaissait jamais dans la sidebar sur la page
-//   /dashboard/abonnement elle-même (bug purement cosmétique mais gênant).
-//   /profil a maintenant sa propre vérification, plus permissive (autorise
-//   tous les modes d'accès valides, y compris 'paiement_initial'), tout en
-//   restant strictement en lecture seule et sans exposer plus de données
-//   qu'avant.
+// AJOUT — SUPPLÉMENTS : CRUD complet par produit
+//   GET    /produits/:id/supplements   — liste des suppléments d'un produit
+//   POST   /produits/:id/supplements   — créer un supplément
+//   PATCH  /supplements/:id            — modifier / activer / désactiver
+//   DELETE /supplements/:id            — supprimer (soft delete)
 //
-//   FIX-C — GET /profil : résolution du plan corrigée. tenant.plan_id est
-//   un UUID Supabase, pas un id D1 — la requête D1 échouait toujours
-//   silencieusement avant. Utilise désormais chargerPlanDepuisIdSupabase()
-//   (src/lib/plans.ts).
-//
-// FIX (2026-07-28) — 3 occurrences du bug d'URL media corrigées.
-// FIX (correctif QR code) — QR toujours noir sur blanc.
-// FIX (codes promo) — export CSV codes promo.
-//
-// FIX (pré-remplissage bienvenue) — GET /profil renvoie désormais aussi
-// les horaires du point de vente (pdv_horaires), afin que la page
-// /bienvenue puisse pré-remplir l'étape 2 si l'utilisateur y revient
-// après un premier passage (ou après un "Passer" suivi d'un retour).
-//
-// AJOUT 2026-07-30 — Notification WhatsApp au LIVREUR quand le restaurant
-// passe une commande de "confirmée" à "en préparation" avec un livreur
-// assigné (body.livreur_id). Deux canaux, toujours les deux tentés :
-//   1) Envoi automatique via l'API WhatsApp Business officielle
-//      (best-effort, ne bloque jamais la réponse).
-//   2) Lien wa.me renvoyé dans la réponse JSON ("lien_whatsapp_livreur")
-//      pour que le dashboard ouvre un onglet WhatsApp pré-rempli — c'est
-//      le filet de sécurité qui doit fonctionner à 100% du temps, que
-//      l'API officielle soit configurée ou non.
-//
-// AJOUT (audit mobile — corrections 4.3/4.4 du 10/08) —
-//   PATCH /codes-promo/:id — nouvelle route (n'existait pas), pour
-//   activer/désactiver un code promo depuis l'app mobile (et,
-//   potentiellement, le dashboard web).
-//   PATCH /livreurs/:id — élargie pour accepter en plus de "actif" les
-//   champs "nom" et "whatsapp_number", auparavant silencieusement ignorés
-//   côté serveur alors que le mobile (et le dashboard web) laissaient
-//   croire à l'utilisateur que la modification avait été enregistrée.
-//
-// AJOUT (module FCM — push notifications mobile, 10/08) —
-//   POST   /fcm-token — enregistre/rafraîchit le token FCM du device
-//          courant (appelé par FCMService.init() côté mobile).
-//   DELETE /fcm-token — supprime le token FCM (appelé par
-//          logoutWithFCMCleanup() côté mobile, avant déconnexion).
-//   Ces deux routes réutilisent verifyAuth() (accès complet requis, comme
-//   le reste du dashboard) et sont donc déjà couvertes par le middleware
-//   CSRF global du router : le mobile passe toujours par
-//   Authorization: Bearer, qui est explicitement exempté du header
-//   X-Requested-With — aucune configuration supplémentaire nécessaire.
-//   Voir src/lib/fcm.ts pour l'envoi effectif des notifications.
+// Livreurs : PATCH /livreurs/:id accepte déjà "actif", "nom" et
+// "whatsapp_number" indépendamment (aucune régression, comportement
+// inchangé — le frontend dashboard.js expose maintenant un bouton
+// "Modifier" qui utilise cette route existante).
 
 import { Hono } from 'hono'
 import { getCookie } from 'hono/cookie'
@@ -81,7 +30,7 @@ import { createSupabaseClient, createSupabaseClientWithToken, createSupabaseAdmi
 import { setSecurityHeaders, checkRateLimit } from '../lib/security'
 import { genererMessageLivreur, genererLienWhatsApp, envoyerNotificationWhatsApp } from '../lib/whatsapp'
 import { verifierAccesTenant } from '../lib/acces-tenant'
-import { chargerPlanDepuisIdSupabase } from '../lib/plans'
+import { chargerPlan } from '../lib/plans'
 
 const dashboardRouter = new Hono<{ Bindings: Env }>()
 
@@ -118,21 +67,7 @@ function extractToken(c: any): string | null {
   return null
 }
 
-function checkCsrfProtection(c: any): boolean {
-  const hasBearerToken = c.req.header('Authorization')?.startsWith('Bearer ')
-  if (hasBearerToken) return true
-
-  const xRequestedWith = c.req.header('X-Requested-With')
-  return xRequestedWith === 'XMLHttpRequest'
-}
-
 // ---- Middleware d'authentification ----
-// CYCLE-4 — FIX-A : délègue la décision d'accès à verifierAccesTenant()
-// (src/lib/acces-tenant.ts), seule source de vérité, partagée avec
-// api-paiement.ts et index.ts. Modes acceptés ici : 'actif', 'essai',
-// 'grace_confirmation' (fenêtre 72h après soumission d'une preuve).
-// Mode REFUSÉ ici : 'paiement_initial' (jamais payé — seules les routes
-// /api/v1/paiement/* et /api/v1/dashboard/profil lui sont ouvertes).
 async function verifyAuth(c: any): Promise<{ user_id: string; tenant_id: string; tenant_slug: string; token: string } | null> {
   const token = extractToken(c)
   if (!token) return null
@@ -154,10 +89,6 @@ async function verifyAuth(c: any): Promise<{ user_id: string; tenant_id: string;
 
     const tenant = utData.tenants as any
 
-    // CYCLE-6 : accesComplet strictement requis ici (commandes, menu,
-    // stats...). 'bloque' et 'paiement_initial' donnent accès à
-    // /dashboard/abonnement et à /api/v1/paiement/* uniquement — jamais
-    // à ces routes-ci.
     const resultat = await verifierAccesTenant(c.env, utData.tenant_id)
     if (!resultat.accesComplet) return null
 
@@ -166,9 +97,6 @@ async function verifyAuth(c: any): Promise<{ user_id: string; tenant_id: string;
 }
 
 // ---- GET /api/v1/dashboard/notifications ----
-// Audit 07-notifications §1.2 — bandeau de notifications paiement/essai
-// NOTE : ce endpoint est un alias vers /api/v1/paiement/notifications
-// qui est monté séparément dans index.ts. Il reste ici pour compatibilité.
 dashboardRouter.get('/notifications', async (c) => {
   setSecurityHeaders(c)
   const auth = await verifyAuth(c)
@@ -270,12 +198,6 @@ dashboardRouter.get('/commandes', async (c) => {
 })
 
 // ---- PATCH /api/v1/dashboard/commandes/:id/statut ----
-// AJOUT 2026-07-30 — Si un livreur est assigné (body.livreur_id) au moment
-// où la commande passe en "en_preparation", on lui envoie un message
-// WhatsApp avec les infos de livraison (adresse + Maps + Waze + montant à
-// encaisser), sur les DEUX canaux :
-//   1) API WhatsApp Business officielle (best-effort, silencieux)
-//   2) lien_whatsapp_livreur renvoyé au dashboard (redirection garantie)
 dashboardRouter.patch('/commandes/:id/statut', async (c) => {
   setSecurityHeaders(c)
   const auth = await verifyAuth(c)
@@ -357,7 +279,7 @@ dashboardRouter.patch('/commandes/:id/statut', async (c) => {
       }
     } catch {
       // Ne jamais faire échouer la mise à jour de statut à cause d'une
-      // erreur de notification livreur — la commande est déjà mise à jour.
+      // erreur de notification livreur.
     }
   }
 
@@ -396,7 +318,10 @@ dashboardRouter.get('/commandes/export-csv', async (c) => {
     let produits = ''
     try {
       const items = typeof cmd.items_json === 'string' ? JSON.parse(cmd.items_json) : cmd.items_json
-      produits = items.map((it: any) => `${it.nom} x${it.quantite}`).join(' | ')
+      produits = items.map((it: any) => {
+        const supp = it.supplements?.length ? ` (+ ${it.supplements.map((s: any) => s.nom).join(', ')})` : ''
+        return `${it.nom}${supp} x${it.quantite}`
+      }).join(' | ')
     } catch {}
     return [
       cmd.id,
@@ -823,6 +748,167 @@ dashboardRouter.delete('/produits/:id', async (c) => {
   return c.json({ success: true })
 })
 
+// ============================================================
+// AJOUT — SUPPLÉMENTS (CRUD par produit)
+// ============================================================
+
+// ---- GET /api/v1/dashboard/produits/:id/supplements ----
+dashboardRouter.get('/produits/:id/supplements', async (c) => {
+  setSecurityHeaders(c)
+  const auth = await verifyAuth(c)
+  if (!auth) return c.json({ error: 'Non authentifié.' }, 401)
+
+  const produitId = c.req.param('id')
+  const supabase = createSupabaseClientWithToken(c.env, auth.token)
+
+  const { data: produit } = await supabase
+    .from('produits')
+    .select('id')
+    .eq('id', produitId)
+    .eq('tenant_id', auth.tenant_id)
+    .is('deleted_at', null)
+    .single()
+  if (!produit) return c.json({ error: 'Produit introuvable.' }, 404)
+
+  const { data: supplements, error } = await supabase
+    .from('supplements')
+    .select('id, nom, prix, actif, ordre_affichage')
+    .eq('produit_id', produitId)
+    .eq('tenant_id', auth.tenant_id)
+    .is('deleted_at', null)
+    .order('ordre_affichage', { ascending: true })
+
+  if (error) return c.json({ error: 'Erreur récupération suppléments.', detail: error.message }, 500)
+  return c.json({ supplements: supplements ?? [] })
+})
+
+// ---- POST /api/v1/dashboard/produits/:id/supplements ----
+dashboardRouter.post('/produits/:id/supplements', async (c) => {
+  setSecurityHeaders(c)
+  const auth = await verifyAuth(c)
+  if (!auth) return c.json({ error: 'Non authentifié.' }, 401)
+
+  const produitId = c.req.param('id')
+  let body: { nom?: string; prix?: number }
+  try { body = await c.req.json() } catch { return c.json({ error: 'JSON invalide.' }, 400) }
+
+  if (!body.nom || body.nom.trim().length < 1 || body.nom.trim().length > 100) {
+    return c.json({ error: 'Nom du supplément invalide (1 à 100 caractères).' }, 422)
+  }
+  if (typeof body.prix !== 'number' || body.prix < 0 || body.prix > 999999) {
+    return c.json({ error: 'Prix invalide.' }, 422)
+  }
+
+  const supabase = createSupabaseClientWithToken(c.env, auth.token)
+
+  const { data: produit } = await supabase
+    .from('produits')
+    .select('id')
+    .eq('id', produitId)
+    .eq('tenant_id', auth.tenant_id)
+    .is('deleted_at', null)
+    .single()
+  if (!produit) return c.json({ error: 'Produit introuvable.' }, 404)
+
+  const { count } = await supabase
+    .from('supplements')
+    .select('id', { count: 'exact', head: true })
+    .eq('produit_id', produitId)
+    .is('deleted_at', null)
+
+  const supId = crypto.randomUUID()
+  const now = new Date().toISOString()
+
+  const { error } = await supabase
+    .from('supplements')
+    .insert({
+      id: supId,
+      tenant_id: auth.tenant_id,
+      produit_id: produitId,
+      nom: body.nom.trim(),
+      prix: body.prix,
+      actif: true,
+      ordre_affichage: count ?? 0,
+      created_at: now,
+      updated_at: now
+    })
+
+  if (error) return c.json({ error: 'Erreur création supplément.', detail: error.message }, 500)
+
+  try { if (c.env.KV_CACHE) await c.env.KV_CACHE.delete(`menu:${auth.tenant_slug}`) } catch {}
+  return c.json({ success: true, id: supId }, 201)
+})
+
+// ---- PATCH /api/v1/dashboard/supplements/:id — modifier / activer / désactiver ----
+dashboardRouter.patch('/supplements/:id', async (c) => {
+  setSecurityHeaders(c)
+  const auth = await verifyAuth(c)
+  if (!auth) return c.json({ error: 'Non authentifié.' }, 401)
+
+  const supId = c.req.param('id')
+  let body: { nom?: string; prix?: number; actif?: boolean; ordre_affichage?: number }
+  try { body = await c.req.json() } catch { return c.json({ error: 'JSON invalide.' }, 400) }
+
+  if (body.nom !== undefined && (body.nom.trim().length < 1 || body.nom.trim().length > 100)) {
+    return c.json({ error: 'Nom invalide (1 à 100 caractères).' }, 422)
+  }
+  if (body.prix !== undefined && (typeof body.prix !== 'number' || body.prix < 0 || body.prix > 999999)) {
+    return c.json({ error: 'Prix invalide.' }, 422)
+  }
+
+  const supabase = createSupabaseClientWithToken(c.env, auth.token)
+
+  const { data: sup } = await supabase
+    .from('supplements')
+    .select('id')
+    .eq('id', supId)
+    .eq('tenant_id', auth.tenant_id)
+    .is('deleted_at', null)
+    .single()
+  if (!sup) return c.json({ error: 'Supplément introuvable.' }, 404)
+
+  const updateData: any = { updated_at: new Date().toISOString() }
+  if (body.nom !== undefined) updateData.nom = body.nom.trim()
+  if (body.prix !== undefined) updateData.prix = body.prix
+  if (body.actif !== undefined) updateData.actif = body.actif
+  if (body.ordre_affichage !== undefined) updateData.ordre_affichage = body.ordre_affichage
+
+  const { error } = await supabase
+    .from('supplements')
+    .update(updateData)
+    .eq('id', supId)
+    .eq('tenant_id', auth.tenant_id)
+
+  if (error) return c.json({ error: 'Erreur mise à jour supplément.', detail: error.message }, 500)
+
+  try { if (c.env.KV_CACHE) await c.env.KV_CACHE.delete(`menu:${auth.tenant_slug}`) } catch {}
+  return c.json({ success: true })
+})
+
+// ---- DELETE /api/v1/dashboard/supplements/:id ----
+dashboardRouter.delete('/supplements/:id', async (c) => {
+  setSecurityHeaders(c)
+  const auth = await verifyAuth(c)
+  if (!auth) return c.json({ error: 'Non authentifié.' }, 401)
+
+  const supId = c.req.param('id')
+  const supabase = createSupabaseClientWithToken(c.env, auth.token)
+
+  const { error, data } = await supabase
+    .from('supplements')
+    .update({ deleted_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+    .eq('id', supId)
+    .eq('tenant_id', auth.tenant_id)
+    .is('deleted_at', null)
+    .select('id')
+
+  if (error) return c.json({ error: 'Erreur suppression supplément.', detail: error.message }, 500)
+  if (!data || data.length === 0) return c.json({ error: 'Supplément introuvable.' }, 404)
+
+  try { if (c.env.KV_CACHE) await c.env.KV_CACHE.delete(`menu:${auth.tenant_slug}`) } catch {}
+  return c.json({ success: true })
+})
+
 // ---- GET /api/v1/dashboard/livreurs ----
 dashboardRouter.get('/livreurs', async (c) => {
   setSecurityHeaders(c)
@@ -898,13 +984,8 @@ dashboardRouter.delete('/livreurs/:id', async (c) => {
 })
 
 // ---- PATCH /api/v1/dashboard/livreurs/:id — Modifier / Activer / désactiver ----
-// AJOUT (audit mobile — correction 4.4) : la route se limitait avant à
-// n'accepter (et n'écrire) que le champ "actif". Les champs "nom" et
-// "whatsapp_number" étaient silencieusement ignorés, alors que le client
-// (mobile et dashboard web) pouvait laisser croire à l'utilisateur qu'une
-// modification du nom/numéro avait été enregistrée (réponse 200 trompeuse).
-// Élargie pour accepter, de façon indépendante, "actif", "nom" et/ou
-// "whatsapp_number" — chaque champ n'est mis à jour que s'il est fourni.
+// Accepte, de façon indépendante : "actif", "nom" et/ou "whatsapp_number".
+// Chaque champ n'est mis à jour que s'il est fourni dans le body.
 dashboardRouter.patch('/livreurs/:id', async (c) => {
   setSecurityHeaders(c)
   const auth = await verifyAuth(c)
@@ -1096,6 +1177,8 @@ dashboardRouter.patch('/apparence', async (c) => {
 })
 
 // ---- PATCH /api/v1/dashboard/parametres ----
+// MIGRATION — vérification du plan "Mogho" via chargerPlan() (Supabase),
+// plus de résolution D1.
 dashboardRouter.patch('/parametres', async (c) => {
   setSecurityHeaders(c)
   const auth = await verifyAuth(c)
@@ -1119,10 +1202,10 @@ dashboardRouter.patch('/parametres', async (c) => {
       .single()
 
     if (tenantInfo?.plan_id) {
-      // tenantInfo.plan_id est un UUID Supabase → résolution vers l'id D1
-      // avant lookup du nom du plan (même bug que /profil, corrigé ici).
-      const planD1 = await chargerPlanDepuisIdSupabase(c.env, tenantInfo.plan_id)
-      const planNom = (planD1?.nom ?? '').toLowerCase()
+      // MIGRATION — chargerPlan() lit directement Supabase avec l'UUID
+      // natif de tenant.plan_id (plus de résolution D1).
+      const planActuel = await chargerPlan(c.env, tenantInfo.plan_id)
+      const planNom = (planActuel?.nom ?? '').toLowerCase()
       if (!planNom.includes('mogho')) {
         return c.json({
           error: 'Le domaine personnalisé est réservé au plan Mogho.',
@@ -1149,14 +1232,8 @@ dashboardRouter.patch('/parametres', async (c) => {
 })
 
 // ---- GET /api/v1/dashboard/profil ----
-// CYCLE-4 — FIX-B + FIX-C :
-//   - N'utilise plus verifyAuth() (qui bloque 'en_attente_paiement_initial').
-//     Vérification dédiée, plus permissive : tous les modes d'accès valides
-//     de verifierAccesTenant() y ont droit, y compris 'paiement_initial'
-//     (nécessaire pour afficher le nom du resto dans la sidebar de la page
-//     /dashboard/abonnement avant tout paiement).
-//   - Résolution du plan corrigée via chargerPlanDepuisIdSupabase()
-//     (tenant.plan_id est un UUID Supabase, pas un id D1).
+// MIGRATION — résolution du plan via chargerPlan() (Supabase uniquement,
+// UUID natif de tenant.plan_id), plus de résolution D1.
 dashboardRouter.get('/profil', async (c) => {
   setSecurityHeaders(c)
 
@@ -1177,10 +1254,9 @@ dashboardRouter.get('/profil', async (c) => {
 
   if (utError || !utData) return c.json({ error: 'Restaurant introuvable.' }, 404)
 
-  // CYCLE-6 : /profil est une lecture inoffensive (nom, couleurs, logo) —
-  // accessible dans TOUS les cas où le tenant est résolu, y compris
-  // 'bloque' et 'suspendu', pour que la sidebar affiche toujours le nom du
-  // restaurant, quelle que soit la page où l'utilisateur atterrit.
+  // /profil est une lecture inoffensive (nom, couleurs, logo) — accessible
+  // dans TOUS les cas où le tenant est résolu, y compris 'bloque' et
+  // 'suspendu', pour que la sidebar affiche toujours le nom du restaurant.
   const resultat = await verifierAccesTenant(c.env, utData.tenant_id)
   if (resultat.mode === 'introuvable') return c.json({ error: 'Compte inactif.' }, 403)
 
@@ -1193,9 +1269,6 @@ dashboardRouter.get('/profil', async (c) => {
     .eq('id', tenantId)
     .maybeSingle()
 
-  // Si le token utilisateur n'a pas encore les droits RLS nécessaires
-  // (rare, juste après inscription), on retombe sur l'admin client pour ne
-  // jamais faire échouer l'affichage du nom du restaurant.
   const tenantFinal = tenant ?? (await adminClient
     .from('tenants')
     .select('id, nom, slug, logo_url, banniere_url, couleur_primaire, couleur_secondaire, whatsapp_number, domaine_perso, statut, created_at, plan_id')
@@ -1204,8 +1277,8 @@ dashboardRouter.get('/profil', async (c) => {
 
   if (!tenantFinal) return c.json({ error: 'Restaurant introuvable.' }, 404)
 
-  // FIX-C : résolution correcte UUID Supabase → id D1 → ligne D1
-  const planD1 = await chargerPlanDepuisIdSupabase(c.env, tenantFinal.plan_id)
+  // MIGRATION — chargerPlan() lit directement Supabase (plus de D1)
+  const planActuel = await chargerPlan(c.env, tenantFinal.plan_id)
 
   const { data: pdv } = await adminClient
     .from('points_de_vente')
@@ -1223,10 +1296,10 @@ dashboardRouter.get('/profil', async (c) => {
 
   return c.json({
     ...tenantFinal,
-    plan_nom: planD1?.nom ?? null,
-    plan_features: planD1?.fonctionnalites ?? null,
-    commandes_incluses: planD1?.commandes_incluses ?? null,
-    prix_mensuel: planD1?.prix_mensuel ?? null,
+    plan_nom: planActuel?.nom ?? null,
+    plan_features: planActuel?.fonctionnalites ?? null,
+    commandes_incluses: planActuel?.commandes_incluses ?? null,
+    prix_mensuel: planActuel?.prix_mensuel ?? null,
     pdv_id: pdv?.id ?? null,
     pdv_nom: pdv?.nom ?? null,
     pdv_adresse: pdv?.adresse ?? null,
@@ -1239,7 +1312,7 @@ dashboardRouter.get('/profil', async (c) => {
   })
 })
 
-// ---- POST /api/v1/dashboard/profil/change-password (§1.7) ----
+// ---- POST /api/v1/dashboard/profil/change-password ----
 dashboardRouter.post('/profil/change-password', async (c) => {
   setSecurityHeaders(c)
   const auth = await verifyAuth(c)
@@ -1396,7 +1469,7 @@ dashboardRouter.post('/codes-promo', async (c) => {
   return c.json({ success: true, id: promoId, code: body.code.toUpperCase() }, 201)
 })
 
-// ---- POST /api/v1/dashboard/codes-promo/generate — Auto-génération (§1.3b) ----
+// ---- POST /api/v1/dashboard/codes-promo/generate ----
 dashboardRouter.post('/codes-promo/generate', async (c) => {
   setSecurityHeaders(c)
   const auth = await verifyAuth(c)
@@ -1440,13 +1513,6 @@ dashboardRouter.post('/codes-promo/generate', async (c) => {
 })
 
 // ---- PATCH /api/v1/dashboard/codes-promo/:id — Activer / désactiver ----
-// AJOUT (audit mobile — correction S5-A) : cette route n'existait pas.
-// Le mobile (et potentiellement le dashboard web) tentait d'activer ou
-// désactiver un code promo via un PATCH qui retournait systématiquement
-// 404, faute de route côté serveur. Ajoutée sur le même modèle que la
-// route équivalente pour les livreurs : accepte uniquement "actif" pour
-// l'instant (le montant minimum de commande n'est volontairement pas
-// couvert par cette route, hors périmètre demandé).
 dashboardRouter.patch('/codes-promo/:id', async (c) => {
   setSecurityHeaders(c)
   const auth = await verifyAuth(c)
@@ -1504,7 +1570,7 @@ dashboardRouter.delete('/codes-promo/:id', async (c) => {
   return c.json({ success: true })
 })
 
-// ---- POST /api/v1/dashboard/upload-image — Upload vers R2 ----
+// ---- POST /api/v1/dashboard/upload-image ----
 dashboardRouter.post('/upload-image', async (c) => {
   setSecurityHeaders(c)
   const auth = await verifyAuth(c)
@@ -1635,7 +1701,7 @@ dashboardRouter.get('/qrcode', async (c) => {
   })
 })
 
-// ---- GET /api/v1/dashboard/stats-journalieres (§1.8) ----
+// ---- GET /api/v1/dashboard/stats-journalieres ----
 dashboardRouter.get('/stats-journalieres', async (c) => {
   setSecurityHeaders(c)
   const auth = await verifyAuth(c)
@@ -1785,8 +1851,6 @@ dashboardRouter.post('/setup-restaurant', async (c) => {
 
 // ============================================================
 // Routes notifications restaurant
-// Table attendue : notifications_restaurant
-//   Colonnes : id, tenant_id, type, titre, message, lue, lien, created_at
 // ============================================================
 
 // ---- GET /api/v1/dashboard/notifications/liste ----
@@ -1891,16 +1955,9 @@ dashboardRouter.patch('/notifications/tout-lire', async (c) => {
 })
 
 // ============================================================
-// Routes FCM — Push notifications mobile (voir lib/fcm.ts)
-// Tokens stockés dans la table Supabase fcm_tokens (migration 013).
+// Routes FCM — Push notifications mobile
 // ============================================================
 
-// ---- POST /api/v1/dashboard/fcm-token — Enregistrer le token FCM du device ----
-// Appelée par FCMService.init() côté mobile (onTokenReceived) et à chaque
-// rafraîchissement de token (onTokenRefresh). Le CSRF middleware global de
-// ce router exige X-Requested-With SAUF si un header Authorization: Bearer
-// est présent — le mobile utilise déjà Bearer (api_service.dart), donc
-// aucune exception supplémentaire n'est nécessaire ici.
 dashboardRouter.post('/fcm-token', async (c) => {
   setSecurityHeaders(c)
   const auth = await verifyAuth(c)
@@ -1934,11 +1991,6 @@ dashboardRouter.post('/fcm-token', async (c) => {
   return c.json({ success: true })
 })
 
-// ---- DELETE /api/v1/dashboard/fcm-token — Supprimer le token (déconnexion) ----
-// Appelée par logoutWithFCMCleanup() côté mobile, AVANT la fermeture de
-// session, pour éviter de continuer à recevoir des push sur un compte
-// déconnecté. SEC-03 : la suppression est scopée au tenant_id du JWT
-// (un tenant authentifié ne peut supprimer que ses propres tokens).
 dashboardRouter.delete('/fcm-token', async (c) => {
   setSecurityHeaders(c)
   const auth = await verifyAuth(c)
