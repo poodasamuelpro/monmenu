@@ -1,39 +1,22 @@
 // API Commandes - Route Cloudflare Worker
 // ARCHITECTURE :
-//   • D1 (Cloudflare) → SITE WEB uniquement : config_globale, pays, plans
-//   • Supabase (PostgreSQL) → APPLICATION : commandes, tenants, produits, codes_promo, etc.
+//   • D1 (Cloudflare) → SITE WEB uniquement : config_globale, pays
+//   • Supabase (PostgreSQL) → APPLICATION : commandes, tenants, produits,
+//     codes_promo, supplements, etc.
 //
 // POST /api/v1/commandes - Créer une commande
 // GET  /api/v1/commandes/suivi/:token - Suivi commande (public)
 // PATCH /api/v1/commandes/:id/statut - Mise à jour statut (AUTH REQUISE via dashboard)
 // POST /api/v1/commandes/valider-promo - Vérifier un code promo
 //
-// FIX (cohérence avec whatsapp.ts) — genererMessageCommande() prend un
-// paramètre "origin" (domaine dynamique) au lieu d'utiliser un domaine
-// codé en dur. On construit cet origin ici avec new URL(c.req.url).origin,
-// exactement comme déjà fait pour le QR code et les médias R2 ailleurs dans
-// le code, pour que le lien de suivi WhatsApp pointe toujours vers le bon
-// domaine (production, preview *.workers.dev, ou domaine personnalisé).
-//
-// CONFIRMÉ 2026-07-30 — Ce fichier est déjà compatible avec le nouveau
-// gabarit de message (whatsapp.ts) : les deux canaux de notification sont
-// câblés correctement pour la commande client → restaurant :
-//   1) envoyerNotificationWhatsApp() — API WhatsApp Business officielle,
-//      envoyée en arrière-plan via c.executionCtx.waitUntil() (best-effort,
-//      ne bloque jamais la réponse HTTP).
-//   2) lien_whatsapp — renvoyé dans la réponse JSON, utilisé par boutique.js
-//      pour rediriger l'onglet WhatsApp ouvert au clic sur "Confirmer"
-//      (garanti fonctionnel à 100%, indépendant de la config de l'API).
-// Les liens Maps/Waze apparaissent désormais dans les deux canaux dès lors
-// que client_latitude/client_longitude sont fournis — ce qui est maintenant
-// garanti côté boutique.js (géolocalisation obligatoire en livraison).
-//
-// AJOUT (module FCM — push notifications mobile, 10/08) — En complément du
-// canal WhatsApp existant, une notification push FCM est envoyée à TOUS
-// les devices mobiles enregistrés du tenant (table fcm_tokens) dès qu'une
-// nouvelle commande est créée. Best-effort, via c.executionCtx.waitUntil(),
-// ne bloque jamais et ne fait jamais échouer la réponse HTTP — mêmes
-// garanties que le canal WhatsApp existant. Voir src/lib/fcm.ts.
+// AJOUT — SUPPLÉMENTS : chaque item de commande peut désormais inclure
+// `supplement_ids` (tableau d'UUID). Le PRIX de chaque supplément n'est
+// JAMAIS accepté depuis le client — il est systématiquement recalculé
+// côté serveur depuis la table `supplements` (actif=true, tenant_id
+// correspondant), exactement comme le code promo existant. Un supplément
+// inactif, supprimé, ou n'appartenant pas au tenant est silencieusement
+// ignoré (pas d'erreur bloquante — le client peut avoir une vue légèrement
+// périmée du menu, ce n'est pas une raison de faire échouer la commande).
 
 import { Hono } from 'hono'
 import type { Env } from '../types/database'
@@ -51,7 +34,6 @@ import {
   envoyerNotificationWhatsApp
 } from '../lib/whatsapp'
 import { calculerFraisLivraison } from '../lib/delivery'
-import { sendEmail } from '../lib/brevo'
 import { createSupabaseClient, createSupabaseClientWithToken, createSupabaseAdminClient } from '../lib/supabase'
 import { sendFcmToTenant } from '../lib/fcm'
 
@@ -69,7 +51,6 @@ async function verifyRestaurantAuth(c: any): Promise<{ user_id: string; tenant_i
     const { data: { user }, error } = await supabase.auth.getUser(token)
     if (error || !user) return null
 
-    // SUPABASE — lookup tenant (APPLICATION DATA)
     const supabaseToken = createSupabaseClientWithToken(c.env, token)
     const { data: utData, error: utError } = await supabaseToken
       .from('utilisateurs_tenant')
@@ -124,7 +105,6 @@ commandesRouter.post('/', async (c) => {
 
   const ip = c.req.header('CF-Connecting-IP') ?? 'unknown'
 
-  // Rate limiting : 10 commandes / minute par IP
   const rateLimit = await checkRateLimit(`commande:${ip}`, 10, 60000)
   if (!rateLimit.allowed) {
     return c.json({ error: 'Trop de requêtes. Veuillez patienter avant de réessayer.' }, 429)
@@ -148,7 +128,6 @@ commandesRouter.post('/', async (c) => {
   const data = parseResult.data
   const env = c.env
 
-  // Vérification idempotency key
   if (env.KV_CACHE) {
     const idempotencyCheck = await checkIdempotency(data.idempotency_key, env.KV_CACHE)
     if (idempotencyCheck.exists) {
@@ -156,10 +135,8 @@ commandesRouter.post('/', async (c) => {
     }
   }
 
-  // SUPABASE — toutes les requêtes sur données applicatives
   const adminClient = createSupabaseAdminClient(env)
 
-  // Vérifier que le tenant existe et est actif (APPLICATION DATA)
   const { data: tenantRow, error: tenantError } = await adminClient
     .from('tenants')
     .select('*')
@@ -170,7 +147,6 @@ commandesRouter.post('/', async (c) => {
 
   if (tenantError || !tenantRow) return c.json({ error: 'Restaurant introuvable ou inactif.' }, 404)
 
-  // Vérifier point de vente (APPLICATION DATA)
   const { data: pdvRow, error: pdvError } = await adminClient
     .from('points_de_vente')
     .select('*')
@@ -181,7 +157,6 @@ commandesRouter.post('/', async (c) => {
 
   if (pdvError || !pdvRow) return c.json({ error: 'Point de vente invalide.' }, 404)
 
-  // Récupérer les produits (APPLICATION DATA)
   const produitIds = data.items.map((i) => i.produit_id)
 
   const { data: produitsRows, error: prodsError } = await adminClient
@@ -198,21 +173,56 @@ commandesRouter.post('/', async (c) => {
 
   const produitMap = new Map(produitsRows.map((p: any) => [p.id, p]))
 
+  // AJOUT — Récupérer TOUS les suppléments sélectionnés en une seule
+  // requête groupée, filtrés actif=true et tenant_id correspondant côté
+  // serveur (jamais confiance au prix envoyé par le client — même
+  // principe que la validation du code promo ci-dessus).
+  const tousSupplementIds = Array.from(
+    new Set(data.items.flatMap((i) => i.supplement_ids ?? []))
+  )
+  const supplementsMap = new Map<string, { id: string; nom: string; prix: number; produit_id: string }>()
+  if (tousSupplementIds.length > 0) {
+    const { data: supplementsRows } = await adminClient
+      .from('supplements')
+      .select('id, produit_id, nom, prix')
+      .in('id', tousSupplementIds)
+      .eq('tenant_id', data.tenant_id)
+      .eq('actif', true)
+      .is('deleted_at', null)
+
+    for (const s of (supplementsRows ?? [])) {
+      supplementsMap.set(s.id, { id: s.id, nom: s.nom, prix: s.prix, produit_id: s.produit_id })
+    }
+  }
+
   let sousTotal = 0
   const itemsJson = data.items.map((item) => {
     const produit = produitMap.get(item.produit_id) as any
-    const sous_total = produit.prix * item.quantite
+
+    // AJOUT — ne garder que les suppléments réellement actifs ET
+    // appartenant bien au produit commandé (sécurité anti-mélange :
+    // un supplement_id valide pour un autre produit du même tenant
+    // n'est pas appliqué à ce produit-ci).
+    const supplementsChoisis = (item.supplement_ids ?? [])
+      .map((sid) => supplementsMap.get(sid))
+      .filter((s): s is { id: string; nom: string; prix: number; produit_id: string } =>
+        !!s && s.produit_id === item.produit_id
+      )
+
+    const totalSupplements = supplementsChoisis.reduce((s, sup) => s + sup.prix, 0)
+    const sous_total = (produit.prix + totalSupplements) * item.quantite
     sousTotal += sous_total
+
     return {
       produit_id: item.produit_id,
       nom: produit.nom,
       prix_unitaire: produit.prix,
       quantite: item.quantite,
+      supplements: supplementsChoisis.map((s) => ({ supplement_id: s.id, nom: s.nom, prix: s.prix })),
       sous_total
     }
   })
 
-  // Valider code promo si fourni (APPLICATION DATA via Supabase)
   let remisePromo = 0
   let promoId: string | undefined
   if (data.code_promo) {
@@ -224,7 +234,6 @@ commandesRouter.post('/', async (c) => {
     promoId = promoResult.promo_id
   }
 
-  // Calculer les frais de livraison
   let fraisLivraison = 0
   if (data.client_latitude && data.client_longitude && pdvRow.latitude && pdvRow.longitude) {
     const calcul = await calculerFraisLivraison({
@@ -246,7 +255,6 @@ commandesRouter.post('/', async (c) => {
     ? JSON.stringify({ code_promo: data.code_promo, remise_promo: remisePromo })
     : '{}'
 
-  // SUPABASE — Insérer la commande (APPLICATION DATA)
   const { error: insertError } = await adminClient
     .from('commandes')
     .insert({
@@ -275,15 +283,12 @@ commandesRouter.post('/', async (c) => {
     return c.json({ error: 'Erreur création commande.', detail: insertError.message }, 500)
   }
 
-  // SUPABASE — Incrémenter usage code promo (async)
-  // §1.3 — Incrément atomique via RPC Postgres (évite race condition)
   if (promoId) {
     c.executionCtx.waitUntil(
       adminClient
         .rpc('increment_promo_usage', { promo_id: promoId })
         .then(({ error }: { error: any }) => {
           if (error) {
-            // Fallback si la RPC n'existe pas encore : lecture puis update non-atomique
             return adminClient
               .from('codes_promo')
               .select('usage_actuel')
@@ -302,7 +307,6 @@ commandesRouter.post('/', async (c) => {
     )
   }
 
-  // SUPABASE — Historique initial (APPLICATION DATA)
   c.executionCtx.waitUntil(
     adminClient
       .from('commandes_historique')
@@ -335,27 +339,15 @@ commandesRouter.post('/', async (c) => {
     created_at: now
   }
 
-  // §1.9 — WhatsApp notification avec mode livraison / à emporter
-  // Origin dynamique passé à genererMessageCommande (voir whatsapp.ts) pour
-  // que le lien de suivi + le lien "boutique" en en-tête du message soient
-  // toujours corrects, quel que soit le domaine sur lequel tourne le Worker.
   const origin = new URL(c.req.url).origin
   const modeLivraison = (data.mode_livraison ?? 'livraison') as 'livraison' | 'emporter'
   const messageWhatsApp = genererMessageCommande(commandeComplete as any, tenantRow as any, origin, modeLivraison)
   const lienWhatsApp = genererLienWhatsApp(tenantRow.whatsapp_number, messageWhatsApp)
 
-  // Canal 1 — API WhatsApp Business officielle (best-effort, silencieux,
-  // ne bloque jamais la réponse HTTP renvoyée au client).
   c.executionCtx.waitUntil(
     envoyerNotificationWhatsApp(tenantRow.whatsapp_number, messageWhatsApp, env)
   )
 
-  // AJOUT — Canal 3 : push FCM à tous les devices mobiles du tenant, en
-  // complément du canal WhatsApp ci-dessus. Best-effort, ne bloque jamais
-  // la réponse HTTP et ne fait jamais échouer la création de commande
-  // même si FCM n'est pas configuré ou si l'envoi échoue (voir
-  // fcmConfigure() dans lib/fcm.ts, qui retourne silencieusement si
-  // FCM_PROJECT_ID/FCM_CLIENT_EMAIL/FCM_PRIVATE_KEY sont absents).
   c.executionCtx.waitUntil(
     sendFcmToTenant(env, adminClient, data.tenant_id, {
       title: `🛒 Nouvelle commande — ${data.client_nom}`,
@@ -370,9 +362,6 @@ commandesRouter.post('/', async (c) => {
     }).catch(() => {})
   )
 
-  // Canal 2 — lien de redirection wa.me, TOUJOURS renvoyé : c'est lui que
-  // boutique.js utilise pour rediriger l'onglet WhatsApp ouvert au clic sur
-  // "Confirmer" (garanti fonctionnel indépendamment de la config API).
   const responseData = {
     success: true,
     commande_id: commandeId,
@@ -403,7 +392,6 @@ commandesRouter.get('/suivi/:token', async (c) => {
     return c.json({ error: 'Token invalide.' }, 400)
   }
 
-  // SUPABASE — commande + tenant info (APPLICATION DATA)
   const adminClient = createSupabaseAdminClient(c.env)
 
   const { data: commande, error: cmdError } = await adminClient
@@ -422,14 +410,12 @@ commandesRouter.get('/suivi/:token', async (c) => {
 
   const tenantInfo = commande.tenants as any
 
-  // SUPABASE — historique (APPLICATION DATA)
   const { data: historique } = await adminClient
     .from('commandes_historique')
     .select('ancien_statut, nouveau_statut, timestamp, source, note')
     .eq('commande_id', commande.id)
     .order('timestamp', { ascending: true })
 
-  // Parser items_json
   let items = []
   try {
     items = typeof commande.items_json === 'string'
@@ -452,10 +438,6 @@ commandesRouter.get('/suivi/:token', async (c) => {
 })
 
 // PATCH /api/v1/commandes/:id/statut — Mise à jour statut (AUTH JWT REQUISE)
-// NOTE — Cette route est un doublon d'API pour clients externes/API/mobile
-// (auth par header Authorization: Bearer uniquement). Le flux normal du
-// dashboard web utilise plutôt PATCH /api/v1/dashboard/commandes/:id/statut
-// (api-dashboard.ts), qui gère désormais aussi la notification livreur.
 commandesRouter.patch('/:id/statut', async (c) => {
   setSecurityHeaders(c)
 
@@ -473,7 +455,6 @@ commandesRouter.patch('/:id/statut', async (c) => {
 
   const adminClient = createSupabaseAdminClient(c.env)
 
-  // SUPABASE — vérifier que la commande appartient au tenant (APPLICATION DATA)
   const { data: commande, error: fetchError } = await adminClient
     .from('commandes')
     .select('id, statut')
@@ -489,7 +470,6 @@ commandesRouter.patch('/:id/statut', async (c) => {
   const updateData: any = { statut: body.statut, updated_at: now }
   if (body.livreur_id) updateData.livreur_id = body.livreur_id
 
-  // SUPABASE — mettre à jour (APPLICATION DATA)
   const { error: updateError } = await adminClient
     .from('commandes')
     .update(updateData)
@@ -498,7 +478,6 @@ commandesRouter.patch('/:id/statut', async (c) => {
 
   if (updateError) return c.json({ error: 'Erreur mise à jour statut.', detail: updateError.message }, 500)
 
-  // SUPABASE — historique (APPLICATION DATA)
   await adminClient
     .from('commandes_historique')
     .insert({
@@ -528,7 +507,6 @@ commandesRouter.post('/valider-promo', async (c) => {
   if (!body.tenant_id || !body.code) return c.json({ error: 'tenant_id et code requis.' }, 422)
   const sousTotal = typeof body.sous_total === 'number' ? body.sous_total : 0
 
-  // SUPABASE — vérifier le code promo (APPLICATION DATA)
   const adminClient = createSupabaseAdminClient(c.env)
 
   const { data: promo, error: promoError } = await adminClient
