@@ -1,107 +1,83 @@
 // src/lib/plans.ts
 // ─────────────────────────────────────────────────────────────────────────
-// BUG CORRIGÉ : tenants.plan_id et tenants.plan_initial_id (Supabase)
-// stockent l'UUID de la ligne Supabase `plans` (résolu à l'inscription via
-// `plans.d1_plan_id` — voir api-auth.ts). Mais D1 reste la SEULE source de
-// vérité pour le nom/prix/fonctionnalités affichés (table `plans` de D1).
+// MIGRATION — Supabase `plans` est désormais l'UNIQUE source de vérité
+// pour les plans (nom, prix, fonctionnalités). D1 n'est plus consulté nulle
+// part dans le code applicatif pour les plans.
 //
-// Plusieurs endroits (GET /api/v1/dashboard/profil, GET /api/v1/paiement/statut)
-// interrogeaient D1 DIRECTEMENT avec cet UUID Supabase — qui ne correspond à
-// AUCUNE ligne D1 → résultat toujours null → "Plan actuel" et "plan choisi"
-// ne s'affichaient jamais dans le dashboard.
+// Le même UUID Supabase circule maintenant partout sans transformation :
+//   - tenants.plan_id
+//   - tenants.plan_initial_id
+//   - abonnements.plan_id
+//   - le `plan_id` envoyé par tous les formulaires front (inscription,
+//     soumission de preuve de paiement, changement de plan)
 //
-// Ce module centralise la résolution UUID Supabase → id D1 → ligne D1,
-// pour que ce bug ne soit corrigé qu'à un seul endroit.
+// Toutes les anciennes fonctions de résolution D1 ↔ Supabase
+// (resoudreIdD1DepuisPlanSupabase, resoudreIdSupabaseDepuisPlanD1,
+// chargerPlanD1, chargerPlanDepuisIdSupabase) sont supprimées — il n'y a
+// plus qu'un seul id à gérer, donc plus aucune résolution n'est nécessaire.
+//
+// D1 conserve son rôle pour `config_globale` et `pays` (site web
+// uniquement) — ce module ne les concerne pas.
 // ─────────────────────────────────────────────────────────────────────────
 
 import { createSupabaseAdminClient } from './supabase'
 import type { Env } from '../types/database'
 
-/**
- * Résout l'id D1 d'un plan à partir de son UUID Supabase.
- * Retourne null si planIdSupabase est vide ou si aucune correspondance
- * n'est trouvée (ex: plan supprimé côté Supabase).
- */
-export async function resoudreIdD1DepuisPlanSupabase(
-  env: Env,
-  planIdSupabase: string | null | undefined
-): Promise<string | null> {
-  if (!planIdSupabase) return null
-  try {
-    const adminClient = createSupabaseAdminClient(env)
-    const { data } = await adminClient
-      .from('plans')
-      .select('d1_plan_id')
-      .eq('id', planIdSupabase)
-      .maybeSingle()
-    return data?.d1_plan_id ?? null
-  } catch {
-    return null
-  }
-}
-
-export interface PlanD1 {
+export interface PlanSupabase {
   id: string
   nom: string
+  description?: string | null
   prix_mensuel: number
+  prix_annuel?: number
   devise?: string
   fonctionnalites?: unknown
   commandes_incluses?: number
+  limite_pdv?: number
+  frais_par_commande?: number
 }
 
 /**
- * Charge une ligne de plan depuis D1 par son id D1 (pas l'UUID Supabase).
+ * Charge un plan Supabase par son UUID natif (colonne `id`).
+ * Retourne null si planId est vide, invalide, ou introuvable.
  */
-export async function chargerPlanD1(env: Env, idD1: string | null | undefined): Promise<PlanD1 | null> {
-  if (!idD1) return null
+export async function chargerPlan(env: Env, planId: string | null | undefined): Promise<PlanSupabase | null> {
+  if (!planId) return null
   try {
-    const row = await env.DB
-      .prepare('SELECT id, nom, prix_mensuel, devise, fonctionnalites, commandes_incluses FROM plans WHERE id = ? LIMIT 1')
-      .bind(idD1)
-      .first<PlanD1>()
-    return row ?? null
-  } catch {
+    const adminClient = createSupabaseAdminClient(env)
+    const { data, error } = await adminClient
+      .from('plans')
+      .select('id, nom, description, prix_mensuel, prix_annuel, devise, fonctionnalites, commandes_incluses, limite_pdv, frais_par_commande')
+      .eq('id', planId)
+      .maybeSingle()
+    if (error) {
+      console.error('[Plans] Erreur chargement plan:', error.message)
+      return null
+    }
+    return data ?? null
+  } catch (err) {
+    console.error('[Plans] Exception chargement plan:', err instanceof Error ? err.message : err)
     return null
   }
 }
 
 /**
- * Raccourci : UUID Supabase → ligne D1 complète, en une seule fonction.
+ * Charge le plan gratuit par défaut (nom = 'Gratuit', actif).
+ * Utilisé par la route legacy api-tenants.ts POST / uniquement.
  */
-export async function chargerPlanDepuisIdSupabase(env: Env, planIdSupabase: string | null | undefined): Promise<PlanD1 | null> {
-  const idD1 = await resoudreIdD1DepuisPlanSupabase(env, planIdSupabase)
-  return chargerPlanD1(env, idD1)
-}
-
-/**
- * CYCLE-5 — Résolution INVERSE : id D1 → UUID Supabase.
- *
- * Nécessaire dans src/routes/api-admin-paiements.ts au moment de confirmer
- * un paiement : abonnements.plan_id est un id D1 (stocké tel quel par
- * POST /api/v1/paiement/soumettre, cohérent avec le front qui peuple son
- * select depuis /api/v1/plans → D1), mais tenants.plan_id attend l'UUID
- * Supabase (c'est ce que /profil et /statut résolvent ensuite via
- * resoudreIdD1DepuisPlanSupabase ci-dessus).
- *
- * AVANT CETTE CORRECTION : l'endpoint de confirmation écrivait
- * directement l'id D1 dans tenants.plan_id → cassait à nouveau la
- * résolution du plan pour un tenant fraîchement activé (le nom du plan
- * actif aurait été introuvable dans /profil et /statut, même après tous
- * les autres correctifs CYCLE-4).
- */
-export async function resoudreIdSupabaseDepuisPlanD1(
-  env: Env,
-  idD1: string | null | undefined
-): Promise<string | null> {
-  if (!idD1) return null
+export async function chargerPlanGratuit(env: Env): Promise<PlanSupabase | null> {
   try {
     const adminClient = createSupabaseAdminClient(env)
-    const { data } = await adminClient
+    const { data, error } = await adminClient
       .from('plans')
-      .select('id')
-      .eq('d1_plan_id', idD1)
+      .select('id, nom, prix_mensuel')
+      .eq('nom', 'Gratuit')
+      .eq('actif', true)
       .maybeSingle()
-    return data?.id ?? null
+    if (error) {
+      console.error('[Plans] Erreur chargement plan gratuit:', error.message)
+      return null
+    }
+    return data ?? null
   } catch {
     return null
   }
