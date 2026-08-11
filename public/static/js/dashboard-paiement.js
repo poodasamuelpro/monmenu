@@ -1,24 +1,11 @@
 /**
  * public/static/js/dashboard-paiement.js — Module UI paiement manuel (côté restaurant)
  *
- * CORRECTIONS CYCLE-4 :
- *   FIX-1 — Messages harmonisés : SLA admin annoncé = 48h (avant : "38h",
- *           incohérent avec la deadline technique réelle de 72h côté
- *           serveur). La fenêtre technique de coupure reste 72h, mais est
- *           désormais clairement présentée comme distincte du SLA.
- *   FIX-2 — Classes Tailwind dynamiques (`bg-${couleur}-50`, etc.)
- *           remplacées par un mapping explicite de classes complètes :
- *           Tailwind JIT ne détecte pas les classes construites par
- *           concaténation de variable → le bandeau "essai" n'avait aucun
- *           fond coloré en production.
- *   FIX-3 — Comparaison "Votre plan" corrigée : comparait
- *           s.plan_initial_id (UUID Supabase) à p.id (id D1) → ne
- *           matchait jamais. Utilise désormais s.plan_initial_id_d1
- *           (renvoyé par /api/v1/paiement/statut après correction
- *           serveur, voir src/routes/api-paiement.ts).
- *   FIX-4 — Si /statut échoue (401) mais que moyens/plans sont dispo, on
- *           affiche désormais un bandeau "reconnectez-vous" au lieu de ne
- *           rien afficher à la place de la carte de statut.
+ * MIGRATION PLANS — le serveur ne renvoie plus `plan_initial_id_d1`
+ * (supprimé, plus de résolution D1). La comparaison "Votre plan" utilise
+ * désormais uniquement `plan_initial_id`, qui est maintenant le MÊME
+ * UUID Supabase que `p.id` (les deux viennent de la même table `plans`
+ * Supabase) — la comparaison directe fonctionne enfin de façon fiable.
  *
  * Ce module gère :
  *   - Les bandeaux de notification paiement dans le header du dashboard
@@ -27,10 +14,10 @@
  *   - L'upload avec drag-and-drop et validation 4 couches côté client
  *
  * SÉCURITÉ CÔTÉ CLIENT :
- *   - Toutes les requêtes ajoutent X-Requested-With: XMLHttpRequest (SEC-05 CSRF)
- *   - Les tokens JWT ne sont jamais manipulés ici (gérés par le serveur via cookie httpOnly)
- *   - Validation extension + taille côté client (pré-filtre) ; la validation magic bytes
- *     reste côté serveur (SEC-02)
+ *   - Toutes les requêtes ajoutent X-Requested-With: XMLHttpRequest (CSRF)
+ *   - Les tokens JWT ne sont jamais manipulés ici (cookie httpOnly)
+ *   - Validation extension + taille côté client (pré-filtre) ; la validation
+ *     magic bytes reste côté serveur
  *
  * @module dashboard-paiement
  * @see src/routes/api-paiement.ts
@@ -43,7 +30,6 @@ const PLANS_API    = '/api/v1/plans';
 const MAX_TAILLE_FICHIER = 5 * 1024 * 1024; // 5 Mo
 const EXTENSIONS_VALIDES = ['.jpg', '.jpeg', '.png'];
 const MIME_VALIDES = ['image/jpeg', 'image/png'];
-// FIX-1 : SLA annoncé au client (48h) distinct de la fenêtre technique (72h)
 const SLA_ADMIN_H = 48;
 const FENETRE_TOLERANCE_H = 72;
 
@@ -67,7 +53,6 @@ function formatMontant(val) {
   return Number(val).toLocaleString('fr-FR') + ' FCFA';
 }
 
-/** Calcule le pourcentage de progression d'un délai entre deux dates */
 function progressionDelai(debut, fin) {
   const now = Date.now();
   const d = new Date(debut).getTime();
@@ -77,13 +62,12 @@ function progressionDelai(debut, fin) {
   return Math.round(((now - d) / (f - d)) * 100);
 }
 
-/** Retourne les heures restantes (peut être négatif si dépassé) */
 function heuresRestantes(isoFin) {
   return Math.ceil((new Date(isoFin).getTime() - Date.now()) / 3600000);
 }
 
 function apiCallPaiement(path, opts = {}) {
-  const fetchFn = window.fetchAvecSession || fetch; // fallback si auth-fetch.js absent
+  const fetchFn = window.fetchAvecSession || fetch;
   return fetchFn(PAIEMENT_API + path, {
     credentials: 'include',
     headers: {
@@ -169,12 +153,6 @@ async function initSectionAbonnement() {
   `;
 
   try {
-    // FIX-5 : /reference ajouté en parallèle. C'est CET appel qui génère
-    // (et persiste) la référence de paiement si elle n'existe pas encore —
-    // avant cette correction, seul le flux d'onboarding /bienvenue
-    // l'appelait. Un compte n'ayant jamais traversé /bienvenue n'avait
-    // donc JAMAIS de référence, et le bloc correspondant restait invisible
-    // sur /dashboard/abonnement indéfiniment.
     const [statutRes, historiqueRes, plansRes, moyensRes, referenceRes] = await Promise.all([
       apiCallPaiement('/statut'),
       apiCallPaiement('/historique'),
@@ -196,27 +174,17 @@ async function initSectionAbonnement() {
     const referenceData = referenceRes?.ok ? await referenceRes.json() : null;
 
     _plansCache = plansData?.plans ?? [];
-    // FIX-2 : cache des moyens de paiement, utilisé par construireFormUpload()
-    // pour peupler le select "Méthode de paiement" dynamiquement, au lieu
-    // d'une liste codée en dur potentiellement désynchronisée de la base.
     _moyensCache = moyensData?.moyens ?? [];
 
-    // Injecte la référence fraîchement générée/récupérée dans l'objet
-    // statut, pour que construireCarteStatut() l'affiche sans changement
-    // supplémentaire.
     if (statut && referenceData?.reference) {
       statut.reference_active = referenceData.reference;
     }
 
     container.innerHTML = '';
 
-    // ── Bloc 1 : Statut courant ──
     if (statut) {
       container.appendChild(construireCarteStatut(statut));
     } else if (statutRes.status === 401) {
-      // FIX-4 : le 401 est le cas le plus fréquent (session expirée) — on
-      // le distingue clairement d'une vraie absence de données, au lieu de
-      // simplement ne rien afficher pendant que moyens/plans s'affichent.
       const div = document.createElement('div');
       div.className = 'bg-orange-50 border border-orange-200 rounded-2xl p-5 mb-4 text-sm text-orange-700';
       div.innerHTML = `
@@ -226,7 +194,6 @@ async function initSectionAbonnement() {
       container.appendChild(div);
     }
 
-    // ── Bloc 2 : Moyens de paiement (affiché si données disponibles)
     const moyens = moyensData?.moyens ?? [];
     if (moyens.length > 0 || _plansCache.length > 0) {
       const blocMoyens = construireBlocMoyensPaiement(moyens);
@@ -237,12 +204,10 @@ async function initSectionAbonnement() {
       }
     }
 
-    // ── Bloc 3 : Historique ──
     if (historique?.abonnements?.length) {
       container.appendChild(construireHistorique(historique.abonnements));
     }
 
-    // Cas d'erreur réelle uniquement (pas de statut ET pas d'historique ET pas de plans)
     if (!statut && !historique?.abonnements?.length && !_plansCache.length && statutRes.status !== 401) {
       container.innerHTML = `
         <div class="text-center py-12 text-gray-400">
@@ -258,15 +223,9 @@ async function initSectionAbonnement() {
   }
 }
 
-// Cache des plans pour éviter de recharger
 let _plansCache = [];
-// FIX-2 : cache des moyens de paiement actifs, source unique pour le bloc
-// d'affichage ET pour le select "Méthode de paiement" du formulaire.
 let _moyensCache = [];
 
-// FIX-2 : mapping explicite de classes Tailwind complètes (les classes
-// construites par concaténation `bg-${couleur}-50` ne sont PAS détectées
-// par le compilateur JIT de Tailwind en production).
 const PALETTE_ESSAI = {
   orange: {
     bg: 'bg-orange-50 border-orange-200',
@@ -296,7 +255,6 @@ function construireCarteStatut(s) {
   let actionHtml = '';
   let upgradeHtml = '';
 
-  // ── État 'en_attente_paiement_initial' ──
   if (statutTenant === 'en_attente_paiement_initial') {
     const planNom = s.plan_initial_nom || '—';
     const planPrix = s.plan_initial_prix_mensuel;
@@ -391,7 +349,6 @@ function construireCarteStatut(s) {
     `;
   } else if (statutTenant === 'essai' && s.jours_essai_restants !== null) {
     const jours = s.jours_essai_restants;
-    // FIX-2 : palette figée (classes Tailwind complètes), plus de concaténation dynamique
     const p = jours <= 2 ? PALETTE_ESSAI.orange : PALETTE_ESSAI.blue;
     statutHtml = `
       <div class="${p.bg} rounded-2xl p-5">
@@ -423,7 +380,6 @@ function construireCarteStatut(s) {
     `;
   }
 
-  // ── Bloc référence de paiement ──
   let referenceHtml = '';
   if (s.reference_active) {
     referenceHtml = `
@@ -446,7 +402,6 @@ function construireCarteStatut(s) {
     `;
   }
 
-  // ── Liste des offres disponibles ──
   let offresHtml = '';
   if (_plansCache.length > 0) {
     const plansPayants = _plansCache.filter(p => p.actif && p.prix_mensuel > 0);
@@ -459,10 +414,10 @@ function construireCarteStatut(s) {
           </h3>
           <div class="space-y-2">
             ${plansPayants.map(p => {
-              // FIX-3 : comparaison contre l'id D1 résolu côté serveur
-              // (avant : s.plan_initial_id, un UUID Supabase, ne matchait
-              // jamais un id D1).
-              const isActuel = abonnement?.plan_id === p.id || s.plan_initial_id_d1 === p.id;
+              // MIGRATION — abonnement.plan_id et plan_initial_id sont
+              // désormais le MÊME format d'id (UUID Supabase) que p.id :
+              // comparaison directe fiable, plus de champ _d1 nécessaire.
+              const isActuel = abonnement?.plan_id === p.id || s.plan_initial_id === p.id;
               return `
                 <div class="border ${isActuel ? 'border-red-300 bg-red-50/40' : 'border-gray-100'} rounded-xl p-3 flex items-center justify-between">
                   <div>
@@ -484,7 +439,6 @@ function construireCarteStatut(s) {
     }
   }
 
-  // ── CTA : soumettre preuve (uniquement si pas déjà en attente) ──
   if (statutAbonnement !== 'en_attente_confirmation') {
     actionHtml = `
       <div class="bg-white border border-gray-200 rounded-2xl p-5" id="bloc-soumettre-preuve">
@@ -568,14 +522,6 @@ function construireBlocMoyensPaiement(moyens) {
 // ─── Formulaire d'upload preuve ───────────────────────────────────────────────
 
 function construireFormUpload() {
-  // FIX-2 : le select "Méthode de paiement" est désormais généré depuis
-  // _moyensCache (chargé depuis /api/v1/moyens-paiement, la même source que
-  // le bloc "Moyens de paiement acceptés" juste au-dessus). Avant, cette
-  // liste était codée en dur dans le JS (incluant "Mobile Money (MTN)",
-  // "Virement bancaire", "Espèces" — aucun de ces trois n'existant dans la
-  // table moyens_paiement réelle) et pouvait donc afficher des options que
-  // le restaurant ne pouvait en réalité pas utiliser. "Autre" reste ajouté
-  // manuellement en secours, pour les cas non couverts par la table.
   const optionsMethode = _moyensCache.length > 0
     ? _moyensCache.map(m => `<option value="${esc(m.nom)}">${esc(m.nom)}</option>`).join('')
     : `<option value="Orange Money">Orange Money</option><option value="Mobile Money (Moov)">Mobile Money (Moov)</option>`;
@@ -781,8 +727,6 @@ async function soumettrePreuvePaiement() {
     afficherErreurUpload('Sélectionnez la méthode de paiement.');
     return;
   }
-  // FIX-3 : numéro expéditeur obligatoire — validation légère côté client
-  // (la validation stricte reste côté serveur, cf. api-paiement.ts).
   const numeroNettoye = (numeroBrut || '').replace(/[^0-9+]/g, '');
   if (!numeroNettoye || numeroNettoye.replace(/\D/g, '').length < 8) {
     afficherErreurUpload('Indiquez le numéro utilisé pour effectuer le paiement (8 chiffres minimum).');
@@ -806,8 +750,6 @@ async function soumettrePreuvePaiement() {
     formData.append('preuve', _preuveFichier);
     formData.append('plan_id', planId);
     formData.append('methode_paiement', methode);
-    // FIX-3 : numéro utilisé pour le paiement — tarification/traçabilité,
-    // stocké côté serveur dans abonnements.numero_expediteur.
     formData.append('numero_expediteur', numeroNettoye);
 
     const res = await apiCallPaiement('/soumettre', {
