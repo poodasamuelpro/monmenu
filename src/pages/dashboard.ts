@@ -1,25 +1,7 @@
 // src/pages/dashboard.ts
-// v1.8.0 — FIX CYCLE-10 : /static/js/auth-fetch.js n'était JAMAIS chargé.
-//
-// BUG TROUVÉ : dashboard.js (dashFetch) et dashboard-paiement.js
-// (apiCallPaiement) utilisent tous deux `window.fetchAvecSession` s'il
-// existe, avec fallback silencieux sur fetch() brut sinon. Le fichier
-// /static/js/auth-fetch.js — qui DÉFINIT window.fetchAvecSession et gère
-// le rafraîchissement automatique du cookie httpOnly sb-access-token
-// (expire au bout de 1h) via POST /api/v1/auth/refresh — existe bien sur
-// le serveur mais n'était référencé par AUCUNE balise <script> ici.
-// Conséquence : window.fetchAvecSession était TOUJOURS undefined, donc
-// TOUTES les requêtes authentifiées du dashboard retombaient sur fetch()
-// standard, sans jamais rafraîchir la session — chaque section du
-// dashboard recommençait donc à afficher "Session expirée" après 1h
-// d'usage, quel que soit le nombre de corrections apportées par ailleurs
-// à dashboard.js.
-//
-// FIX : ajout de <script src="/static/js/auth-fetch.js"></script> AVANT
-// dashboard.js et dashboard-paiement.js (ordre requis, documenté dans
-// l'en-tête de auth-fetch.js lui-même).
-//
-// v1.7.0 (conservé) — bouton retour (#btn-retour) + cloche notifications (#btn-notif)
+// v1.9.0 — AJOUT : lien sidebar "Historique paiements" (page dédiée
+// /dashboard/historique-paiements, gérée par loadHistoriquePaiements()
+// dans dashboard.js). Tout le reste du fichier est inchangé.
 import { renderHead } from '../components/head'
 
 export function renderDashboardPage(
@@ -27,9 +9,6 @@ export function renderDashboardPage(
   supabaseUrl: string = '',
   supabaseAnonKey: string = ''
 ): string {
-  // Injecter SUPABASE_URL et SUPABASE_ANON_KEY (clé anon publique uniquement,
-  // jamais service_role) pour permettre au client d'utiliser Supabase Realtime.
-  // Les variables sont sérialisées en JSON pour éviter tout XSS via les valeurs.
   const supabaseConfig = supabaseUrl
     ? `<script>window.__SUPABASE_URL__=${JSON.stringify(supabaseUrl)};window.__SUPABASE_ANON_KEY__=${JSON.stringify(supabaseAnonKey)};</script>`
     : ''
@@ -84,6 +63,10 @@ export function renderDashboardPage(
           <i class="fa-solid fa-credit-card w-4 text-center"></i> Abonnement
           <span id="badge-abonnement" class="hidden ml-auto bg-orange-500 text-white text-xs px-1.5 py-0.5 rounded-full">!</span>
         </a>
+        <!-- AJOUT v1.9.0 — Historique paiements (page dédiée) -->
+        <a href="/dashboard/historique-paiements" class="nav-link flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-gray-300 hover:bg-gray-800 hover:text-white transition-colors">
+          <i class="fa-solid fa-clock-rotate-left w-4 text-center"></i> Historique paiements
+        </a>
       </nav>
       <div class="p-4 border-t border-gray-800">
         <button onclick="logout()"
@@ -102,7 +85,7 @@ export function renderDashboardPage(
             <i class="fa-solid fa-bars"></i>
           </button>
 
-          <!-- AJOUT v1.7.0 — Bouton Retour (masqué sur la section commandes = accueil) -->
+          <!-- Bouton Retour (masqué sur la section commandes = accueil) -->
           <button id="btn-retour" onclick="retourAccueil()"
             class="hidden items-center gap-1.5 text-sm text-gray-600 hover:text-gray-900 p-2 rounded-lg hover:bg-gray-100 transition-colors"
             aria-label="Retour aux commandes"
@@ -126,14 +109,13 @@ export function renderDashboardPage(
               Ma boutique
             </a>
 
-            <!-- AJOUT v1.7.0 — Cloche notifications -->
+            <!-- Cloche notifications -->
             <div class="relative">
               <button id="btn-notif"
                 onclick="toggleNotifPanel()"
                 class="relative p-2 rounded-lg hover:bg-gray-100 text-gray-600 hover:text-gray-900 transition-colors"
                 aria-label="Notifications">
                 <i class="fa-solid fa-bell text-sm"></i>
-                <!-- Badge compteur non lues -->
                 <span id="notif-badge"
                   class="hidden absolute -top-0.5 -right-0.5 min-w-[1.1rem] h-[1.1rem] bg-red-600 text-white text-[10px] font-bold rounded-full flex items-center justify-center px-0.5">
                   0
@@ -143,21 +125,18 @@ export function renderDashboardPage(
               <!-- Panneau notifications (géré par notifications.js) -->
               <div id="notif-panel"
                 class="hidden absolute right-0 top-full mt-2 w-80 bg-white border border-gray-200 rounded-2xl shadow-xl z-50 overflow-hidden">
-                <!-- Entête panneau -->
                 <div class="flex items-center justify-between px-4 py-3 border-b border-gray-100">
                   <span class="font-bold text-gray-900 text-sm">Notifications</span>
                   <button onclick="toutMarquerLu()" class="text-xs text-red-600 hover:underline font-medium">
                     Tout marquer comme lu
                   </button>
                 </div>
-                <!-- Liste notifications — remplie par notifications.js -->
                 <div id="notif-liste" class="divide-y divide-gray-50 max-h-80 overflow-y-auto">
                   <div class="text-center py-8 text-gray-400 text-sm">
                     <i class="fa-solid fa-bell-slash mb-2 block text-xl opacity-40"></i>
                     Aucune notification
                   </div>
                 </div>
-                <!-- Pied panneau — pagination -->
                 <div id="notif-footer" class="hidden px-4 py-2.5 border-t border-gray-100 flex items-center justify-between">
                   <button id="notif-prev" onclick="notifPagePrev()" class="text-xs text-gray-500 hover:text-gray-700 disabled:opacity-40" disabled>
                     <i class="fa-solid fa-chevron-left mr-0.5"></i> Précédent
@@ -173,7 +152,7 @@ export function renderDashboardPage(
         </div>
       </header>
 
-      <!-- Zone bandeau notifications paiement (audit 04 §B — chargée par dashboard-paiement.js) -->
+      <!-- Zone bandeau notifications paiement -->
       <div id="notification-bandeaux" class="bg-white"></div>
 
       <main class="p-4 lg:p-6" id="dashboard-content">
@@ -204,22 +183,13 @@ export function renderDashboardPage(
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <!-- §2 — Supabase JS client (clé anon uniquement) pour Realtime postgres_changes -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-  <!-- FIX CYCLE-10 — auth-fetch.js DOIT être chargé avant dashboard.js et
-       dashboard-paiement.js : il définit window.fetchAvecSession, utilisé
-       par dashFetch() et apiCallPaiement() pour rafraîchir automatiquement
-       le cookie de session (expire au bout de 1h). Sans cette balise,
-       window.fetchAvecSession restait undefined et TOUT le dashboard
-       retombait sur fetch() brut, sans jamais renouveler la session. -->
+  <!-- auth-fetch.js DOIT être chargé avant dashboard.js et dashboard-paiement.js -->
   <script src="/static/js/auth-fetch.js"></script>
   <script src="/static/js/dashboard.js"></script>
-  <!-- Module paiement : bandeau + section abonnement (audit 04-plan-implementation.md §B) -->
   <script src="/static/js/dashboard-paiement.js"></script>
-  <!-- AJOUT v1.7.0 — Module notifications : cloche, liste, pagination, son, marquer lu -->
   <script src="/static/js/notifications.js"></script>
   <script>
-    // Afficher nom du tenant dans la sidebar (fallback avant que initDashboard charge l'API)
     try {
       const tenant = JSON.parse(localStorage.getItem('monmenu_tenant') || '{}');
       if (tenant.nom) {
@@ -239,7 +209,6 @@ export function renderDashboardPage(
       overlay.classList.toggle('hidden');
     }
 
-    // §2 — logout() : appel serveur OBLIGATOIRE pour supprimer le cookie httpOnly.
     async function logout() {
       if (!confirm('Se déconnecter ?')) return;
       try {
@@ -253,7 +222,6 @@ export function renderDashboardPage(
       window.location.href = '/dashboard';
     }
 
-    // Fermer le panneau notifications si clic en dehors
     document.addEventListener('click', function(e) {
       const panel = document.getElementById('notif-panel');
       const btn = document.getElementById('btn-notif');
