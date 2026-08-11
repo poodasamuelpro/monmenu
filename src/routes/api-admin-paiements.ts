@@ -1,42 +1,16 @@
 /**
  * src/routes/api-admin-paiements.ts — Administration des paiements manuels
  *
- * CORRECTIONS CYCLE-5 :
- *   FIX-E — POST /confirmer écrivait `tenant.plan_id = abonnement.plan_id`
- *           directement. Or abonnement.plan_id est un id D1 (stocké tel
- *           quel par POST /api/v1/paiement/soumettre), alors que
- *           tenants.plan_id doit contenir l'UUID Supabase (c'est ce que
- *           /profil et /statut résolvent ensuite via
- *           resoudreIdD1DepuisPlanSupabase). Sans cette correction, un
- *           tenant fraîchement activé se retrouvait avec un plan_id
- *           invalide → son plan actif redevenait introuvable dans le
- *           dashboard (même bug que celui corrigé en CYCLE-4, mais réopéré
- *           ici depuis un angle différent). Résolu via la nouvelle fonction
- *           resoudreIdSupabaseDepuisPlanD1() (src/lib/plans.ts).
- *   FIX-F — Messages harmonisés avec SLA_ADMIN_HEURES (48h) /
- *           FENETRE_ACCES_HEURES (72h), au lieu de texte "72h" en dur.
- *
- * AJOUT FCM (2026-08-10) :
- *   Push notification au restaurant (app mobile MonMenu Manager) en
- *   complément du canal WhatsApp existant, sur confirmation et rejet de
- *   paiement. Best-effort, non-bloquant (waitUntil + .catch), ne peut pas
- *   faire échouer la réponse HTTP. Voir src/lib/fcm.ts.
- *   ⚠️ Nécessite que Env (src/types/database.ts) expose bien
- *   FCM_PROJECT_ID / FCM_CLIENT_EMAIL / FCM_PRIVATE_KEY — à ajouter
- *   séparément si ce n'est pas déjà fait, sinon le fichier ne compilera
- *   pas (c.env n'aura pas ces propriétés).
- *
- * NOTE IMPORTANTE (déjà correct AVANT cette correction, pas d'action requise) :
- *   Le rejet (POST /rejeter) passe déjà l'abonnement en statut 'annule'
- *   IMMÉDIATEMENT (pas d'attente du cron), ET redescend tenant.statut à
- *   'essai' ou 'inactif' immédiatement. Combiné à verifierAccesTenant()
- *   (src/lib/acces-tenant.ts) qui ne considère QUE les abonnements encore
- *   au statut 'en_attente_confirmation', un rejet coupe donc bien l'accès
- *   dès la requête suivante, sans attendre les 72h — c'est exactement le
- *   comportement demandé.
+ * MIGRATION PLANS — abonnement.plan_id EST désormais directement l'UUID
+ * Supabase natif (stocké tel quel par POST /api/v1/paiement/soumettre).
+ * Plus de résolution D1 → Supabase à la confirmation : tenant.plan_id
+ * reçoit directement abonnement.plan_id, sans passer par
+ * resoudreIdSupabaseDepuisPlanD1(). Ce changement supprime définitivement
+ * le mode d'échec historique de ce fichier (CYCLE-5 FIX-E) : il ne peut
+ * plus y avoir de "correspondance manquante" puisqu'il n'y a plus qu'un
+ * seul id à transporter.
  *
  * Ce router est monté dans src/index.ts sous /api/v1/admin/paiements.
- * Il expose les endpoints de gestion des paiements côté admin :
  *
  *   GET  /api/v1/admin/paiements              — Liste des paiements en attente
  *   POST /api/v1/admin/paiements/confirmer    — Confirmer un paiement (active le tenant)
@@ -47,11 +21,11 @@
  *   PATCH /api/v1/admin/paiements/moyens/:id  — Mettre à jour un moyen de paiement
  *
  * SÉCURITÉ :
- *   - Authentification : header X-Admin-Secret (JAMAIS en query string — BUG-012)
- *   - SEC-06 : URL R2 signée, jamais d'URL publique directe
- *   - SEC-04 : audit trail (confirme_par, confirme_le, rejete_par, rejete_le)
+ *   - Authentification : header X-Admin-Secret (jamais en query string)
+ *   - URL R2 signée, jamais d'URL publique directe
+ *   - Audit trail (confirme_par, confirme_le, rejete_par, rejete_le)
  *   - Quand un paiement est confirmé :
- *       tenant.plan_id      ← UUID Supabase résolu depuis l'id D1 de l'abonnement
+ *       tenant.plan_id      ← UUID Supabase de abonnement.plan_id (identique)
  *       tenant.statut       ← 'actif'
  *       tenant.essai_expire_le ← null
  *
@@ -63,7 +37,7 @@ import type { Env } from '../types/database'
 import { createSupabaseAdminClient } from '../lib/supabase'
 import { setSecurityHeaders } from '../lib/security'
 import { formaterDate, SLA_ADMIN_HEURES, FENETRE_ACCES_HEURES } from '../lib/paiement'
-import { resoudreIdSupabaseDepuisPlanD1 } from '../lib/plans'
+import { chargerPlan } from '../lib/plans'
 import { notifierPaiementConfirme, notifierPaiementRejete } from '../lib/whatsapp'
 import { sendFcmToTenant } from '../lib/fcm'
 
@@ -112,20 +86,14 @@ adminPaiementsRouter.get('/', async (c) => {
     return c.json({ error: 'Erreur lors de la récupération.' }, 500)
   }
 
-  // Enrichir avec le nom du plan depuis D1 (abonnements.plan_id est déjà
-  // un id D1 — pas de résolution UUID nécessaire ici, contrairement à
-  // tenants.plan_id/plan_initial_id).
+  // MIGRATION — enrichissement du nom de plan via Supabase (chargerPlan),
+  // plus de requête D1.
   const enrichis = await Promise.all(
     (abonnements ?? []).map(async (ab: any) => {
       let plan_nom = null
       if (ab.plan_id) {
-        try {
-          const plan = await c.env.DB
-            .prepare('SELECT nom, prix_mensuel, devise FROM plans WHERE id = ? LIMIT 1')
-            .bind(ab.plan_id)
-            .first<{ nom: string; prix_mensuel: number; devise: string }>()
-          plan_nom = plan?.nom ?? null
-        } catch {}
+        const plan = await chargerPlan(c.env, ab.plan_id)
+        plan_nom = plan?.nom ?? null
       }
       const heuresRestantes = ab.delai_confirmation_expire_le
         ? Math.ceil((new Date(ab.delai_confirmation_expire_le).getTime() - Date.now()) / 3600000)
@@ -172,7 +140,7 @@ adminPaiementsRouter.post('/confirmer', async (c) => {
     return c.json({ error: 'Abonnement introuvable ou déjà traité.' }, 404)
   }
 
-  // 1. Confirmer l'abonnement (SEC-04 : audit trail)
+  // 1. Confirmer l'abonnement (audit trail)
   const { error: abError } = await adminClient
     .from('abonnements')
     .update({
@@ -182,47 +150,36 @@ adminPaiementsRouter.post('/confirmer', async (c) => {
       updated_at: now
     })
     .eq('id', abonnement_id)
-    .eq('statut', 'en_attente_confirmation') // Guard idempotence
+    .eq('statut', 'en_attente_confirmation')
 
   if (abError) {
     console.error('[admin-paiements/confirmer] Erreur update abonnement:', abError.message)
     return c.json({ error: 'Erreur lors de la confirmation.' }, 500)
   }
 
-  // 2. Récupérer le plan D1 pour calculer date_fin + nom (affichage notif)
+  // 2. Récupérer le plan Supabase pour calculer date_fin + nom (notif)
   let dateFin: string | null = null
   let planNom: string | null = null
-  try {
-    const plan = await c.env.DB
-      .prepare('SELECT id, nom FROM plans WHERE id = ? LIMIT 1')
-      .bind(abonnement.plan_id)
-      .first<{ id: string; nom: string }>()
+  const planRow = await chargerPlan(c.env, abonnement.plan_id)
+  if (planRow) {
+    planNom = planRow.nom
+    const fin = new Date()
+    fin.setMonth(fin.getMonth() + 1)
+    dateFin = fin.toISOString()
 
-    if (plan) {
-      planNom = plan.nom
-      const fin = new Date()
-      fin.setMonth(fin.getMonth() + 1)
-      dateFin = fin.toISOString()
+    await adminClient
+      .from('abonnements')
+      .update({ date_fin: dateFin, updated_at: now })
+      .eq('id', abonnement_id)
+  }
 
-      await adminClient
-        .from('abonnements')
-        .update({ date_fin: dateFin, updated_at: now })
-        .eq('id', abonnement_id)
-    }
-  } catch {}
-
-  // FIX-E — CYCLE-5 : résoudre l'UUID Supabase correspondant à l'id D1
-  // stocké dans abonnement.plan_id, AVANT de l'écrire dans tenants.plan_id.
-  // Sans cette résolution, tenants.plan_id contenait un id D1 (ex:
-  // "plan_faso") au lieu de l'UUID Supabase attendu par /profil et
-  // /statut → le plan actif redevenait "introuvable" juste après activation.
-  const planIdSupabase = await resoudreIdSupabaseDepuisPlanD1(c.env, abonnement.plan_id)
-
-  // 3. Mettre à jour le tenant
+  // MIGRATION — abonnement.plan_id EST déjà l'UUID Supabase natif : plus
+  // de résolution nécessaire, écriture directe. C'est ce qui élimine
+  // définitivement l'ancien mode d'échec "aucune correspondance trouvée".
   const { data: tenant, error: tenantError } = await adminClient
     .from('tenants')
     .update({
-      plan_id: planIdSupabase, // UUID Supabase (ou null si résolution impossible — voir avertissement ci-dessous)
+      plan_id: abonnement.plan_id,
       statut: 'actif',
       essai_expire_le: null,
       paiement_en_attente_depuis: null,
@@ -240,14 +197,6 @@ adminPaiementsRouter.post('/confirmer', async (c) => {
     }, 500)
   }
 
-  // Avertissement explicite si la résolution UUID a échoué (plan D1 sans
-  // correspondance dans la table Supabase `plans` — configuration
-  // incohérente entre D1 et Supabase à corriger côté admin des plans).
-  const avertissementPlan = (!planIdSupabase && abonnement.plan_id)
-    ? `Attention : aucune correspondance Supabase trouvée pour le plan D1 "${abonnement.plan_id}" (colonne plans.d1_plan_id à vérifier). tenant.plan_id a été laissé vide.`
-    : null
-  if (avertissementPlan) console.warn(`[admin-paiements/confirmer] ${avertissementPlan}`)
-
   // 4. Invalider cache KV
   if (c.env.KV_CACHE && tenant?.slug) {
     try { await c.env.KV_CACHE.delete(`tenant:${tenant.slug}`) } catch {}
@@ -264,10 +213,7 @@ adminPaiementsRouter.post('/confirmer', async (c) => {
     })
   }
 
-  // AJOUT FCM — Push au restaurant (app mobile), en complément du WhatsApp
-  // + de la notif in-app ci-dessous. Best-effort, ne bloque jamais la
-  // réponse HTTP. Utilise c.executionCtx.waitUntil pour laisser l'envoi se
-  // terminer après la réponse (même pattern que api-commandes.ts).
+  // Push FCM à l'app mobile (best-effort, non-bloquant)
   c.executionCtx.waitUntil(
     sendFcmToTenant(c.env, adminClient, abonnement.tenant_id, {
       title: '✅ Paiement confirmé !',
@@ -297,8 +243,7 @@ adminPaiementsRouter.post('/confirmer', async (c) => {
     message: `Paiement confirmé. Tenant ${tenant?.nom} activé sur le plan.`,
     abonnement_id,
     tenant_id: abonnement.tenant_id,
-    statut_tenant: 'actif',
-    ...(avertissementPlan ? { avertissement: avertissementPlan } : {})
+    statut_tenant: 'actif'
   })
 })
 
@@ -329,11 +274,6 @@ adminPaiementsRouter.post('/rejeter', async (c) => {
     return c.json({ error: 'Abonnement introuvable ou déjà traité.' }, 404)
   }
 
-  // 1. Rejeter l'abonnement (SEC-04 : audit trail).
-  // IMPORTANT : ce changement de statut (≠ 'en_attente_confirmation') est
-  // ce qui coupe IMMÉDIATEMENT l'accès à la requête suivante, via
-  // verifierAccesTenant() (src/lib/acces-tenant.ts) qui ne considère plus
-  // cette ligne comme une fenêtre de grâce valide.
   const { error: abError } = await adminClient
     .from('abonnements')
     .update({
@@ -351,7 +291,6 @@ adminPaiementsRouter.post('/rejeter', async (c) => {
     return c.json({ error: 'Erreur lors du rejet.' }, 500)
   }
 
-  // 2. Remettre le tenant en statut 'essai' (si était en essai) ou 'inactif'
   const { data: tenant } = await adminClient
     .from('tenants')
     .select('id, slug, nom, whatsapp_number, statut, essai_expire_le')
@@ -363,9 +302,6 @@ adminPaiementsRouter.post('/rejeter', async (c) => {
       ? new Date(tenant.essai_expire_le).getTime() > Date.now()
       : false
 
-    // Un tenant déjà 'actif' (rejet d'une demande d'upgrade/downgrade, pas
-    // d'un premier paiement) ne doit JAMAIS être redescendu — seul un
-    // tenant en 'essai'/'en_attente_paiement_initial' peut être redescendu.
     const nouveauStatut =
       tenant.statut === 'actif' ? 'actif' :
       essaiEncore ? 'essai' : 'inactif'
@@ -394,11 +330,6 @@ adminPaiementsRouter.post('/rejeter', async (c) => {
       })
     }
 
-    // AJOUT FCM — Push au restaurant, en complément du WhatsApp + notif
-    // in-app ci-dessous. Placé hors du bloc `if (tenant.whatsapp_number)`
-    // ci-dessus à dessein : le push ne dépend pas d'avoir un numéro
-    // WhatsApp renseigné, seulement d'avoir un token FCM enregistré
-    // (table fcm_tokens). Best-effort, ne bloque jamais la réponse HTTP.
     c.executionCtx.waitUntil(
       sendFcmToTenant(c.env, adminClient, abonnement.tenant_id, {
         title: '❌ Preuve de paiement rejetée',
@@ -459,7 +390,7 @@ adminPaiementsRouter.get('/preuve/:id', async (c) => {
   try {
     const signedUrl = await c.env.R2_MEDIA.createSignedUrl(
       abonnement.preuve_paiement_url,
-      900 // 15 minutes
+      900
     )
     return c.json({
       url: signedUrl,
