@@ -1,45 +1,31 @@
-// MonMenu — Dashboard restaurant (v1.9.0 — FIX savePdv() tronqué + auth-fetch.js branché)
+// MonMenu — Dashboard restaurant (v2.0.0 — AJOUT édition livreur, suppléments, historique paiements)
 //
-// CORRECTIONS CYCLE-10 :
-//   FIX-1 — savePdv() était TRONQUÉE en plein milieu (coupait sur "...lon"
-//           avant "longitude"), rendant TOUT le fichier JS non-parsable.
-//           Fonction complétée : construit désormais le payload attendu
-//           par PATCH /api/v1/dashboard/pdv (nom, adresse, latitude,
-//           longitude, tarif_livraison_base, tarif_par_km, horaires via
-//           collecterPdvHoraires()), avec feedback utilisateur et gestion
-//           d'erreur, puis recharge la section via loadPdv().
-//   FIX-2 — /static/js/auth-fetch.js doit être chargé AVANT ce fichier
-//           dans src/pages/dashboard.ts (corrigé séparément) pour que
-//           dashFetch() bénéficie réellement du rafraîchissement
-//           automatique de session (window.fetchAvecSession) — sans ce
-//           tag <script>, dashFetch() retombait silencieusement sur
-//           fetch() brut, sans jamais refresh la session.
+// AJOUTS v2.0.0 :
+//   1. Édition livreur — bouton "Modifier" sur chaque carte livreur,
+//      utilise la route PATCH /api/v1/dashboard/livreurs/:id déjà
+//      existante côté serveur (accepte nom/whatsapp_number/actif).
+//   2. Gestion des suppléments par produit — bouton "Suppléments" sur
+//      chaque produit du menu, CRUD complet via
+//      /api/v1/dashboard/produits/:id/supplements et
+//      /api/v1/dashboard/supplements/:id.
+//   3. Section "Historique paiements" — nouvelle page dédiée
+//      /dashboard/historique-paiements, réutilise construireHistorique()
+//      de dashboard-paiement.js sur la liste complète (au lieu du
+//      sous-ensemble affiché dans la page Abonnement).
 //
-// CORRECTIONS CYCLE-9 (conservées) :
-//   FIX-1 — Fichier complet et vérifié syntaxiquement.
-//   FIX-2 — Toutes les requêtes authentifiées passent par dashFetch().
-//
-// CHANGELOG v1.7.0 (conservé) :
-//   1. FIX Navigation — parsing du dernier segment d'URL + popstate.
-//   2. Bouton Retour (#btn-retour).
-//   3. showModal()/closeModal() complètes.
-//   4. escHtml()/escJs().
-//   5. Cloche notifications (#btn-notif) + badge.
-//   6. initDashboard() charge le profil réel au démarrage.
-//
+// Tout le reste du fichier est inchangé — aucune régression sur les
+// fonctionnalités existantes (commandes, menu, statistiques, QR code,
+// apparence, paramètres, codes promo, PDV, abonnement).
 'use strict';
 
 let currentSection = 'commandes';
 let currentFilter = null;
-// authToken conservé pour compatibilité interne mais toujours null (cookie httpOnly utilisé)
 let authToken = null;
 let tenantData = null;
 let commandesInterval = null;
 
-// §WhatsApp — Registre des commandes actuellement affichées
 let _commandeRegistry = {};
 
-// §2 — Supabase Realtime
 let _supabaseClient = null;
 let _realtimeChannel = null;
 let _realtimeFallbackInterval = null;
@@ -51,13 +37,8 @@ const JOURS_LABELS = {
 };
 
 // ==============================
-// FIX-2 : WRAPPER FETCH AVEC SESSION AUTO-RAFRAÎCHIE
+// WRAPPER FETCH AVEC SESSION AUTO-RAFRAÎCHIE
 // ==============================
-// Utilise window.fetchAvecSession (auth-fetch.js) si présent — sinon
-// retombe silencieusement sur fetch() standard. Toutes les routes
-// /api/v1/dashboard/* protégées passent par ici désormais.
-// IMPORTANT : /static/js/auth-fetch.js DOIT être chargé AVANT ce fichier
-// dans src/pages/dashboard.ts pour que le refresh automatique fonctionne.
 function dashFetch(url, opts = {}) {
   const fetchFn = window.fetchAvecSession || fetch;
   return fetchFn(url, { credentials: 'include', ...opts });
@@ -130,7 +111,7 @@ function _modalEscHandler(e) {
 // ==============================
 // GESTION DU BOUTON RETOUR
 // ==============================
-const SECTIONS_AVEC_RETOUR = ['menu','statistiques','livreurs','qrcode','apparence','parametres','codes-promo','pdv','abonnement'];
+const SECTIONS_AVEC_RETOUR = ['menu','statistiques','livreurs','qrcode','apparence','parametres','codes-promo','pdv','abonnement','historique-paiements'];
 
 function _updateBtnRetour(section) {
   const btn = document.getElementById('btn-retour');
@@ -253,7 +234,6 @@ function teardownRealtime() {
 async function initDashboard() {
   authToken = null;
 
-  // FIX-2 : dashFetch() au lieu de fetch() brut
   try {
     const res = await dashFetch('/api/v1/dashboard/profil');
     if (res.ok) {
@@ -285,7 +265,6 @@ async function initDashboard() {
     if (nameEl && tenantData) nameEl.textContent = tenantData.nom || 'Mon Restaurant';
   }
 
-  // Déterminer la section à partir du chemin URL
   const path = window.location.pathname;
   let section = 'commandes';
   if (path.includes('/menu')) section = 'menu';
@@ -296,12 +275,9 @@ async function initDashboard() {
   else if (path.includes('/pdv')) section = 'pdv';
   else if (path.includes('/apparence')) section = 'apparence';
   else if (path.includes('/abonnement')) section = 'abonnement';
+  else if (path.includes('/historique-paiements')) section = 'historique-paiements';
   else if (path.includes('/parametres')) section = 'parametres';
 
-  // FIX-1 (cycle-9) : navigateTo() est désormais TOUJOURS appelée, et les
-  // handlers de clic TOUJOURS attachés, même si le bloc ci-dessus a échoué
-  // — le tout enveloppé pour ne jamais laisser une exception couper le
-  // reste de l'initialisation.
   try {
     navigateTo(section);
   } catch (err) {
@@ -335,6 +311,7 @@ async function initDashboard() {
     else if (path.includes('/pdv')) sec = 'pdv';
     else if (path.includes('/apparence')) sec = 'apparence';
     else if (path.includes('/abonnement')) sec = 'abonnement';
+    else if (path.includes('/historique-paiements')) sec = 'historique-paiements';
     else if (path.includes('/parametres')) sec = 'parametres';
     navigateTo(sec);
   });
@@ -375,7 +352,8 @@ function navigateTo(section) {
     parametres: 'Paramètres',
     'codes-promo': 'Codes promo',
     pdv: 'Mon restaurant',
-    abonnement: 'Abonnement'
+    abonnement: 'Abonnement',
+    'historique-paiements': 'Historique paiements'
   };
   if (title) title.textContent = titles[section] || section;
 
@@ -392,6 +370,7 @@ function navigateTo(section) {
     case 'codes-promo':  loadCodesPromo();   break;
     case 'pdv':          loadPdv();          break;
     case 'abonnement':   loadAbonnement();   break;
+    case 'historique-paiements': loadHistoriquePaiements(); break;
     default:             loadCommandes();    break;
   }
 }
@@ -423,6 +402,64 @@ function loadAbonnement() {
       <div class="bg-red-50 border border-red-100 rounded-xl p-4 text-center text-sm text-red-600">
         <i class="fa-solid fa-circle-exclamation mr-1"></i>
         Module de paiement indisponible (dashboard-paiement.js non chargé).
+      </div>`;
+  }
+}
+
+// ==============================
+// AJOUT — SECTION HISTORIQUE PAIEMENTS (page dédiée)
+// ==============================
+// Réutilise construireHistorique() de dashboard-paiement.js sur la liste
+// complète de l'historique (au lieu du sous-ensemble affiché dans la page
+// Abonnement). Route déjà existante côté serveur : GET /api/v1/paiement/historique.
+async function loadHistoriquePaiements() {
+  const content = document.getElementById('dashboard-content');
+  if (!content) return;
+
+  content.innerHTML = `
+    <div id="historique-paiements-content" class="max-w-2xl">
+      <div class="text-center py-16 text-gray-400">
+        <i class="fa-solid fa-circle-notch fa-spin text-3xl mb-3 block"></i>
+        <p class="text-sm">Chargement de l'historique...</p>
+      </div>
+    </div>`;
+
+  const wrap = document.getElementById('historique-paiements-content');
+
+  try {
+    const fetchFn = window.fetchAvecSession || fetch;
+    const res = await fetchFn('/api/v1/paiement/historique?limit=50', {
+      credentials: 'include',
+      headers: { 'X-Requested-With': 'XMLHttpRequest' }
+    });
+
+    if (res.status === 401) { showAuthError(); return; }
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+
+    const data = await res.json();
+    wrap.innerHTML = '';
+
+    if (data.abonnements?.length && typeof construireHistorique === 'function') {
+      wrap.appendChild(construireHistorique(data.abonnements));
+      if (data.total > data.abonnements.length) {
+        const note = document.createElement('p');
+        note.className = 'text-xs text-gray-400 mt-3 text-center';
+        note.textContent = `${data.abonnements.length} sur ${data.total} paiement(s) affiché(s).`;
+        wrap.appendChild(note);
+      }
+    } else {
+      wrap.innerHTML = `
+        <div class="text-center py-16 text-gray-400">
+          <i class="fa-solid fa-receipt text-4xl mb-3 block opacity-40"></i>
+          <p class="text-sm font-medium text-gray-600 mb-1">Aucun paiement pour le moment.</p>
+          <p class="text-xs">Votre historique de paiements apparaîtra ici.</p>
+        </div>`;
+    }
+  } catch (err) {
+    wrap.innerHTML = `
+      <div class="bg-red-50 border border-red-100 rounded-xl p-4 text-center text-sm text-red-600">
+        <i class="fa-solid fa-circle-exclamation mr-1"></i> Erreur de chargement.
+        <button onclick="loadHistoriquePaiements()" class="underline ml-1">Réessayer</button>
       </div>`;
   }
 }
@@ -546,6 +583,13 @@ function renderCommandes(commandes, container, total) {
     if (cmd.statut === 'en_livraison') {
       actions.push(`<button onclick="changerStatut('${cmd.id}','livree')" class="bg-green-600 text-white text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-green-700"><i class="fa-solid fa-check-double mr-1"></i>Livrée</button>`);
     }
+    // AJOUT — affichage des suppléments choisis sous chaque ligne d'article
+    const itemsHtml = items.map(i => {
+      const supp = (i.supplements && i.supplements.length)
+        ? ` <span class="text-gray-400">(+ ${i.supplements.map(s => escHtml(s.nom)).join(', ')})</span>`
+        : '';
+      return `<span>${escHtml(i.nom)}${supp} ×${i.quantite}</span>`;
+    }).join(' · ');
     return `<div class="bg-white border border-gray-100 rounded-xl p-4 hover:shadow-sm transition-shadow mb-3">
       <div class="flex items-start justify-between gap-3 mb-2">
         <div>
@@ -560,7 +604,7 @@ function renderCommandes(commandes, container, total) {
         </div>
         <span class="statut-badge ${statut.cls} flex-shrink-0"><i class="fa-solid ${statut.icon} text-xs"></i> ${statut.label}</span>
       </div>
-      <div class="text-xs text-gray-600 bg-gray-50 rounded-lg px-3 py-2 mb-3">${items.map(i => `<span>${escHtml(i.nom)} ×${i.quantite}</span>`).join(' · ')}</div>
+      <div class="text-xs text-gray-600 bg-gray-50 rounded-lg px-3 py-2 mb-3">${itemsHtml}</div>
       ${cmd.client_adresse ? `<div class="text-xs text-gray-500 mb-2"><i class="fa-solid fa-location-dot mr-1 text-gray-300"></i>${escHtml(cmd.client_adresse)}</div>` : ''}
       ${cmd.notes ? `<div class="text-xs text-orange-600 bg-orange-50 rounded-lg px-3 py-1.5 mb-2"><i class="fa-solid fa-comment mr-1"></i>${escHtml(cmd.notes)}</div>` : ''}
       <div class="flex items-center justify-between flex-wrap gap-2">
@@ -584,7 +628,10 @@ function formatWhatsAppNumber(numeroRaw) {
 
 function construireMessageConfirmationClient(cmd) {
   const items = typeof cmd.items_json === 'string' ? JSON.parse(cmd.items_json) : (cmd.items_json || []);
-  const lignes = items.map(i => `  - ${i.nom} x${i.quantite}`).join('\n');
+  const lignes = items.map(i => {
+    const supp = (i.supplements && i.supplements.length) ? ` (+ ${i.supplements.map(s => s.nom).join(', ')})` : '';
+    return `  - ${i.nom}${supp} x${i.quantite}`;
+  }).join('\n');
   const nomRestaurant = (tenantData && tenantData.nom) ? tenantData.nom : 'notre restaurant';
   const lienSuivi = window.location.origin + '/suivi/' + cmd.token_suivi;
 
@@ -808,6 +855,9 @@ function renderMenuEditor(categories, container) {
               <div class="flex items-center gap-2 flex-shrink-0">
                 <span class="text-xs px-2 py-0.5 rounded-full cursor-pointer ${p.disponible ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}"
                   onclick="toggleDisponible('${p.id}',${p.disponible?1:0})" title="${p.disponible?'Désactiver':'Activer'}">${p.disponible?'Dispo':'Indispo'}</span>
+                <button onclick="showSupplementsModal('${p.id}','${escJs(p.nom)}')" class="p-1.5 text-gray-400 hover:text-purple-600" title="Suppléments">
+                  <i class="fa-solid fa-layer-group text-xs"></i>
+                </button>
                 <button onclick="showEditProduitModal('${p.id}','${escJs(p.nom)}','${escJs(p.description||'')}',${p.prix},'${escJs(p.photo_url||'')}')" class="p-1.5 text-gray-400 hover:text-blue-600" title="Modifier">
                   <i class="fa-solid fa-pen text-xs"></i>
                 </button>
@@ -1019,6 +1069,104 @@ async function toggleDisponible(prodId, currentDisponible) {
 }
 
 // ==============================
+// AJOUT — SUPPLÉMENTS D'UN PRODUIT
+// ==============================
+async function showSupplementsModal(produitId, produitNom) {
+  showModal('Suppléments — ' + produitNom, `
+    <div id="supplements-list-${produitId}" class="space-y-2 mb-4">
+      <div class="text-center py-4 text-gray-400"><i class="fa-solid fa-circle-notch fa-spin"></i></div>
+    </div>
+    <form onsubmit="submitAddSupplement(event,'${produitId}')" class="space-y-2">
+      <div class="flex gap-2">
+        <input id="sup-nom-${produitId}" type="text" required maxlength="100" placeholder="Ex: Fromage"
+          class="flex-1 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-200">
+        <input id="sup-prix-${produitId}" type="number" required min="0" max="999999" step="50" placeholder="Prix"
+          class="w-24 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-200">
+      </div>
+      <button type="submit" class="w-full bg-red-600 text-white text-sm font-semibold py-2.5 rounded-xl hover:bg-red-700">
+        <i class="fa-solid fa-plus mr-1.5"></i>Ajouter ce supplément
+      </button>
+    </form>
+    <p class="text-xs text-gray-400 mt-3">
+      Les suppléments actifs seront proposés au client lorsqu'il ajoute ce produit à son panier sur la boutique.
+    </p>
+  `);
+  await chargerSupplements(produitId);
+}
+
+async function chargerSupplements(produitId) {
+  const list = document.getElementById('supplements-list-' + produitId);
+  if (!list) return;
+  try {
+    const res = await dashFetch('/api/v1/dashboard/produits/' + produitId + '/supplements');
+    if (!res.ok) throw new Error();
+    const data = await res.json();
+    if (!data.supplements.length) {
+      list.innerHTML = '<p class="text-xs text-gray-400 italic py-2">Aucun supplément pour ce produit.</p>';
+      return;
+    }
+    list.innerHTML = data.supplements.map(s => `
+      <div class="flex items-center gap-2 bg-gray-50 rounded-lg px-3 py-2">
+        <span class="flex-1 text-sm font-medium text-gray-800 truncate">${escHtml(s.nom)}</span>
+        <span class="text-xs text-gray-500 flex-shrink-0">${(s.prix||0).toLocaleString('fr-FR')} FCFA</span>
+        <button onclick="toggleSupplementActif('${s.id}',${s.actif?1:0},'${produitId}')"
+          class="text-xs px-2 py-0.5 rounded-full flex-shrink-0 ${s.actif?'bg-green-100 text-green-700':'bg-gray-200 text-gray-500'}"
+          title="${s.actif?'Désactiver':'Activer'}">${s.actif?'Actif':'Inactif'}</button>
+        <button onclick="supprimerSupplement('${s.id}','${produitId}')" class="text-gray-400 hover:text-red-500 flex-shrink-0" title="Supprimer">
+          <i class="fa-solid fa-trash text-xs"></i>
+        </button>
+      </div>`).join('');
+  } catch {
+    list.innerHTML = '<p class="text-xs text-red-500 py-2">Erreur de chargement.</p>';
+  }
+}
+
+async function submitAddSupplement(e, produitId) {
+  e.preventDefault();
+  const nomInput = document.getElementById('sup-nom-' + produitId);
+  const prixInput = document.getElementById('sup-prix-' + produitId);
+  const nom = nomInput.value.trim();
+  const prix = parseFloat(prixInput.value);
+  if (!nom || isNaN(prix)) { alert('Nom et prix requis.'); return; }
+  try {
+    const res = await dashFetch('/api/v1/dashboard/produits/' + produitId + '/supplements', {
+      method: 'POST', headers: {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'},
+      body: JSON.stringify({ nom, prix })
+    });
+    if (res.ok) {
+      nomInput.value = '';
+      prixInput.value = '';
+      chargerSupplements(produitId);
+    } else {
+      const d = await res.json();
+      alert(d.error || 'Erreur lors de la création du supplément.');
+    }
+  } catch { alert('Erreur réseau.'); }
+}
+
+async function toggleSupplementActif(supId, actuellementActif, produitId) {
+  try {
+    const res = await dashFetch('/api/v1/dashboard/supplements/' + supId, {
+      method: 'PATCH', headers: {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'},
+      body: JSON.stringify({ actif: !actuellementActif })
+    });
+    if (!res.ok) { const d = await res.json().catch(()=>({})); alert(d.error || 'Erreur.'); return; }
+    chargerSupplements(produitId);
+  } catch { alert('Erreur réseau.'); }
+}
+
+async function supprimerSupplement(supId, produitId) {
+  if (!confirm('Supprimer ce supplément ?')) return;
+  try {
+    const res = await dashFetch('/api/v1/dashboard/supplements/' + supId, {
+      method: 'DELETE', headers: {'X-Requested-With':'XMLHttpRequest'}
+    });
+    if (res.ok) chargerSupplements(produitId);
+    else { const d = await res.json().catch(()=>({})); alert(d.error || 'Erreur lors de la suppression.'); }
+  } catch { alert('Erreur réseau.'); }
+}
+
+// ==============================
 // SECTION STATISTIQUES
 // ==============================
 async function loadStatistiques() {
@@ -1184,6 +1332,9 @@ function renderLivreurs(livreurs, container) {
         <button onclick="toggleLivreurActif('${l.id}',${l.actif?1:0})" class="p-1.5 text-gray-400 hover:text-blue-600" title="${l.actif?'Désactiver':'Activer'}">
           <i class="fa-solid ${l.actif ? 'fa-toggle-on text-green-500' : 'fa-toggle-off'} text-lg"></i>
         </button>
+        <button onclick="showEditLivreurModal('${l.id}','${escJs(l.nom)}','${escJs(l.whatsapp_number||'')}')" class="p-1.5 text-gray-400 hover:text-blue-600" title="Modifier">
+          <i class="fa-solid fa-pen text-xs"></i>
+        </button>
         <button onclick="supprimerLivreur('${l.id}')" class="p-1.5 text-gray-400 hover:text-red-500" title="Supprimer">
           <i class="fa-solid fa-trash text-sm"></i>
         </button>
@@ -1216,6 +1367,39 @@ async function submitAddLivreur(e) {
     else { const d = await res.json(); alert(d.error||'Erreur'); }
   } catch { alert('Erreur réseau.'); }
 }
+
+// AJOUT — Édition d'un livreur existant (nom + WhatsApp). Utilise la
+// route PATCH /api/v1/dashboard/livreurs/:id, déjà prête côté serveur à
+// accepter ces deux champs indépendamment.
+function showEditLivreurModal(livId, nom, whatsapp) {
+  showModal('Modifier le livreur', `
+    <form onsubmit="submitEditLivreur(event,'${livId}')" class="space-y-4">
+      <div>
+        <label class="block text-sm font-semibold text-gray-700 mb-1.5">Nom complet *</label>
+        <input id="edit-liv-nom" type="text" required maxlength="100" value="${escHtml(nom)}" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200">
+      </div>
+      <div>
+        <label class="block text-sm font-semibold text-gray-700 mb-1.5">WhatsApp *</label>
+        <input id="edit-liv-tel" type="tel" required value="${escHtml(whatsapp)}" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200" placeholder="+226 70 00 00 00">
+      </div>
+      <button type="submit" class="w-full bg-blue-600 text-white font-bold py-3 rounded-xl hover:bg-blue-700">Enregistrer</button>
+    </form>`);
+}
+async function submitEditLivreur(e, livId) {
+  e.preventDefault();
+  const nom = document.getElementById('edit-liv-nom').value.trim();
+  const whatsapp_number = document.getElementById('edit-liv-tel').value.trim();
+  if (nom.length < 2) { alert('Nom invalide (2 caractères minimum).'); return; }
+  try {
+    const res = await dashFetch('/api/v1/dashboard/livreurs/' + livId, {
+      method: 'PATCH', headers: {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'},
+      body: JSON.stringify({ nom, whatsapp_number })
+    });
+    if (res.ok) { closeModal(); loadLivreurs(); }
+    else { const d = await res.json(); alert(d.error||'Erreur'); }
+  } catch { alert('Erreur réseau.'); }
+}
+
 async function toggleLivreurActif(livId, currentActif) {
   try {
     await dashFetch('/api/v1/dashboard/livreurs/' + livId, {
@@ -1725,221 +1909,4 @@ async function exportCodesPromo() {
 async function loadPdv() {
   const content = document.getElementById('dashboard-content');
   content.innerHTML = `<div class="text-center py-8"><i class="fa-solid fa-circle-notch fa-spin text-xl text-gray-400"></i></div>`;
-  try {
-    const res = await dashFetch('/api/v1/dashboard/pdv');
-    if (!res.ok) throw new Error();
-    const data = await res.json();
-    renderPdvConfig(data.pdv, content);
-  } catch {
-    content.innerHTML = '<p class="text-red-500 text-sm p-4">Erreur de chargement du point de vente.</p>';
-  }
-}
-
-function parsePdvHoraires(raw) {
-  if (!raw) return {};
-  try { return typeof raw === 'string' ? JSON.parse(raw) : raw; } catch { return {}; }
-}
-
-function renderPdvConfig(pdv, container) {
-  container.innerHTML = `
-    <div class="max-w-lg space-y-4">
-      <div class="bg-white rounded-2xl border border-gray-100 p-6">
-        <h2 class="font-bold text-gray-900 mb-1">Point de vente</h2>
-        <p class="text-sm text-gray-500 mb-5">Configurez l'adresse et les coordonnées GPS.</p>
-        <form onsubmit="savePdv(event)" class="space-y-4">
-          <div>
-            <label class="block text-sm font-semibold text-gray-700 mb-1.5">Nom du point de vente</label>
-            <input id="pdv-nom" type="text" maxlength="100" value="${escHtml(pdv?.nom||'')}" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200" placeholder="Restaurant principal">
-          </div>
-          <div>
-            <label class="block text-sm font-semibold text-gray-700 mb-1.5">Adresse complète</label>
-            <input id="pdv-adresse" type="text" maxlength="200" value="${escHtml(pdv?.adresse||'')}" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200" placeholder="Quartier, rue, ville...">
-          </div>
-          <div class="grid grid-cols-2 gap-3">
-            <div>
-              <label class="block text-sm font-semibold text-gray-700 mb-1.5">Latitude GPS</label>
-              <input id="pdv-lat" type="number" step="0.000001" min="-90" max="90" value="${pdv?.latitude??''}" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200" placeholder="12.3569">
-            </div>
-            <div>
-              <label class="block text-sm font-semibold text-gray-700 mb-1.5">Longitude GPS</label>
-              <input id="pdv-lon" type="number" step="0.000001" min="-180" max="180" value="${pdv?.longitude??''}" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200" placeholder="-1.5353">
-            </div>
-          </div>
-          <button type="button" onclick="useMyLocation()" class="w-full border border-gray-200 text-gray-700 font-semibold text-sm py-2.5 rounded-xl hover:bg-gray-50 flex items-center justify-center gap-2">
-            <i class="fa-solid fa-location-crosshairs"></i> Utiliser ma position actuelle
-          </button>
-          <div class="grid grid-cols-2 gap-3">
-            <div>
-              <label class="block text-sm font-semibold text-gray-700 mb-1.5">Tarif base (FCFA)</label>
-              <input id="pdv-tarif-base" type="number" min="0" max="99999" step="100" value="${pdv?.tarif_livraison_base??500}" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200">
-              <p class="text-xs text-gray-400 mt-1">Frais fixes min.</p>
-            </div>
-            <div>
-              <label class="block text-sm font-semibold text-gray-700 mb-1.5">Tarif par km (FCFA)</label>
-              <input id="pdv-tarif-km" type="number" min="0" max="9999" step="50" value="${pdv?.tarif_par_km??200}" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200">
-              <p class="text-xs text-gray-400 mt-1">Frais par km.</p>
-            </div>
-          </div>
-          <div>
-            <label class="block text-sm font-semibold text-gray-700 mb-2">Horaires d'ouverture</label>
-            <div id="pdv-horaires-container" class="bg-gray-50 rounded-xl p-3"></div>
-            <p class="text-xs text-gray-400 mt-1.5">Ces horaires déterminent le badge « Ouvert / Fermé » sur votre boutique.</p>
-          </div>
-          <p id="pdv-feedback" class="text-xs hidden rounded-lg px-3 py-2"></p>
-          <button type="submit" id="pdv-submit-btn" class="w-full bg-red-600 text-white font-bold py-3 rounded-xl hover:bg-red-700 disabled:bg-gray-300 disabled:cursor-not-allowed">
-            <i class="fa-solid fa-floppy-disk mr-1.5"></i> Enregistrer
-          </button>
-        </form>
-      </div>
-      ${pdv?.latitude && pdv?.longitude ?
-      `<div class="bg-green-50 border border-green-100 rounded-2xl p-4 text-sm text-green-700">
-        <i class="fa-solid fa-circle-check mr-1.5"></i>GPS configuré : <strong>${pdv.latitude}, ${pdv.longitude}</strong><br>
-        Frais de livraison calculés automatiquement.</div>` :
-      `<div class="bg-orange-50 border border-orange-100 rounded-2xl p-4 text-sm text-orange-700">
-        <i class="fa-solid fa-triangle-exclamation mr-1.5"></i>GPS non configuré. Le calcul des frais de livraison nécessite vos coordonnées GPS.</div>`}
-    </div>`;
-  renderPdvHorairesEditor(parsePdvHoraires(pdv?.horaires));
-}
-
-function renderPdvHorairesEditor(horaires) {
-  const container = document.getElementById('pdv-horaires-container');
-  if (!container) return;
-  container.innerHTML = JOURS_SEMAINE.map(jour => {
-    const entry = horaires[jour] || {};
-    const ouvert = entry.ouvert !== false;
-    const debut = entry.debut || '08:00';
-    const fin = entry.fin || '22:00';
-    return `<div class="flex items-center gap-3 py-2.5 border-b border-gray-200/70 last:border-0">
-      <div class="w-20 text-sm font-medium text-gray-700 flex-shrink-0">${JOURS_LABELS[jour]}</div>
-      <label class="relative inline-flex items-center cursor-pointer flex-shrink-0">
-        <input type="checkbox" id="pdv-h-${jour}-ouvert" class="sr-only peer" ${ouvert ? 'checked' : ''} onchange="_togglePdvHoraire('${jour}')">
-        <div class="w-9 h-5 bg-gray-300 rounded-full peer peer-checked:bg-red-600 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-4"></div>
-      </label>
-      <div id="pdv-h-${jour}-times" class="flex items-center gap-1.5 flex-1 ${ouvert ? '' : 'hidden'}">
-        <input type="time" id="pdv-h-${jour}-debut" value="${debut}" class="border border-gray-200 rounded-lg px-2 py-1.5 text-xs w-[6.5rem] bg-white">
-        <span class="text-gray-400 text-xs">–</span>
-        <input type="time" id="pdv-h-${jour}-fin" value="${fin}" class="border border-gray-200 rounded-lg px-2 py-1.5 text-xs w-[6.5rem] bg-white">
-      </div>
-      <span id="pdv-h-${jour}-closed" class="${ouvert ? 'hidden' : ''} text-xs text-gray-400 italic ml-auto">Fermé</span>
-    </div>`;
-  }).join('');
-}
-
-function _togglePdvHoraire(jour) {
-  const checked = document.getElementById('pdv-h-' + jour + '-ouvert').checked;
-  document.getElementById('pdv-h-' + jour + '-times').classList.toggle('hidden', !checked);
-  document.getElementById('pdv-h-' + jour + '-closed').classList.toggle('hidden', checked);
-}
-
-function collecterPdvHoraires() {
-  const horaires = {};
-  JOURS_SEMAINE.forEach(jour => {
-    const ouvertEl = document.getElementById('pdv-h-' + jour + '-ouvert');
-    const ouvert = ouvertEl ? ouvertEl.checked : false;
-    horaires[jour] = {
-      ouvert,
-      debut: ouvert ? document.getElementById('pdv-h-' + jour + '-debut').value : null,
-      fin: ouvert ? document.getElementById('pdv-h-' + jour + '-fin').value : null
-    };
-  });
-  return horaires;
-}
-
-function useMyLocation() {
-  if (!navigator.geolocation) { alert('Géolocalisation non supportée.'); return; }
-  navigator.geolocation.getCurrentPosition(pos => {
-    document.getElementById('pdv-lat').value = pos.coords.latitude.toFixed(6);
-    document.getElementById('pdv-lon').value = pos.coords.longitude.toFixed(6);
-    const fb = document.getElementById('pdv-feedback');
-    if (fb) {
-      fb.textContent = 'Position : ' + pos.coords.latitude.toFixed(4) + ', ' + pos.coords.longitude.toFixed(4);
-      fb.className = 'text-xs bg-green-50 text-green-700 rounded-lg px-3 py-2'; fb.classList.remove('hidden');
-    }
-  }, () => alert('Impossible d\'obtenir votre position.'));
-}
-
-// FIX-1 (cycle-10) : savePdv() était tronquée en plein milieu — la fonction
-// n'existait donc plus du tout au runtime, cassant le parsing de TOUT le
-// fichier. Complétée pour construire exactement le payload attendu par
-// PATCH /api/v1/dashboard/pdv (src/routes/api-dashboard.ts) :
-//   { nom, adresse, latitude, longitude, tarif_livraison_base, tarif_par_km, horaires }
-// Latitude/longitude : chaîne vide → null (pas 0, pour ne pas écraser une
-// coordonnée valide à l'équateur/méridien avec une valeur "manquante" mal
-// interprétée) ; sinon parseFloat. Les horaires viennent de
-// collecterPdvHoraires() (déjà présent plus haut dans ce fichier).
-// Validation cliente des bornes GPS alignée sur celle du backend
-// (-90/90 pour latitude, -180/180 pour longitude), pour donner un
-// feedback immédiat sans aller-retour réseau inutile. Passe par
-// dashFetch() (et non fetch() brut) pour bénéficier du rafraîchissement
-// automatique de session (FIX-2), contrairement à l'ancienne version.
-async function savePdv(e) {
-  e.preventDefault();
-  const fb = document.getElementById('pdv-feedback');
-  const submitBtn = document.getElementById('pdv-submit-btn');
-  if (fb) fb.classList.add('hidden');
-  if (submitBtn) submitBtn.disabled = true;
-
-  const latRaw = document.getElementById('pdv-lat').value.trim();
-  const lonRaw = document.getElementById('pdv-lon').value.trim();
-
-  const data = {
-    nom: document.getElementById('pdv-nom').value.trim(),
-    adresse: document.getElementById('pdv-adresse').value.trim(),
-    latitude: latRaw === '' ? null : parseFloat(latRaw),
-    longitude: lonRaw === '' ? null : parseFloat(lonRaw),
-    tarif_livraison_base: parseFloat(document.getElementById('pdv-tarif-base').value) || 0,
-    tarif_par_km: parseFloat(document.getElementById('pdv-tarif-km').value) || 0,
-    horaires: JSON.stringify(collecterPdvHoraires())
-  };
-
-  if (data.latitude !== null && (isNaN(data.latitude) || data.latitude < -90 || data.latitude > 90)) {
-    if (fb) {
-      fb.textContent = 'Latitude invalide (doit être comprise entre -90 et 90).';
-      fb.className = 'text-xs bg-red-50 text-red-600 rounded-lg px-3 py-2';
-      fb.classList.remove('hidden');
-    }
-    if (submitBtn) submitBtn.disabled = false;
-    return;
-  }
-  if (data.longitude !== null && (isNaN(data.longitude) || data.longitude < -180 || data.longitude > 180)) {
-    if (fb) {
-      fb.textContent = 'Longitude invalide (doit être comprise entre -180 et 180).';
-      fb.className = 'text-xs bg-red-50 text-red-600 rounded-lg px-3 py-2';
-      fb.classList.remove('hidden');
-    }
-    if (submitBtn) submitBtn.disabled = false;
-    return;
-  }
-
-  try {
-    const res = await dashFetch('/api/v1/dashboard/pdv', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
-      body: JSON.stringify(data)
-    });
-    const result = await res.json().catch(() => ({}));
-
-    if (res.ok) {
-      if (fb) {
-        fb.textContent = result.created ? 'Point de vente créé.' : 'Point de vente mis à jour.';
-        fb.className = 'text-xs bg-green-50 text-green-700 rounded-lg px-3 py-2';
-        fb.classList.remove('hidden');
-      }
-      await loadPdv();
-    } else {
-      if (fb) {
-        fb.textContent = result.error || 'Erreur lors de l\'enregistrement.';
-        fb.className = 'text-xs bg-red-50 text-red-600 rounded-lg px-3 py-2';
-        fb.classList.remove('hidden');
-      }
-      if (submitBtn) submitBtn.disabled = false;
-    }
-  } catch {
-    if (fb) {
-      fb.textContent = 'Erreur réseau.';
-      fb.className = 'text-xs bg-red-50 text-red-600 rounded-lg px-3 py-2';
-      fb.classList.remove('hidden');
-    }
-    if (submitBtn) submitBtn.disabled = false;
-  }
-}
+ 
