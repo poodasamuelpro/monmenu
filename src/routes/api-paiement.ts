@@ -1,25 +1,15 @@
 /**
  * src/routes/api-paiement.ts — Routes du module paiement manuel MonMenu
  *
- * CORRECTIONS CYCLE-4 :
- *   FIX-A — verifyAuthPaiement() remplacé par l'appel à la logique unique
- *           verifierAccesTenant() (src/lib/acces-tenant.ts), partagée avec
- *           api-dashboard.ts et index.ts. Avant : logique dupliquée et
- *           légèrement différente à 3 endroits → incohérences d'accès.
- *   FIX-B — Résolution du plan corrigée : tenant.plan_id / plan_initial_id
- *           sont des UUID Supabase, pas des id D1. On les résout désormais
- *           via resoudreIdD1DepuisPlanSupabase() avant d'interroger D1
- *           (voir src/lib/plans.ts). Avant, la requête D1 échouait toujours
- *           silencieusement (aucune ligne trouvée) → plan_initial_nom / prix
- *           toujours null côté client.
- *   FIX-C — /statut renvoie désormais `plan_initial_id_d1` (id D1) pour que
- *           le front puisse comparer correctement le plan "actuel" dans la
- *           grille de formules (avant : comparaison UUID Supabase vs id D1,
- *           qui ne matchait jamais).
- *   FIX-D — Tous les messages "38h" corrigés en "48h" (SLA admin annoncé),
- *           la fenêtre technique de 72h reste inchangée et clairement
- *           distinguée (voir src/lib/paiement.ts : SLA_ADMIN_HEURES / 
- *           FENETRE_ACCES_HEURES).
+ * MIGRATION PLANS — tous les plans sont désormais lus depuis Supabase
+ * uniquement (chargerPlan(), src/lib/plans.ts). Plus de résolution D1 ↔
+ * Supabase : le `plan_id` reçu du formulaire (peuplé depuis GET
+ * /api/v1/plans, qui lit maintenant Supabase) est l'UUID Supabase natif,
+ * utilisé tel quel pour vérifier le plan ET pour le stocker dans
+ * abonnements.plan_id. C'est CE changement qui corrige le bug
+ * "Erreur lors de la vérification du plan." — l'ancienne requête D1
+ * échouait silencieusement car le plan_id envoyé ne correspondait plus au
+ * schéma attendu.
  *
  * Routes exposées :
  *   GET  /api/v1/paiement/statut        — Statut abonnement actuel + référence + délai
@@ -28,7 +18,7 @@
  *   GET  /api/v1/paiement/historique    — Historique des abonnements du tenant
  *   GET  /api/v1/paiement/notifications — Notifications in-app paiement (bandeau)
  *
- * SÉCURITÉ (SEC-01 à SEC-09 appliquées) :
+ * SÉCURITÉ (inchangée) :
  *   - SEC-01 : statut jamais fourni par le client, toujours hardcodé
  *   - SEC-02 : validation MIME en 4 couches (extension, Content-Type, magic bytes, taille)
  *   - SEC-03 : IDOR impossible — toutes les requêtes filtrent par tenant_id du JWT
@@ -46,7 +36,7 @@ import type { Env } from '../types/database'
 import { createSupabaseClient, createSupabaseAdminClient } from '../lib/supabase'
 import { setSecurityHeaders, checkRateLimit } from '../lib/security'
 import { verifierAccesTenant } from '../lib/acces-tenant'
-import { resoudreIdD1DepuisPlanSupabase, chargerPlanD1 } from '../lib/plans'
+import { chargerPlan } from '../lib/plans'
 import {
   genererReferencePaiement,
   calculerDeadlineConfirmation,
@@ -61,35 +51,26 @@ import {
   messagePreuveRecue,
   messageEnAttenteConfirmation
 } from '../lib/paiement'
-import { notifierBlocageAutomatique } from '../lib/whatsapp'
 
 const paiementRouter = new Hono<{ Bindings: Env }>()
 const ACCESS_TOKEN_COOKIE = 'sb-access-token'
-const MAX_PREUVE_SIZE = 5 * 1024 * 1024 // 5 Mo (SEC-02)
-const RATE_LIMIT_UPLOAD = 3              // 3 soumissions max/heure (SEC-07)
-const RATE_LIMIT_WINDOW = 3600000        // 1 heure en ms
+const MAX_PREUVE_SIZE = 5 * 1024 * 1024
+const RATE_LIMIT_UPLOAD = 3
+const RATE_LIMIT_WINDOW = 3600000
 
 // -----------------------------------------------------------------------
 // Helper : Extraction et vérification du token JWT
 // -----------------------------------------------------------------------
 
 /**
- * Extrait et vérifie le token JWT depuis les cookies httpOnly ou le header
- * Authorization, puis délègue la décision d'accès à verifierAccesTenant()
- * (src/lib/acces-tenant.ts).
+ * Extrait et vérifie le token JWT (cookie httpOnly ou header Authorization),
+ * puis délègue la décision d'accès à verifierAccesTenant().
  *
- * CYCLE-6 — FIX CRITIQUE : les routes /api/v1/paiement/* acceptent
- * désormais TOUT tenant authentifié dont l'accès n'est pas explicitement
- * 'suspendu' ou 'introuvable' — y compris le mode 'bloque' (inactif, sans
- * abonnement en attente). Avant cette correction, un tenant inactif ayant
- * épuisé son essai sans jamais payer se voyait refuser jusqu'à la
- * consultation de son propre statut d'abonnement (401 "session expirée"
- * trompeur), et ne pouvait donc plus JAMAIS soumettre de nouveau paiement
- * pour réactiver son compte — verrouillage définitif. Ces routes existent
- * PRÉCISÉMENT pour permettre de sortir de cet état, elles ne doivent donc
- * jamais être gatées par le même critère que l'accès au dashboard complet.
- *
- * SEC-03 : le tenant_id retourné vient TOUJOURS du JWT, jamais du body/params.
+ * Les routes /api/v1/paiement/* acceptent TOUT tenant authentifié dont
+ * l'accès n'est pas explicitement 'suspendu' ou 'introuvable' — y compris
+ * le mode 'bloque' (inactif, sans abonnement en attente), car ces routes
+ * sont précisément le moyen de sortir de cet état en soumettant un
+ * nouveau paiement.
  */
 async function verifyAuthPaiement(c: any): Promise<{
   user_id: string
@@ -111,17 +92,6 @@ async function verifyAuthPaiement(c: any): Promise<{
     if (error || !user) return null
 
     const adminClient = createSupabaseAdminClient(c.env)
-    // CYCLE-7 — FIX CRITIQUE : le filtre .is('deleted_at' as any, null)
-    // ci-dessous a été RETIRÉ. Il portait sur `utilisateurs_tenant`, une
-    // table de liaison qui n'a très probablement pas de colonne
-    // `deleted_at` (le `as any` était le signe qu'on avait forcé
-    // TypeScript à laisser passer un filtre invalide plutôt que de vérifier
-    // le schéma). Si la colonne n'existe pas, PostgREST rejette TOUTE la
-    // requête avec une erreur → `lien` restait `null` → verifyAuthPaiement()
-    // renvoyait 401 pour absolument tous les tenants, essai ou pas,
-    // bloqué ou pas. Le soft-delete du tenant lui-même reste vérifié
-    // correctement juste en dessous, sur la vraie colonne
-    // `tenants.deleted_at` — rien n'est perdu en sécurité.
     const { data: lien } = await adminClient
       .from('utilisateurs_tenant')
       .select('tenant_id')
@@ -139,8 +109,6 @@ async function verifyAuthPaiement(c: any): Promise<{
 
     if (!tenant) return null
 
-    // CYCLE-6 : accès autorisé si accesComplet OU accesAbonnementSeul.
-    // Seuls 'suspendu' et 'introuvable' refusent l'accès ici.
     const resultat = await verifierAccesTenant(c.env, tenant.id)
     if (!resultat.accesComplet && !resultat.accesAbonnementSeul) return null
 
@@ -161,13 +129,6 @@ async function verifyAuthPaiement(c: any): Promise<{
 // -----------------------------------------------------------------------
 // GET /api/v1/paiement/statut
 // -----------------------------------------------------------------------
-
-/**
- * Retourne le statut d'abonnement actuel du tenant authentifié.
- * Inclut : statut, référence active, heures restantes si en_attente_confirmation.
- *
- * SEC-03 : tenant_id issu du JWT uniquement.
- */
 paiementRouter.get('/statut', async (c) => {
   setSecurityHeaders(c)
   const auth = await verifyAuthPaiement(c)
@@ -175,7 +136,6 @@ paiementRouter.get('/statut', async (c) => {
 
   const adminClient = createSupabaseAdminClient(c.env)
 
-  // Tenant courant — inclut plan_initial_id (CYCLE-3)
   const { data: tenant } = await adminClient
     .from('tenants')
     .select('statut, plan_id, plan_initial_id, essai_expire_le, paiement_en_attente_depuis, reference_paiement_active')
@@ -184,7 +144,6 @@ paiementRouter.get('/statut', async (c) => {
 
   if (!tenant) return c.json({ error: 'Tenant introuvable.' }, 404)
 
-  // Abonnement actuel (le plus récent non annulé)
   const { data: abonnement } = await adminClient
     .from('abonnements')
     .select('id, statut, date_fin, plan_id, soumis_le, delai_confirmation_expire_le, reference_paiement, methode_paiement, numero_expediteur, periodicite')
@@ -198,7 +157,6 @@ paiementRouter.get('/statut', async (c) => {
     heuresRestantes = heuresRestantesAvantDeadline(new Date(abonnement.delai_confirmation_expire_le))
   }
 
-  // Jours d'essai restants
   let joursEssaiRestants: number | null = null
   if (tenant.statut === 'essai' && tenant.essai_expire_le) {
     joursEssaiRestants = Math.ceil(
@@ -206,20 +164,16 @@ paiementRouter.get('/statut', async (c) => {
     )
   }
 
-  // FIX-B — Résolution correcte UUID Supabase → id D1 → ligne D1.
-  // tenant.plan_initial_id est prioritaire sur tenant.plan_id pour
-  // l'affichage "plan choisi" avant confirmation (CYCLE-3).
-  const idD1PlanInitial = await resoudreIdD1DepuisPlanSupabase(c.env, tenant.plan_initial_id)
-  const idD1PlanActuel = await resoudreIdD1DepuisPlanSupabase(c.env, tenant.plan_id)
-  const idD1AResoudre = idD1PlanInitial ?? idD1PlanActuel
-  const planRow = await chargerPlanD1(c.env, idD1AResoudre)
+  // MIGRATION — plan_initial_id est prioritaire sur plan_id pour
+  // l'affichage "plan choisi" avant confirmation, mais les deux sont
+  // maintenant le MÊME type d'id (UUID Supabase natif) — un seul appel
+  // à chargerPlan() suffit, plus de résolution D1 en deux temps.
+  const planIdAResoudre = tenant.plan_initial_id ?? tenant.plan_id
+  const planRow = await chargerPlan(c.env, planIdAResoudre)
 
   return c.json({
     statut_tenant: tenant.statut,
     plan_initial_id: tenant.plan_initial_id,
-    // FIX-C : id D1 exposé pour que le front compare correctement le plan
-    // "actuel" dans la grille de formules (voir dashboard-paiement.js).
-    plan_initial_id_d1: idD1AResoudre,
     plan_initial_nom: planRow?.nom ?? null,
     plan_initial_prix_mensuel: planRow?.prix_mensuel ?? null,
     abonnement: abonnement ? {
@@ -234,7 +188,6 @@ paiementRouter.get('/statut', async (c) => {
       soumis_le: abonnement.soumis_le,
       delai_confirmation_expire_le: abonnement.delai_confirmation_expire_le,
       heures_restantes_confirmation: heuresRestantes,
-      // FIX-D : message unifié 48h (SLA) / 72h (fenêtre technique)
       message_confirmation: abonnement.statut === 'en_attente_confirmation'
         ? messageEnAttenteConfirmation()
         : null
@@ -251,13 +204,6 @@ paiementRouter.get('/statut', async (c) => {
 // -----------------------------------------------------------------------
 // GET /api/v1/paiement/reference
 // -----------------------------------------------------------------------
-
-/**
- * Retourne la référence de paiement active du tenant, ou en génère une nouvelle.
- *
- * La référence est un aide-mémoire de rapprochement uniquement (SEC-10).
- * Elle est stockée dans tenants.reference_paiement_active pour être réutilisée.
- */
 paiementRouter.get('/reference', async (c) => {
   setSecurityHeaders(c)
   const auth = await verifyAuthPaiement(c)
@@ -265,7 +211,6 @@ paiementRouter.get('/reference', async (c) => {
 
   const adminClient = createSupabaseAdminClient(c.env)
 
-  // Récupérer ou générer la référence active
   const { data: tenant } = await adminClient
     .from('tenants')
     .select('reference_paiement_active')
@@ -295,28 +240,22 @@ paiementRouter.get('/reference', async (c) => {
 // -----------------------------------------------------------------------
 // POST /api/v1/paiement/soumettre
 // -----------------------------------------------------------------------
-
 /**
  * Soumet une preuve de paiement.
  *
- * Corps attendu : multipart/form-data avec :
- *   - preuve     : Fichier image (JPEG ou PNG, max 5 Mo)
- *   - plan_id    : id D1 du plan choisi (cohérent avec /api/v1/plans, D1)
- *   - methode_paiement : Chaîne (ex: "Mobile Money", "Virement bancaire")
- *   (CYCLE-3 : periodicite supprimé — tous les abonnements sont exclusivement mensuels)
- *
- * Sécurité :
- *   - SEC-01 : statut hardcodé à 'en_attente_confirmation', jamais du body
- *   - SEC-02 : validation en 4 couches
- *   - SEC-07 : rate limiting 3/h
- *   - SEC-08 : idempotence — un seul en_attente par tenant
+ * MIGRATION — plan_id reçu du formulaire est désormais l'UUID Supabase
+ * natif (peuplé depuis /api/v1/plans, Supabase). Vérifié via chargerPlan()
+ * au lieu d'une requête D1 directe. C'est le fix du bug "Erreur lors de la
+ * vérification du plan." : l'ancien code lisait D1 avec une colonne
+ * `devise` potentiellement absente/désynchronisée après la migration
+ * CYCLE-3 — ce risque disparaît complètement puisque D1 n'est plus
+ * consulté ici.
  */
 paiementRouter.post('/soumettre', async (c) => {
   setSecurityHeaders(c)
   const auth = await verifyAuthPaiement(c)
   if (!auth) return c.json({ error: 'Non authentifié.' }, 401)
 
-  // SEC-07 : Rate limiting 3 soumissions/heure par tenant
   if (c.env.KV_CACHE) {
     const rateKey = `paiement_upload:${auth.tenant_id}`
     const rateLimit = await checkRateLimit(rateKey, RATE_LIMIT_UPLOAD, RATE_LIMIT_WINDOW, c.env.KV_CACHE)
@@ -325,12 +264,10 @@ paiementRouter.post('/soumettre', async (c) => {
     }
   }
 
-  // Vérification R2 configuré
   if (!c.env.R2_MEDIA) {
     return c.json({ error: 'Stockage de preuves non configuré. Contactez le support.' }, 503)
   }
 
-  // Parsing multipart/form-data
   let formData: FormData
   try {
     formData = await c.req.formData()
@@ -341,11 +278,7 @@ paiementRouter.post('/soumettre', async (c) => {
   const preuveFile = formData.get('preuve') as File | null
   const planId = formData.get('plan_id') as string | null
   const methodePaiement = formData.get('methode_paiement') as string | null
-  // FIX-3 : numéro utilisé pour effectuer le paiement — obligatoire, pour
-  // tarification/traçabilité et rapprochement manuel par l'admin.
   const numeroExpediteurBrut = formData.get('numero_expediteur') as string | null
-  // CYCLE-3 : periodicite supprimé — tous les abonnements sont exclusivement mensuels
-  const periodicite = 'mensuel'
 
   if (!preuveFile || !(preuveFile instanceof File)) {
     return c.json({ error: 'Champ "preuve" manquant (fichier image requis).' }, 400)
@@ -356,29 +289,20 @@ paiementRouter.post('/soumettre', async (c) => {
   if (!methodePaiement) {
     return c.json({ error: 'Champ "methode_paiement" manquant.' }, 400)
   }
-  // FIX-3 : validation numéro expéditeur — même tolérance de format que le
-  // numéro WhatsApp du restaurant ailleurs dans l'app (espaces/tirets
-  // acceptés en saisie, nettoyés avant stockage).
   const numeroExpediteur = (numeroExpediteurBrut ?? '').replace(/[^0-9+]/g, '')
   if (!numeroExpediteur || numeroExpediteur.replace(/\D/g, '').length < 8) {
     return c.json({ error: 'Le numéro utilisé pour le paiement est requis (8 chiffres minimum).' }, 400)
   }
-  // SEC-02 Couche 1 : Extension
   if (!validerExtensionImage(preuveFile.name)) {
     return c.json({ error: 'Format non autorisé. JPEG ou PNG uniquement.' }, 400)
   }
-
-  // SEC-02 Couche 2 : Content-Type déclaré
   if (!validerContentTypeImage(preuveFile.type)) {
     return c.json({ error: 'Type MIME non autorisé. image/jpeg ou image/png requis.' }, 400)
   }
-
-  // SEC-02 Couche 4 : Taille max
   if (preuveFile.size > MAX_PREUVE_SIZE) {
     return c.json({ error: `Fichier trop grand. Maximum ${MAX_PREUVE_SIZE / 1024 / 1024} Mo.` }, 400)
   }
 
-  // SEC-02 Couche 3 : Magic bytes (validation principale)
   const buffer = await preuveFile.arrayBuffer()
   const mimeResult = await validerMimeImage(buffer)
   if (!mimeResult.valide) {
@@ -387,33 +311,14 @@ paiementRouter.post('/soumettre', async (c) => {
 
   const adminClient = createSupabaseAdminClient(c.env)
 
-  // planId reçu du front est un id D1 (le select du formulaire est peuplé
-  // depuis /api/v1/plans, qui lit D1) — cohérent avec la vérification D1
-  // ci-dessous. Ce plan_id (D1) est celui qui sera stocké dans
-  // abonnements.plan_id, PAS l'UUID Supabase (voir src/lib/plans.ts pour
-  // le pourquoi de cette distinction).
-  let plan: { id: string; nom: string; prix_mensuel: number; devise: string } | null = null
-  try {
-    plan = await c.env.DB
-      .prepare('SELECT id, nom, prix_mensuel, devise FROM plans WHERE id = ? AND actif = 1 LIMIT 1')
-      .bind(planId)
-      .first<{ id: string; nom: string; prix_mensuel: number; devise: string }>()
-  } catch {
-    return c.json({ error: 'Erreur lors de la vérification du plan.' }, 500)
-  }
-
-  if (!plan) {
+  // MIGRATION — vérification du plan directement en Supabase (UUID natif),
+  // plus de requête D1. C'est le fix du bug historique de cette route.
+  const planRow = await chargerPlan(c.env, planId)
+  if (!planRow) {
     return c.json({ error: 'Plan introuvable ou inactif.' }, 404)
   }
+  const plan = { id: planRow.id, nom: planRow.nom, prix_mensuel: planRow.prix_mensuel, devise: planRow.devise ?? 'FCFA' }
 
-  // SEC-08 : Idempotence — vérifier qu'il n'y a pas déjà un paiement en attente.
-  // CYCLE-5 FIX : on ignore désormais un abonnement 'en_attente_confirmation'
-  // dont la deadline (delai_confirmation_expire_le) est déjà dépassée. Sans
-  // ce filtre, un tenant bloqué par sa fenêtre de 72h expirée (accès déjà
-  // coupé via verifierAccesTenant) recevait quand même un 409 "paiement déjà
-  // en cours" en tentant de soumettre une NOUVELLE preuve — alors que le
-  // cron api-cron.ts (bloquerPaiementsExpires, toutes les 6h) n'avait pas
-  // encore eu le temps de basculer la ligne en statut 'expire'.
   const { data: abonnementExistant } = await adminClient
     .from('abonnements')
     .select('id, soumis_le, reference_paiement')
@@ -432,7 +337,6 @@ paiementRouter.post('/soumettre', async (c) => {
     }, 409)
   }
 
-  // Récupérer ou générer la référence
   const { data: tenantData } = await adminClient
     .from('tenants')
     .select('reference_paiement_active')
@@ -441,10 +345,8 @@ paiementRouter.post('/soumettre', async (c) => {
 
   const reference = tenantData?.reference_paiement_active ?? genererReferencePaiement(auth.tenant_slug)
 
-  // SEC-02 / SEC-09 : Clé R2 construite côté serveur, jamais dépendante du nom client
   const cleR2 = construireCleR2Preuve(auth.tenant_id, mimeResult.type!)
 
-  // Upload dans R2 (bucket privé — jamais d'URL publique directe)
   try {
     await c.env.R2_MEDIA.put(cleR2, buffer, {
       httpMetadata: {
@@ -454,36 +356,34 @@ paiementRouter.post('/soumettre', async (c) => {
       customMetadata: {
         tenant_id: auth.tenant_id,
         uploaded_at: new Date().toISOString()
-        // SEC-09 : NE PAS stocker le nom original du fichier
       }
     })
   } catch (err) {
-    // SEC-09 : ne pas logger la clé R2 complète
     console.error(`[PAIEMENT] Erreur R2 upload — tenant: ${auth.tenant_id.slice(0, 8)}...`)
     return c.json({ error: 'Erreur lors de l\'upload de la preuve.' }, 500)
   }
 
   const now = new Date()
   const deadline = calculerDeadlineConfirmation(now)
-  // CYCLE-3 : montant toujours mensuel — pas de branche annuelle
   const montantPaye = plan.prix_mensuel
 
-  // SEC-01 : statut hardcodé, jamais du body
+  // MIGRATION — plan_id stocké = UUID Supabase natif (cohérent partout
+  // désormais : tenants.plan_id, tenants.plan_initial_id, abonnements.plan_id)
   const { data: abonnement, error: abError } = await adminClient
     .from('abonnements')
     .insert({
-      tenant_id: auth.tenant_id,        // SEC-03 : du JWT, jamais du body
-      plan_id: planId,                  // id D1 — cohérent avec /historique
-      statut: 'en_attente_confirmation', // SEC-01 : hardcodé
-      preuve_paiement_url: cleR2,        // Clé R2 (pas l'URL publique — SEC-06)
+      tenant_id: auth.tenant_id,
+      plan_id: planId,
+      statut: 'en_attente_confirmation',
+      preuve_paiement_url: cleR2,
       reference_paiement: reference,
       soumis_le: now.toISOString(),
       delai_confirmation_expire_le: deadline.toISOString(),
       methode_paiement: methodePaiement.slice(0, 100),
-      numero_expediteur: numeroExpediteur, // FIX-3 : traçabilité/rapprochement
+      numero_expediteur: numeroExpediteur,
       montant_paye: montantPaye,
-      devise: plan.devise ?? 'XOF',
-      periodicite: 'mensuel',            // CYCLE-3 : toujours mensuel
+      devise: plan.devise,
+      periodicite: 'mensuel',
       date_debut: now.toISOString(),
       created_at: now.toISOString()
     })
@@ -492,12 +392,10 @@ paiementRouter.post('/soumettre', async (c) => {
 
   if (abError || !abonnement) {
     console.error(`[PAIEMENT] Erreur insert abonnement — tenant: ${auth.tenant_id.slice(0, 8)}...`)
-    // Rollback : supprimer l'objet R2
     try { await c.env.R2_MEDIA.delete(cleR2) } catch {}
     return c.json({ error: 'Erreur lors de l\'enregistrement du paiement.' }, 500)
   }
 
-  // Mettre à jour le tenant
   await adminClient
     .from('tenants')
     .update({
@@ -507,12 +405,10 @@ paiementRouter.post('/soumettre', async (c) => {
     })
     .eq('id', auth.tenant_id)
 
-  // Invalider cache KV
   if (c.env.KV_CACHE) {
     try { await c.env.KV_CACHE.delete(`tenant:${auth.tenant_slug}`) } catch {}
   }
 
-  // Créer notification admin (table notifications_admin)
   await adminClient
     .from('notifications_admin')
     .insert({
@@ -527,9 +423,8 @@ paiementRouter.post('/soumettre', async (c) => {
         soumis_le: now.toISOString()
       }
     })
-    .catch(() => {}) // Non bloquant
+    .catch(() => {})
 
-  // Créer notification restaurant (confirmation de réception)
   await adminClient
     .from('notifications_restaurant')
     .insert({
@@ -542,7 +437,6 @@ paiementRouter.post('/soumettre', async (c) => {
     })
     .catch(() => {})
 
-  // SEC-09 : log minimaliste (pas de référence brute, pas de clé R2)
   console.log(`[PAIEMENT] Preuve soumise — tenant: ${auth.tenant_id.slice(0, 8)}... plan: ${planId.slice(0, 8)}...`)
 
   return c.json({
@@ -553,20 +447,13 @@ paiementRouter.post('/soumettre', async (c) => {
     heures_delai: FENETRE_ACCES_HEURES,
     sla_admin_heures: SLA_ADMIN_HEURES,
     message: messagePreuveRecue(),
-    plan: { nom: plan.nom, montant: montantPaye, devise: plan.devise ?? 'XOF' }
+    plan: { nom: plan.nom, montant: montantPaye, devise: plan.devise }
   })
 })
 
 // -----------------------------------------------------------------------
 // GET /api/v1/paiement/historique
 // -----------------------------------------------------------------------
-
-/**
- * Retourne l'historique des abonnements du tenant authentifié.
- * Paginé, trié du plus récent au plus ancien.
- *
- * SEC-03 : filtre exclusivement par tenant_id du JWT.
- */
 paiementRouter.get('/historique', async (c) => {
   setSecurityHeaders(c)
   const auth = await verifyAuthPaiement(c)
@@ -581,7 +468,7 @@ paiementRouter.get('/historique', async (c) => {
   const { data: abonnements, error, count } = await adminClient
     .from('abonnements')
     .select('id, statut, plan_id, date_debut, date_fin, montant_paye, devise, methode_paiement, numero_expediteur, reference_paiement, soumis_le, confirme_le, rejete_le, motif_rejet, created_at', { count: 'exact' })
-    .eq('tenant_id', auth.tenant_id) // SEC-03 : toujours filtrer par tenant_id du JWT
+    .eq('tenant_id', auth.tenant_id)
     .order('created_at', { ascending: false })
     .range(offset, offset + limit - 1)
 
@@ -590,12 +477,12 @@ paiementRouter.get('/historique', async (c) => {
     return c.json({ error: 'Erreur lors de la récupération de l\'historique.' }, 500)
   }
 
-  // abonnements.plan_id est un id D1 (stocké tel quel par /soumettre) —
-  // résolution directe, sans passer par resoudreIdD1DepuisPlanSupabase().
+  // MIGRATION — abonnements.plan_id est désormais l'UUID Supabase natif,
+  // résolu directement via chargerPlan() (plus de résolution D1).
   const abonnementsAvecNomPlan = await Promise.all(
     (abonnements ?? []).map(async (ab: any) => {
       if (!ab.plan_id) return { ...ab, plan_nom: null }
-      const plan = await chargerPlanD1(c.env, ab.plan_id)
+      const plan = await chargerPlan(c.env, ab.plan_id)
       return { ...ab, plan_nom: plan?.nom ?? null, plan_prix_mensuel: plan?.prix_mensuel ?? null }
     })
   )
@@ -612,14 +499,6 @@ paiementRouter.get('/historique', async (c) => {
 // -----------------------------------------------------------------------
 // GET /api/v1/paiement/notifications
 // -----------------------------------------------------------------------
-
-/**
- * Retourne les notifications in-app liées au paiement pour le tenant.
- * Combinaison de notifications dynamiques (statut, essai) et persistantes (DB).
- *
- * Utilisé par le bandeau de notifications du dashboard restaurant.
- * SEC-03 : filtre par tenant_id du JWT.
- */
 paiementRouter.get('/notifications', async (c) => {
   setSecurityHeaders(c)
   const auth = await verifyAuthPaiement(c)
@@ -635,7 +514,6 @@ paiementRouter.get('/notifications', async (c) => {
     created_at: string
   }> = []
 
-  // 1. Statut tenant — notifications dynamiques
   const { data: tenant } = await adminClient
     .from('tenants')
     .select('statut, essai_expire_le, paiement_en_attente_depuis')
@@ -662,7 +540,6 @@ paiementRouter.get('/notifications', async (c) => {
     }
 
     if (tenant.paiement_en_attente_depuis) {
-      // Vérifier qu'un abonnement en_attente_confirmation est encore actif
       const { data: abonnementAttente } = await adminClient
         .from('abonnements')
         .select('id, delai_confirmation_expire_le')
@@ -686,11 +563,10 @@ paiementRouter.get('/notifications', async (c) => {
     }
   }
 
-  // 2. Notifications persistantes depuis notifications_restaurant (non lues)
   const { data: notifsDb } = await adminClient
     .from('notifications_restaurant')
     .select('id, type, titre, message, lue, lien, created_at')
-    .eq('tenant_id', auth.tenant_id) // SEC-03
+    .eq('tenant_id', auth.tenant_id)
     .eq('lue', false)
     .order('created_at', { ascending: false })
     .limit(10)
