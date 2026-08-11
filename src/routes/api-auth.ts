@@ -2,32 +2,16 @@
 // ARCHITECTURE :
 //   • Supabase Auth  → authentification (signIn, signUp, JWT, refresh)
 //   • Supabase DB    → tenants, utilisateurs_tenant, points_de_vente, plans (APPLICATION)
-//   • D1 Cloudflare  → pays, config_globale (SITE WEB uniquement)
+//   • D1 Cloudflare  → pays, config_globale (SITE WEB uniquement — PLUS de plans)
 //
-// §2 — Migration cookies httpOnly : login/register posent désormais des
-// cookies httpOnly + Secure + SameSite=Lax contenant access/refresh token.
-// Le corps JSON continue de renvoyer les tokens en clair pour les clients
-// API/mobile qui n'utilisent pas de cookies (rétrocompatibilité).
+// Cookies httpOnly + Secure + SameSite=Lax posés à login/register. Le corps
+// JSON renvoie aussi les tokens en clair pour les clients API/mobile sans
+// cookies (rétrocompatibilité).
 //
-// CORRECTION 2026-07-31 (BUG plan_id UUID) —
-//   Le plan choisi était auparavant lu dans D1 (table `plans`, id texte type
-//   "plan_faso"), puis cet id texte était injecté tel quel dans la colonne
-//   Supabase tenants.plan_id, qui est de type UUID. Résultat : crash
-//   "invalid input syntax for type uuid" pour tout plan gratuit.
-//
-//   D1 reste la source d'affichage public des plans (site web,
-//   /api/v1/plans), mais l'inscription (application) doit désormais
-//   résoudre le plan dans SUPABASE via la colonne de correspondance
-//   `plans.d1_plan_id` (unique). C'est cette ligne Supabase — avec son
-//   vrai UUID — qui est utilisée pour tenants.plan_id.
-//   plan_initial_id (TEXT) stocke ce même UUID Supabase (au format texte),
-//   pas le slug D1, pour rester cohérent avec plan_id une fois confirmé.
-//
-//   HYPOTHÈSE (à confirmer) : le front envoie toujours body.plan_id sous
-//   forme de slug D1 (ex: "plan_faso"), car la page d'inscription affiche
-//   les plans via /api/v1/plans (D1). Si le front est un jour changé pour
-//   consommer directement Supabase, il faudra adapter ce lookup pour
-//   accepter un UUID Supabase directement (ou les deux).
+// MIGRATION PLANS — body.plan_id est désormais l'UUID Supabase NATIF du
+// plan choisi (le front le récupère directement depuis GET /api/v1/plans,
+// qui lit maintenant Supabase — voir api-plans.ts). Il n'y a plus de
+// résolution via `plans.d1_plan_id` : on cherche directement par `id`.
 
 import { Hono } from 'hono'
 import { setCookie, deleteCookie, getCookie } from 'hono/cookie'
@@ -37,16 +21,9 @@ import { createSupabaseClient, createSupabaseAdminClient } from '../lib/supabase
 
 const authRouter = new Hono<{ Bindings: Env }>()
 
-// Noms de cookies — DOIVENT être strictement identiques à ceux lus dans
-// src/middleware/auth.ts et src/routes/api-dashboard.ts.
 const ACCESS_TOKEN_COOKIE = 'sb-access-token'
 const REFRESH_TOKEN_COOKIE = 'sb-refresh-token'
 
-// §2.CSRF — Middleware CSRF sur les routes sensibles de ce router (logout, refresh).
-// login et register sont exemptés : un CSRF sur login ne compromet pas le compte
-// (le navigateur n'envoie pas les credentials du site cible). logout et refresh
-// changent l'état de session, donc nécessitent la protection.
-// Les clients API/mobile avec Bearer token sont toujours exemptés.
 authRouter.use('/logout', async (c, next) => {
   const hasBearerToken = c.req.header('Authorization')?.startsWith('Bearer ')
   if (hasBearerToken) return next()
@@ -67,12 +44,8 @@ authRouter.use('/refresh', async (c, next) => {
   return next()
 })
 
-// Durées de vie des cookies (en secondes). L'access token Supabase expire
-// généralement après 1h côté serveur — le cookie peut avoir une durée un
-// peu plus longue sans risque : Supabase invalidera de toute façon le JWT
-// expiré lors de auth.getUser().
-const ACCESS_TOKEN_MAX_AGE = 3600 // 1 heure
-const REFRESH_TOKEN_MAX_AGE = 60 * 60 * 24 * 30 // 30 jours
+const ACCESS_TOKEN_MAX_AGE = 3600
+const REFRESH_TOKEN_MAX_AGE = 60 * 60 * 24 * 30
 
 function cookieOptions(maxAge: number) {
   return {
@@ -99,7 +72,6 @@ authRouter.post('/login', async (c) => {
   setSecurityHeaders(c)
   const ip = c.req.header('CF-Connecting-IP') ?? 'unknown'
 
-  // Rate limiting strict : 5 tentatives / 15 min par IP
   const rateLimit = await checkRateLimit(`auth_login:${ip}`, 5, 900000)
   if (!rateLimit.allowed) {
     return c.json({ error: 'Trop de tentatives de connexion. Réessayez dans 15 minutes.' }, 429)
@@ -125,7 +97,6 @@ authRouter.post('/login', async (c) => {
     return c.json({ error: 'Identifiants incorrects.' }, 401)
   }
 
-  // Récupérer le tenant lié à cet utilisateur — SUPABASE (application)
   const { data: tenantData, error: tenantError } = await supabase
     .from('utilisateurs_tenant')
     .select(`
@@ -148,10 +119,8 @@ authRouter.post('/login', async (c) => {
     return c.json({ error: 'Votre compte est suspendu. Contactez le support.' }, 403)
   }
 
-  // §2 — Pose des cookies httpOnly (source d'authentification principale pour le dashboard web)
   setAuthCookies(c, data.session.access_token, data.session.refresh_token)
 
-  // Stocker token dans KV_CACHE avec TTL 1h (optionnel)
   if (c.env.KV_CACHE) {
     const sessionKey = `session:${data.session.access_token.slice(-20)}`
     try {
@@ -165,7 +134,6 @@ authRouter.post('/login', async (c) => {
     } catch { /* KV optionnel */ }
   }
 
-  // §1.6 — Audit log connexion (async, non bloquant)
   const adminClient = createSupabaseAdminClient(c.env)
   c.executionCtx.waitUntil(
     adminClient.from('audit_log').insert({
@@ -181,8 +149,6 @@ authRouter.post('/login', async (c) => {
 
   return c.json({
     success: true,
-    // Conservés pour compatibilité clients API/mobile sans cookies.
-    // Le dashboard web n'a plus besoin de les stocker : le cookie httpOnly suffit.
     access_token: data.session.access_token,
     refresh_token: data.session.refresh_token,
     tenant: {
@@ -196,22 +162,17 @@ authRouter.post('/login', async (c) => {
 })
 
 // POST /api/v1/auth/register — Inscription restaurant
-// Auth Supabase + tenant/utilisateur créés dans Supabase (application)
 //
-// CYCLE-3 — Logique plan obligatoire :
-//   - plan_id est OBLIGATOIRE dans le body (plus de fallback silencieux Gratuit)
-//   - Le plan est résolu dans SUPABASE (table `plans`) via `d1_plan_id`, PAS
-//     dans D1 — voir note d'en-tête du fichier (correction 2026-07-31).
-//   - Si plan payant (prix_mensuel > 0) → statut tenant = 'en_attente_paiement_initial'
-//     Le client doit d'abord soumettre une preuve de paiement avant d'accéder au dashboard.
-//   - Si plan gratuit (prix_mensuel = 0) → statut tenant = 'essai' (comportement classique)
-//   - plan_initial_id stocké (UUID Supabase en texte) pour affichage dans la
-//     section abonnement avant la première soumission de preuve.
+// MIGRATION PLANS — plan_id (OBLIGATOIRE dans le body) est désormais
+// l'UUID Supabase natif du plan choisi (le front l'a récupéré directement
+// depuis GET /api/v1/plans, Supabase). Recherche directe par `id`, plus
+// aucune résolution via `d1_plan_id`.
+//   - plan payant (prix_mensuel > 0) → statut tenant = 'en_attente_paiement_initial'
+//   - plan gratuit (prix_mensuel = 0) → statut tenant = 'essai'
 authRouter.post('/register', async (c) => {
   setSecurityHeaders(c)
   const ip = c.req.header('CF-Connecting-IP') ?? 'unknown'
 
-  // Rate limiting : 15 inscriptions / heure par IP
   const rateLimit = await checkRateLimit(`auth_register:${ip}`, 15, 3600000)
   if (!rateLimit.allowed) {
     return c.json({ error: 'Trop de tentatives. Réessayez dans une heure.' }, 429)
@@ -220,9 +181,7 @@ authRouter.post('/register', async (c) => {
   let body: {
     email?: string; password?: string; nom_restaurant?: string
     whatsapp_number?: string; nom_gerant?: string
-    plan_id?: string  // OBLIGATOIRE — slug D1 du plan choisi (ex: "plan_faso"),
-                       // résolu ci-dessous vers la ligne Supabase correspondante
-                       // via plans.d1_plan_id.
+    plan_id?: string  // UUID Supabase natif du plan choisi (obligatoire)
   }
   try { body = await c.req.json() }
   catch { return c.json({ error: 'JSON invalide.' }, 400) }
@@ -233,7 +192,6 @@ authRouter.post('/register', async (c) => {
     return c.json({ error: 'Tous les champs sont requis.' }, 422)
   }
 
-  // CYCLE-3 — plan_id obligatoire : plus de fallback silencieux
   if (!body.plan_id || typeof body.plan_id !== 'string' || body.plan_id.trim().length === 0) {
     return c.json({ error: 'Veuillez choisir un plan pour continuer.' }, 422)
   }
@@ -254,7 +212,6 @@ authRouter.post('/register', async (c) => {
   const supabase = createSupabaseClient(c.env)
   const adminClient = createSupabaseAdminClient(c.env)
 
-  // Vérifier unicité du slug dans Supabase (APPLICATION)
   const { data: existingSlug } = await supabase
     .from('tenants')
     .select('id')
@@ -266,17 +223,14 @@ authRouter.post('/register', async (c) => {
     slug = slug + '-' + Date.now().toString(36).slice(-4)
   }
 
-  // CORRECTION 2026-07-31 — Valider le plan choisi dans SUPABASE (pas D1).
-  // body.plan_id est le slug D1 (ex: "plan_faso") affiché par la page
-  // publique /inscription (qui lit encore /api/v1/plans → D1). On résout
-  // ce slug vers la ligne Supabase correspondante via `d1_plan_id`, qui
-  // porte le vrai UUID à utiliser pour tenants.plan_id.
+  // MIGRATION — recherche directe par l'UUID Supabase natif du plan.
+  // Plus de lookup via `d1_plan_id` : body.plan_id EST déjà l'id Supabase.
   let planChoisi: { id: string; nom: string; prix_mensuel: number } | null = null
   try {
     const { data: planRow, error: planError } = await adminClient
       .from('plans')
       .select('id, nom, prix_mensuel')
-      .eq('d1_plan_id', body.plan_id.trim())
+      .eq('id', body.plan_id.trim())
       .eq('actif', true)
       .limit(1)
       .maybeSingle()
@@ -294,14 +248,9 @@ authRouter.post('/register', async (c) => {
     return c.json({ error: 'Plan invalide ou inactif. Veuillez choisir un plan valide.' }, 422)
   }
 
-  // CYCLE-3 — Déterminer le statut initial selon le type de plan :
-  //   - plan gratuit (prix_mensuel = 0) → 'essai' : accès direct au dashboard
-  //   - plan payant (prix_mensuel > 0) → 'en_attente_paiement_initial' :
-  //     bloqué jusqu'à soumission de preuve de paiement
   const estPlanGratuit = planChoisi.prix_mensuel === 0
   const statutInitial = estPlanGratuit ? 'essai' : 'en_attente_paiement_initial'
 
-  // Créer compte Supabase Auth
   const { data: authData, error: authError } = await supabase.auth.signUp({
     email,
     password,
@@ -317,8 +266,6 @@ authRouter.post('/register', async (c) => {
     return c.json({ error: authError?.message ?? 'Erreur lors de la création du compte.' }, 500)
   }
 
-  // pays_id lu depuis SUPABASE (pas D1), car c'est la table Supabase "pays"
-  // que la contrainte FK tenants_pays_id_fkey vérifie.
   const { data: paysSupabase } = await adminClient
     .from('pays')
     .select('id')
@@ -328,13 +275,6 @@ authRouter.post('/register', async (c) => {
 
   const now = new Date().toISOString()
 
-  // Créer le tenant dans SUPABASE (APPLICATION)
-  // CYCLE-3 + CORRECTION 2026-07-31 :
-  //   - statut selon type plan (essai vs en_attente_paiement_initial)
-  //   - plan_initial_id = UUID Supabase du plan choisi, en texte (pour
-  //     affichage dans section abonnement avant confirmation)
-  //   - plan_id = null si payant (renseigné à la confirmation du paiement)
-  //             = planChoisi.id (UUID Supabase, valide) si gratuit
   const { data: newTenant, error: tenantInsertError } = await adminClient
     .from('tenants')
     .insert({
@@ -346,7 +286,7 @@ authRouter.post('/register', async (c) => {
       couleur_secondaire: '#1D4ED8',
       statut: statutInitial,
       plan_id: estPlanGratuit ? planChoisi.id : null,
-      plan_initial_id: planChoisi.id,  // UUID Supabase (texte), toujours stocké pour référence
+      plan_initial_id: planChoisi.id,
       metadata: {}
     })
     .select('id, slug')
@@ -357,7 +297,6 @@ authRouter.post('/register', async (c) => {
     return c.json({ error: 'Erreur lors de la création du restaurant.' }, 500)
   }
 
-  // Créer point de vente principal dans SUPABASE (APPLICATION)
   await adminClient
     .from('points_de_vente')
     .insert({
@@ -367,7 +306,6 @@ authRouter.post('/register', async (c) => {
       actif: true
     })
 
-  // Lier utilisateur Supabase Auth au tenant dans SUPABASE (APPLICATION)
   await adminClient
     .from('utilisateurs_tenant')
     .insert({
@@ -377,20 +315,15 @@ authRouter.post('/register', async (c) => {
       nom: nom_gerant
     })
 
-  // Session auto si email confirmation non requise
   let sessionData: { access_token?: string; refresh_token?: string } = {}
   if (authData.session) {
     sessionData = {
       access_token: authData.session.access_token,
       refresh_token: authData.session.refresh_token
     }
-    // §2 — Pose des cookies httpOnly dès l'inscription si la session est immédiate
     setAuthCookies(c, authData.session.access_token, authData.session.refresh_token)
   }
 
-  // CYCLE-3 — redirect_to différent selon le type de plan :
-  //   plan payant → /dashboard/abonnement (soumission preuve obligatoire avant tout)
-  //   plan gratuit → /bienvenue (accès direct)
   const redirectTo = estPlanGratuit ? '/bienvenue' : '/dashboard/abonnement'
 
   return c.json({
@@ -423,7 +356,6 @@ authRouter.post('/register', async (c) => {
 authRouter.post('/logout', async (c) => {
   setSecurityHeaders(c)
 
-  // Le token peut venir du cookie ou du header, selon le client
   const cookieToken = getCookie(c, ACCESS_TOKEN_COOKIE)
   const authHeader = c.req.header('Authorization')
   const headerToken = authHeader?.replace('Bearer ', '')
@@ -434,15 +366,12 @@ authRouter.post('/logout', async (c) => {
     try { await c.env.KV_CACHE.delete(sessionKey) } catch {}
   }
 
-  // §2 — Effacer les cookies httpOnly côté navigateur
   clearAuthCookies(c)
 
   return c.json({ success: true })
 })
 
 // POST /api/v1/auth/refresh — Refresh token Supabase
-// §2 — Accepte le refresh token depuis le cookie httpOnly en priorité,
-// avec fallback sur le body JSON pour les clients API/mobile.
 authRouter.post('/refresh', async (c) => {
   setSecurityHeaders(c)
 
@@ -467,7 +396,6 @@ authRouter.post('/refresh', async (c) => {
     return c.json({ error: 'Session expirée. Reconnectez-vous.' }, 401)
   }
 
-  // §2 — Reposer les cookies avec les nouveaux tokens
   setAuthCookies(c, data.session.access_token, data.session.refresh_token)
 
   return c.json({
@@ -477,10 +405,9 @@ authRouter.post('/refresh', async (c) => {
 })
 
 // ============================================================
-// §1.7 — Récupération mot de passe par OTP 6 chiffres (Supabase)
+// Récupération mot de passe par OTP 6 chiffres (Supabase)
 // ============================================================
 
-// POST /api/v1/auth/forgot-password
 authRouter.post('/forgot-password', async (c) => {
   setSecurityHeaders(c)
   const ip = c.req.header('CF-Connecting-IP') ?? 'unknown'
@@ -490,13 +417,11 @@ authRouter.post('/forgot-password', async (c) => {
   let body: { email?: string }
   try { body = await c.req.json() } catch { return c.json({ error: 'JSON invalide.' }, 400) }
 
-  // Réponse générique — ne jamais confirmer l'existence d'un compte
   if (!body.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(body.email)) {
     return c.json({ message: "Si ce compte existe, un code OTP a été envoyé." })
   }
 
   const supabase = createSupabaseClient(c.env)
-  // signInWithOtp envoie un OTP 6 chiffres par email (shouldCreateUser:false = pas de création)
   await supabase.auth.signInWithOtp({
     email: body.email.toLowerCase().trim(),
     options: { shouldCreateUser: false }
@@ -505,7 +430,6 @@ authRouter.post('/forgot-password', async (c) => {
   return c.json({ message: "Si ce compte existe, un code OTP à 6 chiffres a été envoyé à votre adresse." })
 })
 
-// POST /api/v1/auth/verify-otp
 authRouter.post('/verify-otp', async (c) => {
   setSecurityHeaders(c)
   const ip = c.req.header('CF-Connecting-IP') ?? 'unknown'
@@ -527,8 +451,6 @@ authRouter.post('/verify-otp', async (c) => {
 
   if (error || !data.session) return c.json({ error: 'Code OTP invalide ou expiré.' }, 401)
 
-  // §2 — Session temporaire posée en cookie également, pour que
-  // reset-password (étape suivante) fonctionne sans dépendre du localStorage.
   setAuthCookies(c, data.session.access_token, data.session.refresh_token)
 
   return c.json({
@@ -538,7 +460,6 @@ authRouter.post('/verify-otp', async (c) => {
   })
 })
 
-// POST /api/v1/auth/reset-password  (token issu de verify-otp, via cookie ou Bearer)
 authRouter.post('/reset-password', async (c) => {
   setSecurityHeaders(c)
 
@@ -555,7 +476,6 @@ authRouter.post('/reset-password', async (c) => {
     return c.json({ error: 'Mot de passe trop court (8 caractères minimum).' }, 422)
   }
 
-  // Créer un client supabase avec le token de l'utilisateur
   const supabase = createSupabaseClient(c.env)
   const { error: userError } = await supabase.auth.getUser(token)
   if (userError) {
