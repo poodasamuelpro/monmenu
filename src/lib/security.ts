@@ -1,30 +1,22 @@
 // Module sécurité : CSRF, rate limiting, validation, idempotency
-// Section 11 du cahier des charges
 //
-// FIX (correctif QR code) — api.qrserver.com ajouté à img-src ET connect-src
-// de la CSP, au même titre que mapbox/openstreetmap. Le dashboard charge
-// désormais l'image QR directement depuis qrserver.com (pas de proxy serveur),
-// donc le navigateur doit être autorisé à charger cette origine.
+// AJOUT — CommandeSchema.items[].supplement_ids : IDs des suppléments
+// choisis par le client pour chaque ligne de commande. Le PRIX n'est
+// jamais transmis ici — uniquement les UUID, dont le prix réel est
+// recalculé côté serveur depuis la table `supplements` (voir
+// api-commandes.ts), exactement comme le code promo existant.
 
 import { Context } from 'hono'
 import { z } from 'zod'
 import type { Env } from '../types/database'
 
 // ---- Rate Limiting ----
-// §6.1 — Rate limiting distribué via Cloudflare KV (remplace Map in-memory)
-// La Map in-memory est non distribuée : chaque isolate Cloudflare a son propre état,
-// ce qui rend le rate limiting inefficace en production multi-isolate.
-// Avec KV + TTL, le compteur est partagé entre tous les isolates.
 
 interface RateLimitEntry {
   count: number
   resetAt: number
 }
 
-/**
- * §6.1 — Rate limiting distribué via KV.
- * Fallback sur in-memory si KV_CACHE absent (§8 — KV_CACHE optionnel).
- */
 const _rateLimitStoreFallback = new Map<string, RateLimitEntry>()
 
 export async function checkRateLimit(
@@ -35,7 +27,6 @@ export async function checkRateLimit(
 ): Promise<{ allowed: boolean; remaining: number; resetAt: number }> {
   const now = Date.now()
 
-  // --- KV distribué (prioritaire) ---
   if (kv) {
     const kvKey = `rl:${key}`
     const raw = await kv.get(kvKey, 'json') as RateLimitEntry | null
@@ -57,8 +48,6 @@ export async function checkRateLimit(
     return { allowed: true, remaining: maxRequests - newCount, resetAt: raw.resetAt }
   }
 
-  // --- Fallback in-memory (si KV_CACHE absent) ---
-  // §8 — warning loggé au niveau supérieur si KV absent
   const entry = _rateLimitStoreFallback.get(key)
 
   if (!entry || now > entry.resetAt) {
@@ -88,7 +77,7 @@ export async function storeIdempotency(
   key: string,
   data: unknown,
   kv: KVNamespace,
-  ttlSeconds: number = 86400 // 24h
+  ttlSeconds: number = 86400
 ): Promise<void> {
   await kv.put(`idempotency:${key}`, JSON.stringify(data), { expirationTtl: ttlSeconds })
 }
@@ -106,10 +95,12 @@ export const CommandeSchema = z.object({
   items: z.array(z.object({
     produit_id: z.string().uuid(),
     quantite: z.number().int().min(1).max(50),
-    variante_id: z.string().uuid().optional()
+    variante_id: z.string().uuid().optional(),
+    // AJOUT — suppléments choisis pour cette ligne (IDs uniquement, prix
+    // jamais transmis par le client — recalculé serveur, voir api-commandes.ts)
+    supplement_ids: z.array(z.string().uuid()).max(10).optional()
   })).min(1).max(30),
   mode_paiement: z.enum(['especes_livraison', 'mobile_money', 'carte_bancaire']),
-  // §1.9 — Mode livraison : livraison à domicile ou retrait sur place
   mode_livraison: z.enum(['livraison', 'emporter']).default('livraison'),
   code_promo: z.string().max(50).optional(),
   idempotency_key: z.string().uuid(),
@@ -134,10 +125,6 @@ export const ProduitSchema = z.object({
 })
 
 // ---- Headers sécurité ----
-/**
- * §6.2 — Génère un nonce CSP cryptographiquement aléatoire.
- * À appeler une fois par requête et passer aux templates SSR pour les <script> inline.
- */
 export function generateCspNonce(): string {
   const array = new Uint8Array(16)
   crypto.getRandomValues(array)
@@ -145,7 +132,6 @@ export function generateCspNonce(): string {
 }
 
 export function setSecurityHeaders(c: Context, nonce?: string): void {
-  // §6.2 — Utiliser un nonce si fourni, sinon 'unsafe-inline' en fallback de développement
   const scriptSrcDirective = nonce
     ? `'nonce-${nonce}' cdn.tailwindcss.com cdn.jsdelivr.net api.mapbox.com`
     : `'unsafe-inline' cdn.tailwindcss.com cdn.jsdelivr.net api.mapbox.com`
@@ -160,8 +146,6 @@ export function setSecurityHeaders(c: Context, nonce?: string): void {
     `default-src 'self'; ` +
     `script-src 'self' ${scriptSrcDirective}; ` +
     `style-src 'self' 'unsafe-inline' cdn.tailwindcss.com cdn.jsdelivr.net api.mapbox.com fonts.googleapis.com; ` +
-    // FIX QR code : api.qrserver.com ajouté (image du QR chargée directement
-    // par le dashboard, comme mapbox/openstreetmap déjà autorisés ici).
     `img-src 'self' data: blob: *.mapbox.com *.openstreetmap.org *.supabase.co *.tile.openstreetmap.org api.qrserver.com image.thum.io; ` +
     `connect-src 'self' *.supabase.co api.mapbox.com events.mapbox.com api.openweathermap.org graph.facebook.com nominatim.openstreetmap.org api.qrserver.com; ` +
     `font-src 'self' fonts.gstatic.com cdn.jsdelivr.net; ` +
@@ -188,7 +172,7 @@ export function sanitizeSlug(input: string): string {
   return input
     .toLowerCase()
     .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '') // supprimer accents
+    .replace(/[\u0300-\u036f]/g, '')
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .slice(0, 50)
