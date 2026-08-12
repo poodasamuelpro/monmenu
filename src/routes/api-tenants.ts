@@ -1,4 +1,4 @@
-// API Tenants (Restaurants) — gestion publique + dashboard
+// API Tenants (Restaurants) — gestion publique + dashboard 
 // ARCHITECTURE :
 //   • D1 (Cloudflare) → SITE WEB uniquement : config_globale, pays
 //   • Supabase (PostgreSQL) → APPLICATION : tenants, menu, points_de_vente,
