@@ -27,6 +27,10 @@
 // n'a pas été obtenue en mode livraison, ce qui rend visible pourquoi le
 // bouton est désactivé (la position GPS est désormais obligatoire pour
 // garantir que le message WhatsApp final contient les liens Maps/Waze).
+//
+// FIX 2026-08-12 — Retrait de l'icône WhatsApp flottante qui se trouvait en
+// haut à droite de la bannière (bouton rond vert superposé à l'image). Le
+// contact WhatsApp direct reste disponible via le footer (section Contact).
 import { renderHead, jsonLdRestaurant } from '../components/head'
 
 export interface TenantBoutique {
@@ -288,16 +292,6 @@ export function renderBoutiquePage(tenant: TenantBoutique, nomProjet: string): s
           ? `<img src="${tenant.logo_url}" alt="${tenant.nom}" class="logo-medaillon rounded-2xl border-4 border-white shadow-lg bg-white">`
           : `<div class="w-16 h-16 rounded-2xl flex items-center justify-center text-white font-bold text-xl border-4 border-white shadow-lg" style="background-color:${primaryColor}">${tenant.nom.charAt(0)}</div>`
         }
-      </div>
-
-      <!-- Action rapide WhatsApp (contact direct), en haut à droite de la bannière -->
-      <div class="absolute top-3 right-3 flex items-center gap-2">
-        <a href="https://wa.me/${whatsappNumeroPropre}"
-           target="_blank" rel="noopener"
-           class="flex-shrink-0 w-10 h-10 rounded-xl bg-green-500 hover:bg-green-600 flex items-center justify-center text-white shadow-sm transition-colors"
-           title="Contacter sur WhatsApp">
-          <i class="fa-brands fa-whatsapp text-lg"></i>
-        </a>
       </div>
     </div>
 
