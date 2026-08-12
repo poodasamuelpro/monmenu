@@ -5,6 +5,13 @@
 // jamais transmis ici — uniquement les UUID, dont le prix réel est
 // recalculé côté serveur depuis la table `supplements` (voir
 // api-commandes.ts), exactement comme le code promo existant.
+//
+// FIX CSP — connect-src ajoute désormais explicitement wss://*.supabase.co
+// (en plus de https://*.supabase.co) pour autoriser la connexion
+// WebSocket de Supabase Realtime, bloquée auparavant par la CSP
+// (le navigateur ne fait pas d'upgrade implicite https -> wss dans le
+// matching CSP). Sans ce correctif, initRealtimeCommandes() échouait en
+// CHANNEL_ERROR et basculait systématiquement sur le fallback polling.
 
 import { Context } from 'hono'
 import { z } from 'zod'
@@ -147,7 +154,7 @@ export function setSecurityHeaders(c: Context, nonce?: string): void {
     `script-src 'self' ${scriptSrcDirective}; ` +
     `style-src 'self' 'unsafe-inline' cdn.tailwindcss.com cdn.jsdelivr.net api.mapbox.com fonts.googleapis.com; ` +
     `img-src 'self' data: blob: *.mapbox.com *.openstreetmap.org *.supabase.co *.tile.openstreetmap.org api.qrserver.com image.thum.io; ` +
-    `connect-src 'self' *.supabase.co api.mapbox.com events.mapbox.com api.openweathermap.org graph.facebook.com nominatim.openstreetmap.org api.qrserver.com; ` +
+    `connect-src 'self' https://*.supabase.co wss://*.supabase.co api.mapbox.com events.mapbox.com api.openweathermap.org graph.facebook.com nominatim.openstreetmap.org api.qrserver.com; ` +
     `font-src 'self' fonts.gstatic.com cdn.jsdelivr.net; ` +
     `frame-ancestors 'none';`
   )
