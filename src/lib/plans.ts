@@ -1,4 +1,4 @@
-// src/lib/plans.ts
+// src/lib/plans.ts 
 // ─────────────────────────────────────────────────────────────────────────
 // MIGRATION — Supabase `plans` est désormais l'UNIQUE source de vérité
 // pour les plans (nom, prix, fonctionnalités). D1 n'est plus consulté nulle
