@@ -11,6 +11,14 @@
  * échouait silencieusement car le plan_id envoyé ne correspondait plus au
  * schéma attendu.
  *
+ * CORRECTIF — la mise à jour de `tenants` juste après l'insertion de
+ * l'abonnement est désormais protégée par un try/catch non bloquant.
+ * Avant ce correctif, une erreur transitoire sur cette seule ligne faisait
+ * planter TOUTE la requête (500 "Erreur interne du serveur") alors que
+ * l'abonnement était déjà enregistré en base — et empêchait surtout
+ * l'insertion de la notification "Preuve de paiement reçue" juste en
+ * dessous, qui ne s'exécutait donc jamais.
+ *
  * Routes exposées :
  *   GET  /api/v1/paiement/statut        — Statut abonnement actuel + référence + délai
  *   GET  /api/v1/paiement/reference     — Génère ou retourne la référence active
@@ -245,11 +253,7 @@ paiementRouter.get('/reference', async (c) => {
  *
  * MIGRATION — plan_id reçu du formulaire est désormais l'UUID Supabase
  * natif (peuplé depuis /api/v1/plans, Supabase). Vérifié via chargerPlan()
- * au lieu d'une requête D1 directe. C'est le fix du bug "Erreur lors de la
- * vérification du plan." : l'ancien code lisait D1 avec une colonne
- * `devise` potentiellement absente/désynchronisée après la migration
- * CYCLE-3 — ce risque disparaît complètement puisque D1 n'est plus
- * consulté ici.
+ * au lieu d'une requête D1 directe.
  */
 paiementRouter.post('/soumettre', async (c) => {
   setSecurityHeaders(c)
@@ -312,7 +316,7 @@ paiementRouter.post('/soumettre', async (c) => {
   const adminClient = createSupabaseAdminClient(c.env)
 
   // MIGRATION — vérification du plan directement en Supabase (UUID natif),
-  // plus de requête D1. C'est le fix du bug historique de cette route.
+  // plus de requête D1.
   const planRow = await chargerPlan(c.env, planId)
   if (!planRow) {
     return c.json({ error: 'Plan introuvable ou inactif.' }, 404)
@@ -396,14 +400,26 @@ paiementRouter.post('/soumettre', async (c) => {
     return c.json({ error: 'Erreur lors de l\'enregistrement du paiement.' }, 500)
   }
 
-  await adminClient
-    .from('tenants')
-    .update({
-      paiement_en_attente_depuis: now.toISOString(),
-      reference_paiement_active: reference,
-      updated_at: now.toISOString()
-    })
-    .eq('id', auth.tenant_id)
+  // CORRECTIF CRITIQUE — cette mise à jour est désormais protégée par un
+  // try/catch NON BLOQUANT. Avant, une erreur ici (même transitoire)
+  // faisait planter toute la requête (500 "Erreur interne du serveur")
+  // alors que l'abonnement était déjà enregistré, ET empêchait surtout
+  // l'insertion de la notification restaurant juste en dessous de
+  // s'exécuter. L'abonnement étant l'information faisant foi (déjà en
+  // base à ce stade), on ne bloque plus jamais la réponse pour cette
+  // mise à jour secondaire.
+  try {
+    await adminClient
+      .from('tenants')
+      .update({
+        paiement_en_attente_depuis: now.toISOString(),
+        reference_paiement_active: reference,
+        updated_at: now.toISOString()
+      })
+      .eq('id', auth.tenant_id)
+  } catch (err) {
+    console.error(`[PAIEMENT] Erreur non bloquante update tenant — tenant: ${auth.tenant_id.slice(0, 8)}...`, err instanceof Error ? err.message : err)
+  }
 
   if (c.env.KV_CACHE) {
     try { await c.env.KV_CACHE.delete(`tenant:${auth.tenant_slug}`) } catch {}
