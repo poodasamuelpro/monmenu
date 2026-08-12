@@ -1,5 +1,5 @@
 /**
- * src/routes/api-admin-paiements.ts — Administration des paiements manuels
+ * src/routes/api-admin-paiements.ts — Administration des paiements manuels 
  *
  * MIGRATION PLANS — abonnement.plan_id EST désormais directement l'UUID
  * Supabase natif (stocké tel quel par POST /api/v1/paiement/soumettre).
