@@ -1909,4 +1909,207 @@ async function exportCodesPromo() {
 async function loadPdv() {
   const content = document.getElementById('dashboard-content');
   content.innerHTML = `<div class="text-center py-8"><i class="fa-solid fa-circle-notch fa-spin text-xl text-gray-400"></i></div>`;
- 
+  try {
+    const res = await dashFetch('/api/v1/dashboard/pdv');
+    if (!res.ok) throw new Error();
+    const data = await res.json();
+    renderPdvConfig(data.pdv, content);
+  } catch {
+    content.innerHTML = '<p class="text-red-500 text-sm p-4">Erreur de chargement du point de vente.</p>';
+  }
+}
+
+function parsePdvHoraires(raw) {
+  if (!raw) return {};
+  try { return typeof raw === 'string' ? JSON.parse(raw) : raw; } catch { return {}; }
+}
+
+function renderPdvConfig(pdv, container) {
+  container.innerHTML = `
+    <div class="max-w-lg space-y-4">
+      <div class="bg-white rounded-2xl border border-gray-100 p-6">
+        <h2 class="font-bold text-gray-900 mb-1">Point de vente</h2>
+        <p class="text-sm text-gray-500 mb-5">Configurez l'adresse et les coordonnées GPS.</p>
+        <form onsubmit="savePdv(event)" class="space-y-4">
+          <div>
+            <label class="block text-sm font-semibold text-gray-700 mb-1.5">Nom du point de vente</label>
+            <input id="pdv-nom" type="text" maxlength="100" value="${escHtml(pdv?.nom||'')}" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200" placeholder="Restaurant principal">
+          </div>
+          <div>
+            <label class="block text-sm font-semibold text-gray-700 mb-1.5">Adresse complète</label>
+            <input id="pdv-adresse" type="text" maxlength="200" value="${escHtml(pdv?.adresse||'')}" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200" placeholder="Quartier, rue, ville...">
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block text-sm font-semibold text-gray-700 mb-1.5">Latitude GPS</label>
+              <input id="pdv-lat" type="number" step="0.000001" min="-90" max="90" value="${pdv?.latitude??''}" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200" placeholder="12.3569">
+            </div>
+            <div>
+              <label class="block text-sm font-semibold text-gray-700 mb-1.5">Longitude GPS</label>
+              <input id="pdv-lon" type="number" step="0.000001" min="-180" max="180" value="${pdv?.longitude??''}" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200" placeholder="-1.5353">
+            </div>
+          </div>
+          <button type="button" onclick="useMyLocation()" class="w-full border border-gray-200 text-gray-700 font-semibold text-sm py-2.5 rounded-xl hover:bg-gray-50 flex items-center justify-center gap-2">
+            <i class="fa-solid fa-location-crosshairs"></i> Utiliser ma position actuelle
+          </button>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block text-sm font-semibold text-gray-700 mb-1.5">Tarif base (FCFA)</label>
+              <input id="pdv-tarif-base" type="number" min="0" max="99999" step="100" value="${pdv?.tarif_livraison_base??500}" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200">
+              <p class="text-xs text-gray-400 mt-1">Frais fixes min.</p>
+            </div>
+            <div>
+              <label class="block text-sm font-semibold text-gray-700 mb-1.5">Tarif par km (FCFA)</label>
+              <input id="pdv-tarif-km" type="number" min="0" max="9999" step="50" value="${pdv?.tarif_par_km??200}" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200">
+              <p class="text-xs text-gray-400 mt-1">Frais par km.</p>
+            </div>
+          </div>
+          <div>
+            <label class="block text-sm font-semibold text-gray-700 mb-2">Horaires d'ouverture</label>
+            <div id="pdv-horaires-container" class="bg-gray-50 rounded-xl p-3"></div>
+            <p class="text-xs text-gray-400 mt-1.5">Ces horaires déterminent le badge « Ouvert / Fermé » sur votre boutique.</p>
+          </div>
+          <p id="pdv-feedback" class="text-xs hidden rounded-lg px-3 py-2"></p>
+          <button type="submit" id="pdv-submit-btn" class="w-full bg-red-600 text-white font-bold py-3 rounded-xl hover:bg-red-700 disabled:bg-gray-300 disabled:cursor-not-allowed">
+            <i class="fa-solid fa-floppy-disk mr-1.5"></i> Enregistrer
+          </button>
+        </form>
+      </div>
+      ${pdv?.latitude && pdv?.longitude ?
+      `<div class="bg-green-50 border border-green-100 rounded-2xl p-4 text-sm text-green-700">
+        <i class="fa-solid fa-circle-check mr-1.5"></i>GPS configuré : <strong>${pdv.latitude}, ${pdv.longitude}</strong><br>
+        Frais de livraison calculés automatiquement.</div>` :
+      `<div class="bg-orange-50 border border-orange-100 rounded-2xl p-4 text-sm text-orange-700">
+        <i class="fa-solid fa-triangle-exclamation mr-1.5"></i>GPS non configuré. Le calcul des frais de livraison nécessite vos coordonnées GPS.</div>`}
+    </div>`;
+  renderPdvHorairesEditor(parsePdvHoraires(pdv?.horaires));
+}
+
+function renderPdvHorairesEditor(horaires) {
+  const container = document.getElementById('pdv-horaires-container');
+  if (!container) return;
+  container.innerHTML = JOURS_SEMAINE.map(jour => {
+    const entry = horaires[jour] || {};
+    const ouvert = entry.ouvert !== false;
+    const debut = entry.debut || '08:00';
+    const fin = entry.fin || '22:00';
+    return `<div class="flex items-center gap-3 py-2.5 border-b border-gray-200/70 last:border-0">
+      <div class="w-20 text-sm font-medium text-gray-700 flex-shrink-0">${JOURS_LABELS[jour]}</div>
+      <label class="relative inline-flex items-center cursor-pointer flex-shrink-0">
+        <input type="checkbox" id="pdv-h-${jour}-ouvert" class="sr-only peer" ${ouvert ? 'checked' : ''} onchange="_togglePdvHoraire('${jour}')">
+        <div class="w-9 h-5 bg-gray-300 rounded-full peer peer-checked:bg-red-600 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-4"></div>
+      </label>
+      <div id="pdv-h-${jour}-times" class="flex items-center gap-1.5 flex-1 ${ouvert ? '' : 'hidden'}">
+        <input type="time" id="pdv-h-${jour}-debut" value="${debut}" class="border border-gray-200 rounded-lg px-2 py-1.5 text-xs w-[6.5rem] bg-white">
+        <span class="text-gray-400 text-xs">–</span>
+        <input type="time" id="pdv-h-${jour}-fin" value="${fin}" class="border border-gray-200 rounded-lg px-2 py-1.5 text-xs w-[6.5rem] bg-white">
+      </div>
+      <span id="pdv-h-${jour}-closed" class="${ouvert ? 'hidden' : ''} text-xs text-gray-400 italic ml-auto">Fermé</span>
+    </div>`;
+  }).join('');
+}
+
+function _togglePdvHoraire(jour) {
+  const checked = document.getElementById('pdv-h-' + jour + '-ouvert').checked;
+  document.getElementById('pdv-h-' + jour + '-times').classList.toggle('hidden', !checked);
+  document.getElementById('pdv-h-' + jour + '-closed').classList.toggle('hidden', checked);
+}
+
+function collecterPdvHoraires() {
+  const horaires = {};
+  JOURS_SEMAINE.forEach(jour => {
+    const ouvertEl = document.getElementById('pdv-h-' + jour + '-ouvert');
+    const ouvert = ouvertEl ? ouvertEl.checked : false;
+    horaires[jour] = {
+      ouvert,
+      debut: ouvert ? document.getElementById('pdv-h-' + jour + '-debut').value : null,
+      fin: ouvert ? document.getElementById('pdv-h-' + jour + '-fin').value : null
+    };
+  });
+  return horaires;
+}
+
+function useMyLocation() {
+  if (!navigator.geolocation) { alert('Géolocalisation non supportée.'); return; }
+  navigator.geolocation.getCurrentPosition(pos => {
+    document.getElementById('pdv-lat').value = pos.coords.latitude.toFixed(6);
+    document.getElementById('pdv-lon').value = pos.coords.longitude.toFixed(6);
+    const fb = document.getElementById('pdv-feedback');
+    if (fb) {
+      fb.textContent = 'Position : ' + pos.coords.latitude.toFixed(4) + ', ' + pos.coords.longitude.toFixed(4);
+      fb.className = 'text-xs bg-green-50 text-green-700 rounded-lg px-3 py-2'; fb.classList.remove('hidden');
+    }
+  }, () => alert('Impossible d\'obtenir votre position.'));
+}
+
+async function savePdv(e) {
+  e.preventDefault();
+  const fb = document.getElementById('pdv-feedback');
+  const submitBtn = document.getElementById('pdv-submit-btn');
+  if (fb) fb.classList.add('hidden');
+  if (submitBtn) submitBtn.disabled = true;
+
+  const latRaw = document.getElementById('pdv-lat').value.trim();
+  const lonRaw = document.getElementById('pdv-lon').value.trim();
+
+  const data = {
+    nom: document.getElementById('pdv-nom').value.trim(),
+    adresse: document.getElementById('pdv-adresse').value.trim(),
+    latitude: latRaw === '' ? null : parseFloat(latRaw),
+    longitude: lonRaw === '' ? null : parseFloat(lonRaw),
+    tarif_livraison_base: parseFloat(document.getElementById('pdv-tarif-base').value) || 0,
+    tarif_par_km: parseFloat(document.getElementById('pdv-tarif-km').value) || 0,
+    horaires: JSON.stringify(collecterPdvHoraires())
+  };
+
+  if (data.latitude !== null && (isNaN(data.latitude) || data.latitude < -90 || data.latitude > 90)) {
+    if (fb) {
+      fb.textContent = 'Latitude invalide (doit être comprise entre -90 et 90).';
+      fb.className = 'text-xs bg-red-50 text-red-600 rounded-lg px-3 py-2';
+      fb.classList.remove('hidden');
+    }
+    if (submitBtn) submitBtn.disabled = false;
+    return;
+  }
+  if (data.longitude !== null && (isNaN(data.longitude) || data.longitude < -180 || data.longitude > 180)) {
+    if (fb) {
+      fb.textContent = 'Longitude invalide (doit être comprise entre -180 et 180).';
+      fb.className = 'text-xs bg-red-50 text-red-600 rounded-lg px-3 py-2';
+      fb.classList.remove('hidden');
+    }
+    if (submitBtn) submitBtn.disabled = false;
+    return;
+  }
+
+  try {
+    const res = await dashFetch('/api/v1/dashboard/pdv', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+      body: JSON.stringify(data)
+    });
+    const result = await res.json().catch(() => ({}));
+
+    if (res.ok) {
+      if (fb) {
+        fb.textContent = result.created ? 'Point de vente créé.' : 'Point de vente mis à jour.';
+        fb.className = 'text-xs bg-green-50 text-green-700 rounded-lg px-3 py-2';
+        fb.classList.remove('hidden');
+      }
+      await loadPdv();
+    } else {
+      if (fb) {
+        fb.textContent = result.error || 'Erreur lors de l\'enregistrement.';
+        fb.className = 'text-xs bg-red-50 text-red-600 rounded-lg px-3 py-2';
+        fb.classList.remove('hidden');
+      }
+      if (submitBtn) submitBtn.disabled = false;
+    }
+  } catch {
+    if (fb) {
+      fb.textContent = 'Erreur réseau.';
+      fb.className = 'text-xs bg-red-50 text-red-600 rounded-lg px-3 py-2';
+      fb.classList.remove('hidden');
+    }
+    if (submitBtn) submitBtn.disabled = false;
+  }
+}
