@@ -1,5 +1,5 @@
 // API Commandes - Route Cloudflare Worker
-// ARCHITECTURE :
+// ARCHITECTURE : 
 //   • D1 (Cloudflare) → SITE WEB uniquement : config_globale, pays
 //   • Supabase (PostgreSQL) → APPLICATION : commandes, tenants, produits,
 //     codes_promo, supplements, etc.
