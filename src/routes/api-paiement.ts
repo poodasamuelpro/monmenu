@@ -1,5 +1,5 @@
 /**
- * src/routes/api-paiement.ts — Routes du module paiement manuel MonMenu
+ * src/routes/api-paiement.ts — Routes du module paiement manuel MonMenu 
  *
  * MIGRATION PLANS — tous les plans sont désormais lus depuis Supabase
  * uniquement (chargerPlan(), src/lib/plans.ts). Plus de résolution D1 ↔
