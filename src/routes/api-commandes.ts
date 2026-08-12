@@ -17,6 +17,16 @@
 // inactif, supprimé, ou n'appartenant pas au tenant est silencieusement
 // ignoré (pas d'erreur bloquante — le client peut avoir une vue légèrement
 // périmée du menu, ce n'est pas une raison de faire échouer la commande).
+//
+// CORRECTIF — AJOUT d'une notification in-app (notifications_restaurant)
+// pour chaque nouvelle commande. Cette insertion n'existait pas
+// auparavant : la route envoyait bien un WhatsApp et un push FCM au
+// restaurant, mais n'insérait jamais de ligne dans notifications_restaurant
+// — table lue exclusivement par la cloche de notifications du dashboard
+// (GET /api/v1/dashboard/notifications/liste). Résultat : aucune nouvelle
+// commande n'apparaissait jamais dans l'onglet Notifications, même en
+// production. C'est purement additif — non bloquant (waitUntil + catch
+// silencieux), aucun risque de régression sur la création de commande.
 
 import { Hono } from 'hono'
 import type { Env } from '../types/database'
@@ -360,6 +370,25 @@ commandesRouter.post('/', async (c) => {
       },
       channelId: 'commandes_channel'
     }).catch(() => {})
+  )
+
+  // AJOUT — notification in-app (cloche du dashboard) pour chaque nouvelle
+  // commande. Non bloquant : une erreur ici ne doit jamais faire échouer
+  // la création de la commande elle-même (catch silencieux, comme les
+  // autres notifications de ce fichier).
+  c.executionCtx.waitUntil(
+    adminClient
+      .from('notifications_restaurant')
+      .insert({
+        tenant_id: data.tenant_id,
+        type: 'info',
+        titre: 'Nouvelle commande reçue',
+        message: `Commande de ${data.client_nom} — ${montantTotal.toLocaleString('fr-FR')} FCFA.`,
+        lien: '/dashboard/commandes',
+        payload: { commande_id: commandeId, montant: montantTotal, client: data.client_nom }
+      })
+      .then(() => {})
+      .catch(() => {})
   )
 
   const responseData = {
