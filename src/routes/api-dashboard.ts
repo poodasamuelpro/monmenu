@@ -1,4 +1,4 @@
-// API Dashboard — Routes protégées pour le tableau de bord restaurant
+// API Dashboard — Routes protégées pour le tableau de bord restaurant 
 // ARCHITECTURE :
 //   • D1 (Cloudflare) → SITE WEB uniquement : config_globale, pays
 //   • Supabase (PostgreSQL) → APPLICATION : tenants, commandes, menu,
