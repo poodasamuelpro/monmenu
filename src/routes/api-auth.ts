@@ -1,4 +1,4 @@
-// API Auth — Supabase Auth (connexion, inscription, déconnexion restaurant)
+// API Auth — Supabase Auth (connexion, inscription, déconnexion restaurant) 
 // ARCHITECTURE :
 //   • Supabase Auth  → authentification (signIn, signUp, JWT, refresh)
 //   • Supabase DB    → tenants, utilisateurs_tenant, points_de_vente, plans (APPLICATION)
