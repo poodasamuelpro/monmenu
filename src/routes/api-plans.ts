@@ -1,4 +1,4 @@
-// API Plans/Forfaits — MIGRATION : lecture Supabase UNIQUEMENT.
+// API Plans/Forfaits — MIGRATION : lecture Supabase UNIQUEMENT. 
 //
 // D1 n'est plus consulté ici. Supabase `plans` est la source de vérité
 // unique (nom, prix, fonctionnalités), avec son UUID natif utilisé par
