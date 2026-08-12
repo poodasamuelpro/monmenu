@@ -12,12 +12,26 @@
 // plan choisi (le front le récupère directement depuis GET /api/v1/plans,
 // qui lit maintenant Supabase — voir api-plans.ts). Il n'y a plus de
 // résolution via `plans.d1_plan_id` : on cherche directement par `id`.
+//
+// CORRECTIF LOGIN — la requête sur utilisateurs_tenant juste après
+// signInWithPassword() utilise désormais un client explicitement lié au
+// token de la session qui vient d'être ouverte (createSupabaseClientWithToken),
+// au lieu du client singleton partagé (createSupabaseClient). Le singleton
+// garde un état de session interne mutable ; réutilisé par des requêtes
+// concurrentes sur le même isolate Workers, il pouvait faire exécuter la
+// requête tenant sans session valide → "Aucun restaurant associé à ce
+// compte" de façon intermittente, même pour un compte valide.
+//
+// CORRECTIF REGISTER — la redirection post-inscription est désormais
+// TOUJOURS '/bienvenue', quel que soit le plan choisi (gratuit ou payant).
+// La page bienvenue.ts gère déjà nativement les deux cas (étape 5 pour les
+// plans payants avec formulaire de preuve de paiement intégré).
 
 import { Hono } from 'hono'
 import { setCookie, deleteCookie, getCookie } from 'hono/cookie'
 import type { Env } from '../types/database'
 import { checkRateLimit, setSecurityHeaders, sanitizeSlug } from '../lib/security'
-import { createSupabaseClient, createSupabaseAdminClient } from '../lib/supabase'
+import { createSupabaseClient, createSupabaseClientWithToken, createSupabaseAdminClient } from '../lib/supabase'
 
 const authRouter = new Hono<{ Bindings: Env }>()
 
@@ -97,7 +111,13 @@ authRouter.post('/login', async (c) => {
     return c.json({ error: 'Identifiants incorrects.' }, 401)
   }
 
-  const { data: tenantData, error: tenantError } = await supabase
+  // CORRECTIF — client explicitement lié au token de LA session qui vient
+  // d'être ouverte, plutôt que le singleton partagé (voir note en tête de
+  // fichier). Élimine la race condition responsable du "Aucun restaurant
+  // associé à ce compte" intermittent.
+  const supabaseAvecToken = createSupabaseClientWithToken(c.env, data.session.access_token)
+
+  const { data: tenantData, error: tenantError } = await supabaseAvecToken
     .from('utilisateurs_tenant')
     .select(`
       tenant_id,
@@ -324,7 +344,10 @@ authRouter.post('/register', async (c) => {
     setAuthCookies(c, authData.session.access_token, authData.session.refresh_token)
   }
 
-  const redirectTo = estPlanGratuit ? '/bienvenue' : '/dashboard/abonnement'
+  // CORRECTIF — toujours rediriger vers /bienvenue, quel que soit le plan
+  // choisi. bienvenue.ts (étape 5) gère déjà l'affichage du plan payant
+  // + formulaire de soumission de preuve de paiement intégré.
+  const redirectTo = '/bienvenue'
 
   return c.json({
     success: true,
