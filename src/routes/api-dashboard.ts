@@ -38,6 +38,21 @@
 // accesAbonnementSeul, appliquée UNIQUEMENT à ces 3 routes. Toutes les
 // autres routes opérationnelles (commandes, menu, stats, etc.) restent
 // strictement verifyAuth() / accesComplet, comme avant.
+//
+// CORRECTIF BUG-2 (logo/bannière non enregistrés depuis /bienvenue) —
+// POST /setup-restaurant appelait c.env.R2_MEDIA.put(...) pour le logo
+// et la bannière SANS AUCUN try/catch, contrairement à POST
+// /upload-image (route utilisée par Dashboard > Apparence, qui elle
+// fonctionne correctement et reste inchangée ci-dessous). Si un seul de
+// ces deux upload échouait (réseau, taille, binding R2 momentanément
+// indisponible), TOUTE la requête setup-restaurant plantait avec une
+// exception non interceptée AVANT même d'enregistrer nom/adresse/
+// couleurs/horaires — obligeant l'utilisateur à tout ressaisir. Chaque
+// upload logo/bannière est désormais isolé dans son propre try/catch :
+// un échec d'upload d'image ne fait plus jamais perdre les autres
+// informations du formulaire. La réponse indique maintenant
+// logo_enregistre / banniere_enregistree pour que le front sache si
+// l'image a bien été prise en compte ou s'il faut la retenter.
 
 import { Hono } from 'hono'
 import { getCookie } from 'hono/cookie'
@@ -1372,6 +1387,10 @@ dashboardRouter.get('/profil', async (c) => {
 // updateUser({ password }). Une notification in-app est créée pour que le
 // restaurateur soit informé du changement, avec une alerte s'il n'en est
 // pas à l'origine.
+// (Backend déjà fonctionnel — inchangé. Le bug signalé venait uniquement
+// du front, voir public/static/js/dashboard.js : le bouton "Sécurité" de
+// Paramètres n'appelait jamais cette route, corrigé ci-dessous dans
+// dashboard.js.)
 dashboardRouter.post('/profil/change-password', async (c) => {
   setSecurityHeaders(c)
   const auth = await verifyAuth(c)
@@ -1813,6 +1832,19 @@ dashboardRouter.get('/stats-journalieres', async (c) => {
 // /bienvenue), elle doit rester accessible dans cet état — sinon aucun
 // utilisateur ayant choisi un plan payant ne peut jamais configurer son
 // restaurant.
+//
+// CORRECTIF BUG-2 — chaque upload R2 (logo, bannière) est maintenant
+// isolé dans son propre try/catch. Avant ce correctif, une exception
+// levée pendant l'upload (réseau, binding R2 indisponible, fichier
+// corrompu, etc.) faisait planter TOUTE la requête AVANT l'update de
+// `tenants` et de `points_de_vente` — nom, adresse, couleurs, horaires
+// étaient perdus en même temps que l'image, obligeant à tout ressaisir.
+// Désormais : un échec d'upload d'image n'empêche plus l'enregistrement
+// du reste du formulaire. La réponse expose logo_enregistre et
+// banniere_enregistree pour que le front (bienvenue.ts) puisse avertir
+// l'utilisateur si une image en particulier n'a pas été prise en compte
+// et doit être réessayée (depuis Dashboard > Apparence par exemple, qui
+// fonctionne déjà correctement).
 dashboardRouter.post('/setup-restaurant', async (c) => {
   setSecurityHeaders(c)
   const auth = await verifyAuthOnboarding(c)
@@ -1853,30 +1885,54 @@ dashboardRouter.post('/setup-restaurant', async (c) => {
     try { horairesJson = JSON.parse(horairesRaw) } catch { /* ignore */ }
   }
 
+  // CORRECTIF BUG-2 — upload logo isolé. Un échec ici (réseau, R2
+  // temporairement indisponible, fichier invalide) est loggé mais NE
+  // FAIT PLUS échouer le reste de la requête.
   let logoUrl: string | null = null
+  let logoErreur: string | null = null
   const logoFile = formData.get('logo') as File | null
-  if (logoFile && logoFile.size > 0 && c.env.R2_MEDIA) {
-    const ext = (logoFile.type.split('/')[1] || 'jpg').replace('jpeg', 'jpg')
-    const key = `${auth.tenant_id}/logo-${Date.now()}.${ext}`
-    const buffer = await logoFile.arrayBuffer()
-    await c.env.R2_MEDIA.put(key, buffer, {
-      httpMetadata: { contentType: logoFile.type },
-      customMetadata: { tenant_id: auth.tenant_id }
-    })
-    logoUrl = `${origin}/api/v1/dashboard/media/${encodeURIComponent(key)}`
+  if (logoFile && logoFile.size > 0) {
+    if (!c.env.R2_MEDIA) {
+      logoErreur = 'Stockage médias non configuré.'
+    } else {
+      try {
+        const ext = (logoFile.type.split('/')[1] || 'jpg').replace('jpeg', 'jpg')
+        const key = `${auth.tenant_id}/logo-${Date.now()}.${ext}`
+        const buffer = await logoFile.arrayBuffer()
+        await c.env.R2_MEDIA.put(key, buffer, {
+          httpMetadata: { contentType: logoFile.type },
+          customMetadata: { tenant_id: auth.tenant_id }
+        })
+        logoUrl = `${origin}/api/v1/dashboard/media/${encodeURIComponent(key)}`
+      } catch (err) {
+        logoErreur = err instanceof Error ? err.message : 'Erreur inconnue.'
+        console.error(`[setup-restaurant] Erreur upload logo (non bloquant) — tenant: ${auth.tenant_id.slice(0, 8)}...`, err)
+      }
+    }
   }
 
+  // CORRECTIF BUG-2 — upload bannière isolé, même logique que le logo.
   let banniereUrl: string | null = null
+  let banniereErreur: string | null = null
   const banniereFile = formData.get('banniere') as File | null
-  if (banniereFile && banniereFile.size > 0 && c.env.R2_MEDIA) {
-    const ext = (banniereFile.type.split('/')[1] || 'jpg').replace('jpeg', 'jpg')
-    const key = `${auth.tenant_id}/banniere-${Date.now()}.${ext}`
-    const buffer = await banniereFile.arrayBuffer()
-    await c.env.R2_MEDIA.put(key, buffer, {
-      httpMetadata: { contentType: banniereFile.type },
-      customMetadata: { tenant_id: auth.tenant_id }
-    })
-    banniereUrl = `${origin}/api/v1/dashboard/media/${encodeURIComponent(key)}`
+  if (banniereFile && banniereFile.size > 0) {
+    if (!c.env.R2_MEDIA) {
+      banniereErreur = 'Stockage médias non configuré.'
+    } else {
+      try {
+        const ext = (banniereFile.type.split('/')[1] || 'jpg').replace('jpeg', 'jpg')
+        const key = `${auth.tenant_id}/banniere-${Date.now()}.${ext}`
+        const buffer = await banniereFile.arrayBuffer()
+        await c.env.R2_MEDIA.put(key, buffer, {
+          httpMetadata: { contentType: banniereFile.type },
+          customMetadata: { tenant_id: auth.tenant_id }
+        })
+        banniereUrl = `${origin}/api/v1/dashboard/media/${encodeURIComponent(key)}`
+      } catch (err) {
+        banniereErreur = err instanceof Error ? err.message : 'Erreur inconnue.'
+        console.error(`[setup-restaurant] Erreur upload bannière (non bloquant) — tenant: ${auth.tenant_id.slice(0, 8)}...`, err)
+      }
+    }
   }
 
   const tenantUpdate: Record<string, unknown> = {
@@ -1920,10 +1976,17 @@ dashboardRouter.post('/setup-restaurant', async (c) => {
 
   try { if (c.env.KV_CACHE) await c.env.KV_CACHE.delete(`tenant:${auth.tenant_slug}`) } catch {}
 
+  // CORRECTIF BUG-2 — la réponse indique désormais explicitement si
+  // chaque image a été enregistrée, pour que le front puisse avertir
+  // l'utilisateur sans jamais lui faire perdre le reste du formulaire.
   return c.json({
     success: true,
     message: 'Restaurant configuré avec succès.',
     redirect: '/dashboard/home',
+    logo_enregistre: !!logoUrl,
+    banniere_enregistree: !!banniereUrl,
+    ...(logoErreur ? { logo_erreur: logoErreur } : {}),
+    ...(banniereErreur ? { banniere_erreur: banniereErreur } : {}),
     ...(pdvWarning ? { warning: pdvWarning } : {})
   })
 })
