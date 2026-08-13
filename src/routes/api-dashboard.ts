@@ -43,19 +43,41 @@
 // POST /setup-restaurant appelait c.env.R2_MEDIA.put(...) pour le logo
 // et la bannière SANS AUCUN try/catch, contrairement à POST
 // /upload-image (route utilisée par Dashboard > Apparence, qui elle
-// fonctionne correctement et reste inchangée ci-dessous). Si un seul de
-// ces deux upload échouait (réseau, taille, binding R2 momentanément
-// indisponible), TOUTE la requête setup-restaurant plantait avec une
-// exception non interceptée AVANT même d'enregistrer nom/adresse/
-// couleurs/horaires — obligeant l'utilisateur à tout ressaisir. Chaque
-// upload logo/bannière est désormais isolé dans son propre try/catch :
-// un échec d'upload d'image ne fait plus jamais perdre les autres
-// informations du formulaire. La réponse indique maintenant
-// logo_enregistre / banniere_enregistree pour que le front sache si
-// l'image a bien été prise en compte ou s'il faut la retenter.
+// fonctionne correctement et reste inchangée ci-dessous). Chaque upload
+// logo/bannière est désormais isolé dans son propre try/catch.
+//
+// CORRECTIF BUG-UPLOAD-BIENVENUE (2026-08) — Le BUG-2 ci-dessus réglait
+// l'upload R2 lui-même, mais PAS l'écriture en base. POST
+// /setup-restaurant écrivait via createSupabaseClientWithToken() (client
+// RLS-scopé), qui matchait 0 ligne pour un tenant en
+// 'en_attente_paiement_initial' (policy RLS pensée pour 'actif'/'essai'),
+// SANS lever d'erreur (un UPDATE à 0 ligne affectée n'est pas une erreur
+// PostgREST). La route répondait donc success:true + logo_enregistre:true
+// alors que rien n'était écrit en base — le fichier était bien uploadé
+// sur R2, mais jamais rattaché au tenant. Fix : écriture via le client
+// SERVICE ROLE (l'autorisation est déjà vérifiée nous-mêmes par
+// verifyAuthOnboarding juste avant), et vérification explicite qu'une
+// ligne a bien été affectée. Le PDV (adresse/horaires/GPS) est désormais
+// créé s'il n'existe pas encore, au lieu d'un simple UPDATE qui échouait
+// silencieusement sur un tout nouveau compte sans PDV.
+//
+// CORRECTIF BUG-CHANGE-PASSWORD (2026-08) — POST /profil/change-password
+// renvoyait un 500 systématique. auth.getUser() et auth.updateUser()
+// appelés SANS ARGUMENT exigent une session GoTrue déjà posée via
+// setSession() ; createSupabaseClientWithToken() ne fait que poser un
+// header Authorization global (pour PostgREST), il ne pose AUCUNE
+// session GoTrue → ces appels levaient "Auth session missing!", une
+// exception non catchée → 500 générique (exactement le 500 observé en
+// prod). Fix : passer explicitement le token à getUser() (comme le fait
+// déjà verifyAuth() avec succès ailleurs dans ce fichier), et utiliser
+// l'API admin (service role) pour updateUser, qui n'a pas besoin de
+// session. La vérification du mot de passe actuel (signInWithPassword)
+// utilise désormais un client Supabase FRAIS (non mis en cache), au lieu
+// du singleton partagé entre toutes les requêtes de l'isolate Workers.
 
 import { Hono } from 'hono'
 import { getCookie } from 'hono/cookie'
+import { createClient } from '@supabase/supabase-js'
 import type { Env } from '../types/database'
 import { createSupabaseClient, createSupabaseClientWithToken, createSupabaseAdminClient } from '../lib/supabase'
 import { setSecurityHeaders, checkRateLimit } from '../lib/security'
@@ -1383,14 +1405,18 @@ dashboardRouter.get('/profil', async (c) => {
 // ---- POST /api/v1/dashboard/profil/change-password ----
 // Le restaurant change lui-même son mot de passe depuis /dashboard/parametres,
 // en fournissant son mot de passe actuel (ré-authentification) + le nouveau.
-// Aucune déconnexion nécessaire : la session Supabase reste valide après
-// updateUser({ password }). Une notification in-app est créée pour que le
-// restaurateur soit informé du changement, avec une alerte s'il n'en est
-// pas à l'origine.
-// (Backend déjà fonctionnel — inchangé. Le bug signalé venait uniquement
-// du front, voir public/static/js/dashboard.js : le bouton "Sécurité" de
-// Paramètres n'appelait jamais cette route, corrigé ci-dessous dans
-// dashboard.js.)
+//
+// CORRECTIF (2026-08) — voir le commentaire détaillé en tête de fichier
+// ("CORRECTIF BUG-CHANGE-PASSWORD"). Résumé :
+//   1. getUser() est appelé avec le token explicitement (au lieu de sans
+//      argument), sinon "Auth session missing!" non catché → 500.
+//   2. Le mot de passe est mis à jour via l'API admin
+//      (auth.admin.updateUserById), qui n'exige aucune session — au lieu
+//      de auth.updateUser() qui a le même problème que getUser() ci-dessus.
+//   3. La vérification du mot de passe actuel (signInWithPassword)
+//      utilise un client Supabase FRAIS et non partagé, pour ne jamais
+//      poser de session sur le singleton mis en cache au niveau du module
+//      (risque de fuite entre requêtes concurrentes dans la même isolate).
 dashboardRouter.post('/profil/change-password', async (c) => {
   setSecurityHeaders(c)
   const auth = await verifyAuth(c)
@@ -1409,22 +1435,28 @@ dashboardRouter.post('/profil/change-password', async (c) => {
     return c.json({ error: 'Le nouveau mot de passe doit être différent de l\'ancien.' }, 422)
   }
 
-  const supabaseToken = createSupabaseClientWithToken(c.env, auth.token)
-  const { data: { user: currentUser } } = await supabaseToken.auth.getUser()
-  if (!currentUser?.email) return c.json({ error: 'Utilisateur introuvable.' }, 404)
+  // Client frais, non caché : évite de poser la session de cet utilisateur
+  // sur le singleton partagé de lib/supabase.ts, et permet de passer le
+  // token explicitement à getUser() (voir correctif ci-dessus).
+  const supabaseFrais = createClient(c.env.SUPABASE_URL, c.env.SUPABASE_ANON_KEY, {
+    auth: { autoRefreshToken: false, persistSession: false }
+  })
 
-  const supabaseAnon = createSupabaseClient(c.env)
-  const { error: signInError } = await supabaseAnon.auth.signInWithPassword({
+  const { data: { user: currentUser }, error: getUserError } = await supabaseFrais.auth.getUser(auth.token)
+  if (getUserError || !currentUser?.email) return c.json({ error: 'Utilisateur introuvable.' }, 404)
+
+  const { error: signInError } = await supabaseFrais.auth.signInWithPassword({
     email: currentUser.email,
     password: body.current_password
   })
   if (signInError) return c.json({ error: 'Mot de passe actuel incorrect.' }, 401)
 
-  const supabase = createSupabaseClientWithToken(c.env, auth.token)
-  const { error: updateError } = await supabase.auth.updateUser({ password: body.new_password })
+  const adminClient = createSupabaseAdminClient(c.env)
+  const { error: updateError } = await adminClient.auth.admin.updateUserById(auth.user_id, {
+    password: body.new_password
+  })
   if (updateError) return c.json({ error: 'Erreur lors du changement de mot de passe.', detail: updateError.message }, 500)
 
-  const adminClient = createSupabaseAdminClient(c.env)
   await adminClient
     .from('notifications_restaurant')
     .insert({
@@ -1829,22 +1861,21 @@ dashboardRouter.get('/stats-journalieres', async (c) => {
 // l'inscription a le statut 'en_attente_paiement_initial' tant qu'il n'a
 // pas soumis son 1er paiement (accesComplet=false). Cette route étant
 // justement l'étape de configuration AVANT le paiement (étape 5 de
-// /bienvenue), elle doit rester accessible dans cet état — sinon aucun
-// utilisateur ayant choisi un plan payant ne peut jamais configurer son
-// restaurant.
+// /bienvenue), elle doit rester accessible dans cet état.
 //
-// CORRECTIF BUG-2 — chaque upload R2 (logo, bannière) est maintenant
-// isolé dans son propre try/catch. Avant ce correctif, une exception
-// levée pendant l'upload (réseau, binding R2 indisponible, fichier
-// corrompu, etc.) faisait planter TOUTE la requête AVANT l'update de
-// `tenants` et de `points_de_vente` — nom, adresse, couleurs, horaires
-// étaient perdus en même temps que l'image, obligeant à tout ressaisir.
-// Désormais : un échec d'upload d'image n'empêche plus l'enregistrement
-// du reste du formulaire. La réponse expose logo_enregistre et
-// banniere_enregistree pour que le front (bienvenue.ts) puisse avertir
-// l'utilisateur si une image en particulier n'a pas été prise en compte
-// et doit être réessayée (depuis Dashboard > Apparence par exemple, qui
-// fonctionne déjà correctement).
+// CORRECTIF BUG-2 — chaque upload R2 (logo, bannière) est isolé dans son
+// propre try/catch. Un échec d'upload d'image n'empêche plus l'enregistrement
+// du reste du formulaire.
+//
+// CORRECTIF BUG-UPLOAD-BIENVENUE (2026-08) — voir le commentaire détaillé
+// en tête de fichier. Résumé : l'écriture en base se fait désormais avec
+// le client SERVICE ROLE (l'autorisation est déjà vérifiée par
+// verifyAuthOnboarding juste au-dessus), le résultat de l'UPDATE tenants
+// est vérifié explicitement (0 ligne affectée = erreur renvoyée, plus de
+// faux "success:true"), et le point de vente est désormais CRÉÉ s'il
+// n'existe pas encore (au lieu d'un simple UPDATE qui échouait
+// silencieusement sur un tout nouveau compte sans PDV, perdant
+// adresse/horaires/GPS saisis en étapes 1-2 de /bienvenue).
 dashboardRouter.post('/setup-restaurant', async (c) => {
   setSecurityHeaders(c)
   const auth = await verifyAuthOnboarding(c)
@@ -1857,7 +1888,10 @@ dashboardRouter.post('/setup-restaurant', async (c) => {
     return c.json({ error: 'Formulaire multipart invalide.' }, 400)
   }
 
-  const supabase = createSupabaseClientWithToken(c.env, auth.token)
+  // CORRECTIF BUG-UPLOAD-BIENVENUE — client service role pour l'écriture
+  // (au lieu de createSupabaseClientWithToken, RLS-scopé, qui matchait 0
+  // ligne en silence pour un tenant 'en_attente_paiement_initial').
+  const supabase = createSupabaseAdminClient(c.env)
   const origin = new URL(c.req.url).origin
 
   const nom          = (formData.get('nom') as string | null)?.trim() || null
@@ -1885,9 +1919,8 @@ dashboardRouter.post('/setup-restaurant', async (c) => {
     try { horairesJson = JSON.parse(horairesRaw) } catch { /* ignore */ }
   }
 
-  // CORRECTIF BUG-2 — upload logo isolé. Un échec ici (réseau, R2
-  // temporairement indisponible, fichier invalide) est loggé mais NE
-  // FAIT PLUS échouer le reste de la requête.
+  // Upload logo isolé — un échec ici (réseau, R2 indisponible, fichier
+  // invalide) est loggé mais NE FAIT PLUS échouer le reste de la requête.
   let logoUrl: string | null = null
   let logoErreur: string | null = null
   const logoFile = formData.get('logo') as File | null
@@ -1911,7 +1944,7 @@ dashboardRouter.post('/setup-restaurant', async (c) => {
     }
   }
 
-  // CORRECTIF BUG-2 — upload bannière isolé, même logique que le logo.
+  // Upload bannière isolé, même logique que le logo.
   let banniereUrl: string | null = null
   let banniereErreur: string | null = null
   const banniereFile = formData.get('banniere') as File | null
@@ -1944,41 +1977,83 @@ dashboardRouter.post('/setup-restaurant', async (c) => {
   if (banniereUrl) tenantUpdate.banniere_url = banniereUrl
   if (telephone) tenantUpdate.whatsapp_number = telephone
 
-  const { error: errTenant } = await supabase
+  // CORRECTIF — .select('id') + vérification explicite du nombre de lignes
+  // affectées. Avant ce correctif, un UPDATE à 0 ligne (RLS, tenant
+  // introuvable, etc.) ne remontait AUCUNE erreur et la route répondait
+  // success:true alors que rien n'était écrit.
+  const { data: tenantUpdatedRows, error: errTenant } = await supabase
     .from('tenants')
     .update(tenantUpdate)
     .eq('id', auth.tenant_id)
+    .select('id')
 
   if (errTenant) {
     return c.json({ error: 'Erreur mise à jour tenant.', detail: errTenant.message }, 500)
   }
+  if (!tenantUpdatedRows || tenantUpdatedRows.length === 0) {
+    return c.json({ error: 'Restaurant introuvable — mise à jour impossible.' }, 404)
+  }
 
-  const pdvUpdate: Record<string, unknown> = {}
-  if (nom) pdvUpdate.nom = nom
-  if (adresse) pdvUpdate.adresse = adresse
-  if (horairesJson) pdvUpdate.horaires = horairesJson
-  if (latitude !== null) pdvUpdate.latitude = latitude
-  if (longitude !== null) pdvUpdate.longitude = longitude
-
+  // CORRECTIF — création du PDV s'il n'existe pas encore (au lieu d'un
+  // simple UPDATE qui échouait silencieusement sur un tout nouveau
+  // compte sans point de vente). Même logique "créer si absent, sinon
+  // mettre à jour" que PATCH /api/v1/dashboard/pdv ci-dessus.
   let pdvWarning: string | null = null
-  if (Object.keys(pdvUpdate).length > 0) {
-    const { error: errPdv } = await supabase
+  const donneesPdvFournies = !!(nom || adresse || horairesJson || latitude !== null || longitude !== null)
+  if (donneesPdvFournies) {
+    const { data: existingPdv } = await supabase
       .from('points_de_vente')
-      .update(pdvUpdate)
+      .select('id')
       .eq('tenant_id', auth.tenant_id)
-      .eq('actif', true)
+      .limit(1)
+      .maybeSingle()
 
-    if (errPdv) {
-      console.error('Erreur mise à jour PDV:', errPdv.message)
-      pdvWarning = 'Adresse et/ou horaires non enregistrés : ' + errPdv.message
+    if (!existingPdv) {
+      const nowIso = new Date().toISOString()
+      const { error: errPdvInsert } = await supabase
+        .from('points_de_vente')
+        .insert({
+          id: crypto.randomUUID(),
+          tenant_id: auth.tenant_id,
+          nom: nom ?? 'Mon restaurant',
+          adresse: adresse ?? '',
+          latitude,
+          longitude,
+          horaires: horairesJson,
+          tarif_livraison_base: 500,
+          tarif_par_km: 200,
+          actif: true,
+          created_at: nowIso,
+          updated_at: nowIso
+        })
+
+      if (errPdvInsert) {
+        console.error('Erreur création PDV (onboarding):', errPdvInsert.message)
+        pdvWarning = 'Adresse et/ou horaires non enregistrés : ' + errPdvInsert.message
+      }
+    } else {
+      const pdvUpdate: Record<string, unknown> = {}
+      if (nom) pdvUpdate.nom = nom
+      if (adresse) pdvUpdate.adresse = adresse
+      if (horairesJson) pdvUpdate.horaires = horairesJson
+      if (latitude !== null) pdvUpdate.latitude = latitude
+      if (longitude !== null) pdvUpdate.longitude = longitude
+
+      const { error: errPdv } = await supabase
+        .from('points_de_vente')
+        .update(pdvUpdate)
+        .eq('tenant_id', auth.tenant_id)
+        .eq('actif', true)
+
+      if (errPdv) {
+        console.error('Erreur mise à jour PDV (onboarding):', errPdv.message)
+        pdvWarning = 'Adresse et/ou horaires non enregistrés : ' + errPdv.message
+      }
     }
   }
 
   try { if (c.env.KV_CACHE) await c.env.KV_CACHE.delete(`tenant:${auth.tenant_slug}`) } catch {}
 
-  // CORRECTIF BUG-2 — la réponse indique désormais explicitement si
-  // chaque image a été enregistrée, pour que le front puisse avertir
-  // l'utilisateur sans jamais lui faire perdre le reste du formulaire.
   return c.json({
     success: true,
     message: 'Restaurant configuré avec succès.',
