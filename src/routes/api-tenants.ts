@@ -12,6 +12,21 @@
 // AJOUT — GET /:slug/menu inclut désormais les suppléments actifs de
 // chaque produit (table `supplements`), pour que la boutique publique
 // puisse les proposer au client à l'ajout au panier.
+//
+// CORRECTIF BUG-3 — GET /:slug et GET /:slug/menu filtraient uniquement
+// sur .in('statut', ['actif', 'essai']). Or un tenant qui vient de
+// choisir un plan PAYANT à l'inscription reçoit le statut
+// 'en_attente_paiement_initial' (voir api-auth.ts, POST /register) tant
+// qu'il n'a pas soumis son premier paiement. Ce statut n'étant pas dans
+// la liste, la requête Supabase ne retournait aucune ligne → 404
+// "Restaurant introuvable" sur la boutique publique, alors que le
+// restaurant existe bel et bien et doit rester visible/commandable
+// pendant sa fenêtre d'essai/attente initiale (cohérent avec
+// verifierAccesTenant() dans lib/acces-tenant.ts, qui autorise déjà ce
+// statut ailleurs dans l'application — ex: verifyAuthOnboarding()).
+// 'en_attente_paiement_initial' est désormais inclus dans les deux
+// requêtes. Voir aussi src/routes/api-commandes.ts (POST /) pour le
+// même correctif appliqué à la création de commande.
 
 import { Hono } from 'hono'
 import type { Env } from '../types/database'
@@ -86,6 +101,10 @@ tenantsRouter.get('/:slug', async (c) => {
 
   const adminClient = createSupabaseAdminClient(c.env)
 
+  // CORRECTIF BUG-3 — ajout de 'en_attente_paiement_initial' : un tenant
+  // ayant choisi un plan payant à l'inscription doit rester visible sur
+  // sa boutique publique tant qu'il est dans cette fenêtre (avant son
+  // premier paiement), exactement comme un tenant en 'essai'.
   const { data: tenant, error } = await adminClient
     .from('tenants')
     .select(`
@@ -95,7 +114,7 @@ tenantsRouter.get('/:slug', async (c) => {
       points_de_vente!inner(id, nom, adresse, latitude, longitude, horaires)
     `)
     .eq('slug', slug)
-    .in('statut', ['actif', 'essai'])
+    .in('statut', ['actif', 'essai', 'en_attente_paiement_initial'])
     .is('deleted_at', null)
     .limit(1)
     .maybeSingle()
@@ -149,6 +168,10 @@ tenantsRouter.get('/:slug', async (c) => {
 // AJOUT — chaque produit inclut désormais son tableau `supplements`
 // (uniquement ceux actifs, non supprimés), en une seule requête groupée
 // (pas de N+1 par produit).
+// CORRECTIF BUG-3 — même ajout de 'en_attente_paiement_initial' que pour
+// GET /:slug ci-dessus, pour que le menu reste chargeable pendant cette
+// fenêtre (sinon la boutique s'affiche sans son statut mais le menu reste
+// en 404, ce qui casse quand même la page).
 tenantsRouter.get('/:slug/menu', async (c) => {
   setSecurityHeaders(c)
   const slug = c.req.param('slug')
@@ -167,7 +190,7 @@ tenantsRouter.get('/:slug/menu', async (c) => {
     .from('tenants')
     .select('id')
     .eq('slug', slug)
-    .in('statut', ['actif', 'essai'])
+    .in('statut', ['actif', 'essai', 'en_attente_paiement_initial'])
     .is('deleted_at', null)
     .single()
 
