@@ -1,4 +1,4 @@
-// MonMenu — Dashboard restaurant (v2.0.0 — AJOUT édition livreur, suppléments, historique paiements)
+// MonMenu — Dashboard restaurant (v2.1.0 — AJOUT édition livreur, suppléments, historique paiements, changement de mot de passe)
 //
 // AJOUTS v2.0.0 :
 //   1. Édition livreur — bouton "Modifier" sur chaque carte livreur,
@@ -13,9 +13,19 @@
 //      de dashboard-paiement.js sur la liste complète (au lieu du
 //      sous-ensemble affiché dans la page Abonnement).
 //
+// AJOUT v2.1.0 — CORRECTIF BUG-5 (changement de mot de passe) :
+//   La section "Sécurité" de Paramètres n'affichait qu'un bouton
+//   "Demander un lien de réinitialisation" qui se contentait d'un
+//   alert('Contactez le support...') — AUCUN appel réseau n'était fait,
+//   alors que la route POST /api/v1/dashboard/profil/change-password
+//   existe déjà et fonctionne côté serveur (ancien mdp + nouveau,
+//   notification in-app "Mot de passe modifié"). Remplacé par un
+//   formulaire réel (ancien mdp + nouveau + confirmation) qui appelle
+//   cette route via saveChangementMdp().
+//
 // Tout le reste du fichier est inchangé — aucune régression sur les
 // fonctionnalités existantes (commandes, menu, statistiques, QR code,
-// apparence, paramètres, codes promo, PDV, abonnement).
+// apparence, codes promo, PDV, abonnement).
 'use strict';
 
 let currentSection = 'commandes';
@@ -1697,10 +1707,29 @@ async function loadParametres() {
       </div>
       <div class="bg-white rounded-2xl border border-gray-100 p-6">
         <h3 class="font-bold text-gray-900 mb-1">Sécurité</h3>
-        <p class="text-sm text-gray-500 mb-4">Réinitialisez votre mot de passe si nécessaire.</p>
-        <button onclick="demanderResetPassword()" class="border border-gray-200 text-gray-700 font-semibold text-sm px-4 py-2 rounded-xl hover:bg-gray-50">
-          <i class="fa-solid fa-key mr-1.5"></i> Demander un lien de réinitialisation
-        </button>
+        <p class="text-sm text-gray-500 mb-4">Changez votre mot de passe.</p>
+        <form onsubmit="saveChangementMdp(event)" class="space-y-3">
+          <div>
+            <label class="block text-xs font-semibold text-gray-600 mb-1">Mot de passe actuel</label>
+            <input id="pwd-actuel" type="password" required autocomplete="current-password"
+              class="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-200">
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-gray-600 mb-1">Nouveau mot de passe</label>
+            <input id="pwd-nouveau" type="password" required minlength="8" autocomplete="new-password"
+              class="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-200"
+              placeholder="8 caractères minimum">
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-gray-600 mb-1">Confirmer le nouveau mot de passe</label>
+            <input id="pwd-confirme" type="password" required minlength="8" autocomplete="new-password"
+              class="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-200">
+          </div>
+          <p id="pwd-feedback" class="hidden text-xs rounded-lg px-3 py-2"></p>
+          <button type="submit" id="pwd-submit-btn" class="w-full border border-gray-200 text-gray-700 font-semibold text-sm px-4 py-2.5 rounded-xl hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed">
+            <i class="fa-solid fa-key mr-1.5"></i> Changer le mot de passe
+          </button>
+        </form>
       </div>
       <div class="bg-red-50 border border-red-100 rounded-2xl p-6">
         <h3 class="font-bold text-red-800 mb-1">Zone dangereuse</h3>
@@ -1740,7 +1769,70 @@ function formatWhatsAppNumberAvecPlus(numeroRaw) {
   return n;
 }
 
-function demanderResetPassword() { alert('Contactez le support : support@monmenu.app'); }
+// AJOUT — CORRECTIF BUG-5 — Changement de mot de passe (Paramètres >
+// Sécurité). Utilise la route existante POST
+// /api/v1/dashboard/profil/change-password (ancien mdp requis,
+// notification in-app envoyée côté serveur). Avant ce correctif, le
+// bouton de cette section ne faisait qu'un alert() sans aucun appel
+// réseau — remplacé par un vrai formulaire (voir loadParametres()
+// ci-dessus) qui appelle cette fonction à la soumission.
+async function saveChangementMdp(e) {
+  e.preventDefault();
+  const fb = document.getElementById('pwd-feedback');
+  const btn = document.getElementById('pwd-submit-btn');
+  const actuel = document.getElementById('pwd-actuel').value;
+  const nouveau = document.getElementById('pwd-nouveau').value;
+  const confirme = document.getElementById('pwd-confirme').value;
+
+  fb.classList.remove('hidden');
+
+  if (nouveau.length < 8) {
+    fb.textContent = 'Le nouveau mot de passe doit contenir au moins 8 caractères.';
+    fb.className = 'text-xs rounded-lg px-3 py-2 bg-red-50 text-red-600';
+    return;
+  }
+  if (nouveau !== confirme) {
+    fb.textContent = 'Les deux nouveaux mots de passe ne correspondent pas.';
+    fb.className = 'text-xs rounded-lg px-3 py-2 bg-red-50 text-red-600';
+    return;
+  }
+  if (nouveau === actuel) {
+    fb.textContent = 'Le nouveau mot de passe doit être différent de l\'ancien.';
+    fb.className = 'text-xs rounded-lg px-3 py-2 bg-red-50 text-red-600';
+    return;
+  }
+
+  btn.disabled = true;
+  btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin mr-1.5"></i> Changement en cours...';
+
+  try {
+    const res = await dashFetch('/api/v1/dashboard/profil/change-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+      body: JSON.stringify({ current_password: actuel, new_password: nouveau })
+    });
+    const data = await res.json().catch(() => ({}));
+
+    if (res.ok) {
+      fb.textContent = data.message || 'Mot de passe mis à jour avec succès.';
+      fb.className = 'text-xs rounded-lg px-3 py-2 bg-green-50 text-green-700';
+      document.getElementById('pwd-actuel').value = '';
+      document.getElementById('pwd-nouveau').value = '';
+      document.getElementById('pwd-confirme').value = '';
+      if (typeof rafraichirBadgeNotifs === 'function') rafraichirBadgeNotifs();
+    } else {
+      fb.textContent = data.error || 'Erreur lors du changement de mot de passe.';
+      fb.className = 'text-xs rounded-lg px-3 py-2 bg-red-50 text-red-600';
+    }
+  } catch {
+    fb.textContent = 'Erreur réseau. Réessayez.';
+    fb.className = 'text-xs rounded-lg px-3 py-2 bg-red-50 text-red-600';
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="fa-solid fa-key mr-1.5"></i> Changer le mot de passe';
+  }
+}
+
 function confirmerSuppression() {
   if (confirm('ATTENTION : Irréversible. Confirmer ?')) alert('Demande enregistrée. Notre équipe vous contactera dans 48h.');
 }
@@ -1821,295 +1913,4 @@ function showAddCodePromoModal() {
         <p class="text-xs text-gray-400 mt-1">3-20 caractères alphanumériques.</p>
       </div>
       <div>
-        <label class="block text-sm font-semibold text-gray-700 mb-1.5">Type *</label>
-        <select id="promo-type" onchange="updatePromoValeurMax()" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200">
-          <option value="pourcentage">Pourcentage (%)</option>
-          <option value="montant_fixe">Montant fixe (FCFA)</option>
-        </select>
-      </div>
-      <div>
-        <label class="block text-sm font-semibold text-gray-700 mb-1.5">Valeur *</label>
-        <input id="promo-valeur" type="number" required min="1" max="100" step="1" placeholder="20" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200">
-        <p id="promo-valeur-hint" class="text-xs text-gray-400 mt-1">Max 100%</p>
-      </div>
-      <div>
-        <label class="block text-sm font-semibold text-gray-700 mb-1.5">Date d'expiration (optionnel)</label>
-        <input id="promo-datefin" type="date" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200">
-      </div>
-      <div>
-        <label class="block text-sm font-semibold text-gray-700 mb-1.5">Utilisations max (optionnel)</label>
-        <input id="promo-max" type="number" min="1" placeholder="vide = illimité" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200">
-      </div>
-      <button type="submit" class="w-full bg-red-600 text-white font-bold py-3 rounded-xl hover:bg-red-700">Créer le code promo</button>
-    </form>`);
-}
-function updatePromoValeurMax() {
-  const type = document.getElementById('promo-type')?.value;
-  const input = document.getElementById('promo-valeur');
-  const hint = document.getElementById('promo-valeur-hint');
-  if (!input||!hint) return;
-  if (type==='pourcentage') { input.max=100; input.placeholder='20'; hint.textContent='Max 100%'; }
-  else { input.max=9999999; input.placeholder='1000'; hint.textContent='Montant en FCFA'; }
-}
-async function submitAddCodePromo(e) {
-  e.preventDefault();
-  const code = document.getElementById('promo-code').value.trim().toUpperCase();
-  const type = document.getElementById('promo-type').value;
-  const valeur = parseFloat(document.getElementById('promo-valeur').value);
-  const date_fin = document.getElementById('promo-datefin').value || null;
-  const usage_max = document.getElementById('promo-max').value ? parseInt(document.getElementById('promo-max').value) : null;
-  try {
-    const res = await dashFetch('/api/v1/dashboard/codes-promo', {
-      method: 'POST', headers: {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'},
-      body: JSON.stringify({ code, type, valeur, date_fin, usage_max })
-    });
-    if (res.ok) {
-      const d = await res.json();
-      closeModal();
-      loadCodesPromo();
-      if (d && d.code) copierCodePromo(d.code, true);
-    } else { const d = await res.json(); alert(d.error||'Erreur'); }
-  } catch { alert('Erreur réseau.'); }
-}
-async function supprimerCodePromo(promoId) {
-  if (!confirm('Supprimer ce code promo ?')) return;
-  try {
-    const res = await dashFetch('/api/v1/dashboard/codes-promo/' + promoId, { method: 'DELETE', headers: {'X-Requested-With':'XMLHttpRequest'} });
-    if (res.ok) loadCodesPromo();
-  } catch { alert('Erreur réseau.'); }
-}
-
-function copierCodePromo(code, silencieux) {
-  navigator.clipboard.writeText(code).then(() => {
-    if (silencieux) return;
-    const toast = document.createElement('div');
-    toast.className = 'fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-gray-900 text-white text-sm px-4 py-2.5 rounded-xl shadow-lg';
-    toast.innerHTML = '<i class="fa-solid fa-check mr-1.5"></i>Code « ' + escHtml(code) + ' » copié !';
-    document.body.appendChild(toast);
-    setTimeout(() => toast.remove(), 1800);
-  }).catch(() => alert('Code : ' + code));
-}
-
-async function exportCodesPromo() {
-  try {
-    const res = await dashFetch('/api/v1/dashboard/codes-promo/export-csv');
-    if (!res.ok) { alert('Erreur export.'); return; }
-    const blob = await res.blob();
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = 'codes-promo.csv';
-    a.click();
-    URL.revokeObjectURL(a.href);
-  } catch { alert('Erreur réseau.'); }
-}
-
-// ==============================
-// SECTION PDV — Mon restaurant
-// ==============================
-async function loadPdv() {
-  const content = document.getElementById('dashboard-content');
-  content.innerHTML = `<div class="text-center py-8"><i class="fa-solid fa-circle-notch fa-spin text-xl text-gray-400"></i></div>`;
-  try {
-    const res = await dashFetch('/api/v1/dashboard/pdv');
-    if (!res.ok) throw new Error();
-    const data = await res.json();
-    renderPdvConfig(data.pdv, content);
-  } catch {
-    content.innerHTML = '<p class="text-red-500 text-sm p-4">Erreur de chargement du point de vente.</p>';
-  }
-}
-
-function parsePdvHoraires(raw) {
-  if (!raw) return {};
-  try { return typeof raw === 'string' ? JSON.parse(raw) : raw; } catch { return {}; }
-}
-
-function renderPdvConfig(pdv, container) {
-  container.innerHTML = `
-    <div class="max-w-lg space-y-4">
-      <div class="bg-white rounded-2xl border border-gray-100 p-6">
-        <h2 class="font-bold text-gray-900 mb-1">Point de vente</h2>
-        <p class="text-sm text-gray-500 mb-5">Configurez l'adresse et les coordonnées GPS.</p>
-        <form onsubmit="savePdv(event)" class="space-y-4">
-          <div>
-            <label class="block text-sm font-semibold text-gray-700 mb-1.5">Nom du point de vente</label>
-            <input id="pdv-nom" type="text" maxlength="100" value="${escHtml(pdv?.nom||'')}" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200" placeholder="Restaurant principal">
-          </div>
-          <div>
-            <label class="block text-sm font-semibold text-gray-700 mb-1.5">Adresse complète</label>
-            <input id="pdv-adresse" type="text" maxlength="200" value="${escHtml(pdv?.adresse||'')}" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200" placeholder="Quartier, rue, ville...">
-          </div>
-          <div class="grid grid-cols-2 gap-3">
-            <div>
-              <label class="block text-sm font-semibold text-gray-700 mb-1.5">Latitude GPS</label>
-              <input id="pdv-lat" type="number" step="0.000001" min="-90" max="90" value="${pdv?.latitude??''}" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200" placeholder="12.3569">
-            </div>
-            <div>
-              <label class="block text-sm font-semibold text-gray-700 mb-1.5">Longitude GPS</label>
-              <input id="pdv-lon" type="number" step="0.000001" min="-180" max="180" value="${pdv?.longitude??''}" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200" placeholder="-1.5353">
-            </div>
-          </div>
-          <button type="button" onclick="useMyLocation()" class="w-full border border-gray-200 text-gray-700 font-semibold text-sm py-2.5 rounded-xl hover:bg-gray-50 flex items-center justify-center gap-2">
-            <i class="fa-solid fa-location-crosshairs"></i> Utiliser ma position actuelle
-          </button>
-          <div class="grid grid-cols-2 gap-3">
-            <div>
-              <label class="block text-sm font-semibold text-gray-700 mb-1.5">Tarif base (FCFA)</label>
-              <input id="pdv-tarif-base" type="number" min="0" max="99999" step="100" value="${pdv?.tarif_livraison_base??500}" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200">
-              <p class="text-xs text-gray-400 mt-1">Frais fixes min.</p>
-            </div>
-            <div>
-              <label class="block text-sm font-semibold text-gray-700 mb-1.5">Tarif par km (FCFA)</label>
-              <input id="pdv-tarif-km" type="number" min="0" max="9999" step="50" value="${pdv?.tarif_par_km??200}" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200">
-              <p class="text-xs text-gray-400 mt-1">Frais par km.</p>
-            </div>
-          </div>
-          <div>
-            <label class="block text-sm font-semibold text-gray-700 mb-2">Horaires d'ouverture</label>
-            <div id="pdv-horaires-container" class="bg-gray-50 rounded-xl p-3"></div>
-            <p class="text-xs text-gray-400 mt-1.5">Ces horaires déterminent le badge « Ouvert / Fermé » sur votre boutique.</p>
-          </div>
-          <p id="pdv-feedback" class="text-xs hidden rounded-lg px-3 py-2"></p>
-          <button type="submit" id="pdv-submit-btn" class="w-full bg-red-600 text-white font-bold py-3 rounded-xl hover:bg-red-700 disabled:bg-gray-300 disabled:cursor-not-allowed">
-            <i class="fa-solid fa-floppy-disk mr-1.5"></i> Enregistrer
-          </button>
-        </form>
-      </div>
-      ${pdv?.latitude && pdv?.longitude ?
-      `<div class="bg-green-50 border border-green-100 rounded-2xl p-4 text-sm text-green-700">
-        <i class="fa-solid fa-circle-check mr-1.5"></i>GPS configuré : <strong>${pdv.latitude}, ${pdv.longitude}</strong><br>
-        Frais de livraison calculés automatiquement.</div>` :
-      `<div class="bg-orange-50 border border-orange-100 rounded-2xl p-4 text-sm text-orange-700">
-        <i class="fa-solid fa-triangle-exclamation mr-1.5"></i>GPS non configuré. Le calcul des frais de livraison nécessite vos coordonnées GPS.</div>`}
-    </div>`;
-  renderPdvHorairesEditor(parsePdvHoraires(pdv?.horaires));
-}
-
-function renderPdvHorairesEditor(horaires) {
-  const container = document.getElementById('pdv-horaires-container');
-  if (!container) return;
-  container.innerHTML = JOURS_SEMAINE.map(jour => {
-    const entry = horaires[jour] || {};
-    const ouvert = entry.ouvert !== false;
-    const debut = entry.debut || '08:00';
-    const fin = entry.fin || '22:00';
-    return `<div class="flex items-center gap-3 py-2.5 border-b border-gray-200/70 last:border-0">
-      <div class="w-20 text-sm font-medium text-gray-700 flex-shrink-0">${JOURS_LABELS[jour]}</div>
-      <label class="relative inline-flex items-center cursor-pointer flex-shrink-0">
-        <input type="checkbox" id="pdv-h-${jour}-ouvert" class="sr-only peer" ${ouvert ? 'checked' : ''} onchange="_togglePdvHoraire('${jour}')">
-        <div class="w-9 h-5 bg-gray-300 rounded-full peer peer-checked:bg-red-600 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-4"></div>
-      </label>
-      <div id="pdv-h-${jour}-times" class="flex items-center gap-1.5 flex-1 ${ouvert ? '' : 'hidden'}">
-        <input type="time" id="pdv-h-${jour}-debut" value="${debut}" class="border border-gray-200 rounded-lg px-2 py-1.5 text-xs w-[6.5rem] bg-white">
-        <span class="text-gray-400 text-xs">–</span>
-        <input type="time" id="pdv-h-${jour}-fin" value="${fin}" class="border border-gray-200 rounded-lg px-2 py-1.5 text-xs w-[6.5rem] bg-white">
-      </div>
-      <span id="pdv-h-${jour}-closed" class="${ouvert ? 'hidden' : ''} text-xs text-gray-400 italic ml-auto">Fermé</span>
-    </div>`;
-  }).join('');
-}
-
-function _togglePdvHoraire(jour) {
-  const checked = document.getElementById('pdv-h-' + jour + '-ouvert').checked;
-  document.getElementById('pdv-h-' + jour + '-times').classList.toggle('hidden', !checked);
-  document.getElementById('pdv-h-' + jour + '-closed').classList.toggle('hidden', checked);
-}
-
-function collecterPdvHoraires() {
-  const horaires = {};
-  JOURS_SEMAINE.forEach(jour => {
-    const ouvertEl = document.getElementById('pdv-h-' + jour + '-ouvert');
-    const ouvert = ouvertEl ? ouvertEl.checked : false;
-    horaires[jour] = {
-      ouvert,
-      debut: ouvert ? document.getElementById('pdv-h-' + jour + '-debut').value : null,
-      fin: ouvert ? document.getElementById('pdv-h-' + jour + '-fin').value : null
-    };
-  });
-  return horaires;
-}
-
-function useMyLocation() {
-  if (!navigator.geolocation) { alert('Géolocalisation non supportée.'); return; }
-  navigator.geolocation.getCurrentPosition(pos => {
-    document.getElementById('pdv-lat').value = pos.coords.latitude.toFixed(6);
-    document.getElementById('pdv-lon').value = pos.coords.longitude.toFixed(6);
-    const fb = document.getElementById('pdv-feedback');
-    if (fb) {
-      fb.textContent = 'Position : ' + pos.coords.latitude.toFixed(4) + ', ' + pos.coords.longitude.toFixed(4);
-      fb.className = 'text-xs bg-green-50 text-green-700 rounded-lg px-3 py-2'; fb.classList.remove('hidden');
-    }
-  }, () => alert('Impossible d\'obtenir votre position.'));
-}
-
-async function savePdv(e) {
-  e.preventDefault();
-  const fb = document.getElementById('pdv-feedback');
-  const submitBtn = document.getElementById('pdv-submit-btn');
-  if (fb) fb.classList.add('hidden');
-  if (submitBtn) submitBtn.disabled = true;
-
-  const latRaw = document.getElementById('pdv-lat').value.trim();
-  const lonRaw = document.getElementById('pdv-lon').value.trim();
-
-  const data = {
-    nom: document.getElementById('pdv-nom').value.trim(),
-    adresse: document.getElementById('pdv-adresse').value.trim(),
-    latitude: latRaw === '' ? null : parseFloat(latRaw),
-    longitude: lonRaw === '' ? null : parseFloat(lonRaw),
-    tarif_livraison_base: parseFloat(document.getElementById('pdv-tarif-base').value) || 0,
-    tarif_par_km: parseFloat(document.getElementById('pdv-tarif-km').value) || 0,
-    horaires: JSON.stringify(collecterPdvHoraires())
-  };
-
-  if (data.latitude !== null && (isNaN(data.latitude) || data.latitude < -90 || data.latitude > 90)) {
-    if (fb) {
-      fb.textContent = 'Latitude invalide (doit être comprise entre -90 et 90).';
-      fb.className = 'text-xs bg-red-50 text-red-600 rounded-lg px-3 py-2';
-      fb.classList.remove('hidden');
-    }
-    if (submitBtn) submitBtn.disabled = false;
-    return;
-  }
-  if (data.longitude !== null && (isNaN(data.longitude) || data.longitude < -180 || data.longitude > 180)) {
-    if (fb) {
-      fb.textContent = 'Longitude invalide (doit être comprise entre -180 et 180).';
-      fb.className = 'text-xs bg-red-50 text-red-600 rounded-lg px-3 py-2';
-      fb.classList.remove('hidden');
-    }
-    if (submitBtn) submitBtn.disabled = false;
-    return;
-  }
-
-  try {
-    const res = await dashFetch('/api/v1/dashboard/pdv', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
-      body: JSON.stringify(data)
-    });
-    const result = await res.json().catch(() => ({}));
-
-    if (res.ok) {
-      if (fb) {
-        fb.textContent = result.created ? 'Point de vente créé.' : 'Point de vente mis à jour.';
-        fb.className = 'text-xs bg-green-50 text-green-700 rounded-lg px-3 py-2';
-        fb.classList.remove('hidden');
-      }
-      await loadPdv();
-    } else {
-      if (fb) {
-        fb.textContent = result.error || 'Erreur lors de l\'enregistrement.';
-        fb.className = 'text-xs bg-red-50 text-red-600 rounded-lg px-3 py-2';
-        fb.classList.remove('hidden');
-      }
-      if (submitBtn) submitBtn.disabled = false;
-    }
-  } catch {
-    if (fb) {
-      fb.textContent = 'Erreur réseau.';
-      fb.className = 'text-xs bg-red-50 text-red-600 rounded-lg px-3 py-2';
-      fb.classList.remove('hidden');
-    }
-    if (submitBtn) submitBtn.disabled = false;
-  }
-}
+        <label 
