@@ -61,6 +61,16 @@
 // créé s'il n'existe pas encore, au lieu d'un simple UPDATE qui échouait
 // silencieusement sur un tout nouveau compte sans PDV.
 //
+// CORRECTIF BUG-PDV-INACTIF (2026-08) — Variante du bug ci-dessus, restée
+// dans la branche "UPDATE" du PDV : la recherche d'un PDV existant ne
+// filtrait pas par "actif", mais l'UPDATE qui suivait filtrait, lui, par
+// .eq('actif', true). Un PDV existant mais inactif faisait donc matcher
+// existingPdv (→ pas de création), puis l'UPDATE ne touchait 0 ligne SANS
+// ERREUR (même piège PostgREST que BUG-UPLOAD-BIENVENUE). Fix : suppression
+// du filtre "actif" sur l'UPDATE (aligné sur PATCH /pdv qui ne filtre déjà
+// pas dessus) + vérification explicite des lignes affectées, avec message
+// d'avertissement si 0 ligne touchée.
+//
 // CORRECTIF BUG-CHANGE-PASSWORD (2026-08) — POST /profil/change-password
 // renvoyait un 500 systématique. auth.getUser() et auth.updateUser()
 // appelés SANS ARGUMENT exigent une session GoTrue déjà posée via
@@ -1417,10 +1427,24 @@ dashboardRouter.get('/profil', async (c) => {
 //      utilise un client Supabase FRAIS et non partagé, pour ne jamais
 //      poser de session sur le singleton mis en cache au niveau du module
 //      (risque de fuite entre requêtes concurrentes dans la même isolate).
+//   4. Rate limiting ajouté (5 tentatives / 15 min par utilisateur) —
+//      cette route ré-authentifie via signInWithPassword et n'avait
+//      auparavant AUCUNE limite, contrairement à /upload-image : un
+//      compte déjà connecté pouvait tenter de deviner le mot de passe
+//      actuel sans restriction.
 dashboardRouter.post('/profil/change-password', async (c) => {
   setSecurityHeaders(c)
   const auth = await verifyAuth(c)
   if (!auth) return c.json({ error: 'Non authentifié.' }, 401)
+
+  const rateLimit = await checkRateLimit(`change-password:${auth.user_id}`, 5, 900000, c.env.KV_CACHE)
+  if (!rateLimit.allowed) {
+    const secsRemaining = Math.ceil((rateLimit.resetAt - Date.now()) / 1000)
+    return c.json({
+      error: 'Trop de tentatives. Réessayez plus tard.',
+      retry_after_seconds: secsRemaining
+    }, 429)
+  }
 
   let body: { current_password?: string; new_password?: string }
   try { body = await c.req.json() } catch { return c.json({ error: 'JSON invalide.' }, 400) }
@@ -1873,9 +1897,12 @@ dashboardRouter.get('/stats-journalieres', async (c) => {
 // verifyAuthOnboarding juste au-dessus), le résultat de l'UPDATE tenants
 // est vérifié explicitement (0 ligne affectée = erreur renvoyée, plus de
 // faux "success:true"), et le point de vente est désormais CRÉÉ s'il
-// n'existe pas encore (au lieu d'un simple UPDATE qui échouait
-// silencieusement sur un tout nouveau compte sans PDV, perdant
-// adresse/horaires/GPS saisis en étapes 1-2 de /bienvenue).
+// n'existe pas encore.
+//
+// CORRECTIF BUG-PDV-INACTIF (2026-08) — voir commentaire en tête de
+// fichier. La branche UPDATE du PDV existant ne filtre plus par "actif"
+// (alignée sur existingPdv et sur PATCH /pdv) et vérifie explicitement
+// les lignes affectées via .select('id').
 dashboardRouter.post('/setup-restaurant', async (c) => {
   setSecurityHeaders(c)
   const auth = await verifyAuthOnboarding(c)
@@ -1977,10 +2004,10 @@ dashboardRouter.post('/setup-restaurant', async (c) => {
   if (banniereUrl) tenantUpdate.banniere_url = banniereUrl
   if (telephone) tenantUpdate.whatsapp_number = telephone
 
-  // CORRECTIF — .select('id') + vérification explicite du nombre de lignes
-  // affectées. Avant ce correctif, un UPDATE à 0 ligne (RLS, tenant
-  // introuvable, etc.) ne remontait AUCUNE erreur et la route répondait
-  // success:true alors que rien n'était écrit.
+  // .select('id') + vérification explicite du nombre de lignes affectées.
+  // Sans ça, un UPDATE à 0 ligne (RLS, tenant introuvable, etc.) ne
+  // remonte AUCUNE erreur et la route répondrait success:true alors que
+  // rien n'aurait été écrit.
   const { data: tenantUpdatedRows, error: errTenant } = await supabase
     .from('tenants')
     .update(tenantUpdate)
@@ -1994,10 +2021,15 @@ dashboardRouter.post('/setup-restaurant', async (c) => {
     return c.json({ error: 'Restaurant introuvable — mise à jour impossible.' }, 404)
   }
 
-  // CORRECTIF — création du PDV s'il n'existe pas encore (au lieu d'un
-  // simple UPDATE qui échouait silencieusement sur un tout nouveau
-  // compte sans point de vente). Même logique "créer si absent, sinon
-  // mettre à jour" que PATCH /api/v1/dashboard/pdv ci-dessus.
+  // Création du PDV s'il n'existe pas encore, sinon mise à jour — même
+  // logique "créer si absent, sinon mettre à jour" que PATCH
+  // /api/v1/dashboard/pdv ci-dessus.
+  //
+  // FIX BUG-PDV-INACTIF — la recherche existingPdv ne filtre pas par
+  // "actif" ; la branche UPDATE ne doit donc PAS filtrer dessus non plus
+  // (sinon un PDV existant mais inactif matche existingPdv → pas de
+  // création → puis l'UPDATE filtré sur actif=true ne touche 0 ligne
+  // SANS ERREUR). On vérifie désormais explicitement les lignes affectées.
   let pdvWarning: string | null = null
   const donneesPdvFournies = !!(nom || adresse || horairesJson || latitude !== null || longitude !== null)
   if (donneesPdvFournies) {
@@ -2039,15 +2071,18 @@ dashboardRouter.post('/setup-restaurant', async (c) => {
       if (latitude !== null) pdvUpdate.latitude = latitude
       if (longitude !== null) pdvUpdate.longitude = longitude
 
-      const { error: errPdv } = await supabase
+      const { error: errPdv, data: pdvUpdatedRows } = await supabase
         .from('points_de_vente')
         .update(pdvUpdate)
-        .eq('tenant_id', auth.tenant_id)
-        .eq('actif', true)
+        .eq('id', existingPdv.id)
+        .select('id')
 
       if (errPdv) {
         console.error('Erreur mise à jour PDV (onboarding):', errPdv.message)
         pdvWarning = 'Adresse et/ou horaires non enregistrés : ' + errPdv.message
+      } else if (!pdvUpdatedRows || pdvUpdatedRows.length === 0) {
+        console.error('Erreur mise à jour PDV (onboarding): 0 ligne affectée pour id=' + existingPdv.id)
+        pdvWarning = 'Adresse et/ou horaires non enregistrés (PDV introuvable lors de la mise à jour).'
       }
     }
   }
