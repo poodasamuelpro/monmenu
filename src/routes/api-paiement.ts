@@ -19,6 +19,32 @@
  * l'insertion de la notification "Preuve de paiement reçue" juste en
  * dessous, qui ne s'exécutait donc jamais.
  *
+ * CORRECTIF BUG-1 (nouveau) — le symptôme signalé ("Erreur interne du
+ * serveur" au moment de soumettre, alors que l'abonnement est bel et bien
+ * enregistré en base et visible après rafraîchissement) était causé par
+ * l'appel à messagePreuveRecue() effectué DEUX FOIS de façon non protégée
+ * après l'insertion de l'abonnement : une fois dans la construction du
+ * message de la notification restaurant, une fois dans le corps de la
+ * réponse JSON finale. Le `.catch(() => {})` chaîné sur les `.insert()`
+ * de notification ne protège que le rejet de la requête réseau/DB — pas
+ * une exception synchrone levée pendant la CONSTRUCTION de l'objet passé
+ * à `.insert()` (par exemple si messagePreuveRecue() lève une exception).
+ * Une telle exception, non interceptée, remonte jusqu'au handler Hono et
+ * produit un 500 générique, alors que l'abonnement est déjà en base à ce
+ * stade (l'insert précédent a réussi).
+ * Toute la séquence post-insertion (update tenant, invalidation cache,
+ * notification admin, notification restaurant, calcul du message de
+ * confirmation) est désormais entièrement enveloppée dans des blocs
+ * try/catch indépendants et non bloquants : aucune erreur survenant après
+ * l'enregistrement de l'abonnement ne peut plus faire échouer la réponse
+ * HTTP envoyée au restaurant.
+ *
+ * CORRECTIF (routes /statut, /reference, /soumettre, /historique,
+ * /notifications) — voir aussi src/routes/api-tenants.ts et
+ * src/routes/api-commandes.ts pour le correctif du statut
+ * 'en_attente_paiement_initial' sur la boutique publique (bug distinct,
+ * non lié à ce fichier).
+ *
  * Routes exposées :
  *   GET  /api/v1/paiement/statut        — Statut abonnement actuel + référence + délai
  *   GET  /api/v1/paiement/reference     — Génère ou retourne la référence active
@@ -254,6 +280,18 @@ paiementRouter.get('/reference', async (c) => {
  * MIGRATION — plan_id reçu du formulaire est désormais l'UUID Supabase
  * natif (peuplé depuis /api/v1/plans, Supabase). Vérifié via chargerPlan()
  * au lieu d'une requête D1 directe.
+ *
+ * CORRECTIF BUG-1 — à partir de l'insertion réussie de l'abonnement
+ * (variable `abonnement` obtenue), TOUTE la suite de la fonction est
+ * volontairement séquencée en étapes indépendantes, chacune protégée par
+ * son propre try/catch. Objectif : quelle que soit l'étape qui échoue
+ * après ce point (update tenant, invalidation cache KV, notification
+ * admin, notification restaurant, calcul du message de confirmation),
+ * la réponse HTTP renvoyée au client reste un succès (200) puisque
+ * l'abonnement — la donnée qui fait foi — est déjà enregistré en base.
+ * C'est ce qui corrige le symptôme "Erreur interne du serveur au moment
+ * de soumettre, alors que l'enregistrement s'est bien fait et s'affiche
+ * après rafraîchissement".
  */
 paiementRouter.post('/soumettre', async (c) => {
   setSecurityHeaders(c)
@@ -400,14 +438,16 @@ paiementRouter.post('/soumettre', async (c) => {
     return c.json({ error: 'Erreur lors de l\'enregistrement du paiement.' }, 500)
   }
 
-  // CORRECTIF CRITIQUE — cette mise à jour est désormais protégée par un
-  // try/catch NON BLOQUANT. Avant, une erreur ici (même transitoire)
-  // faisait planter toute la requête (500 "Erreur interne du serveur")
-  // alors que l'abonnement était déjà enregistré, ET empêchait surtout
-  // l'insertion de la notification restaurant juste en dessous de
-  // s'exécuter. L'abonnement étant l'information faisant foi (déjà en
-  // base à ce stade), on ne bloque plus jamais la réponse pour cette
-  // mise à jour secondaire.
+  // ─────────────────────────────────────────────────────────────────────
+  // À PARTIR D'ICI : l'abonnement est déjà enregistré en base avec succès.
+  // CORRECTIF BUG-1 — chaque étape ci-dessous est non bloquante et
+  // protégée individuellement. Aucune erreur survenant dans cette section
+  // ne doit plus jamais transformer la réponse en 500 : l'abonnement fait
+  // foi, la réponse doit rester un succès.
+  // ─────────────────────────────────────────────────────────────────────
+
+  // CORRECTIF CRITIQUE (déjà présent) — cette mise à jour est protégée
+  // par un try/catch NON BLOQUANT.
   try {
     await adminClient
       .from('tenants')
@@ -425,33 +465,58 @@ paiementRouter.post('/soumettre', async (c) => {
     try { await c.env.KV_CACHE.delete(`tenant:${auth.tenant_slug}`) } catch {}
   }
 
-  await adminClient
-    .from('notifications_admin')
-    .insert({
-      type: 'warning',
-      titre: `Nouveau paiement à confirmer — ${auth.tenant_nom}`,
-      message: `Plan ${plan.nom} — Soumis le ${formaterDate(now.toISOString())}. SLA : ${SLA_ADMIN_HEURES}h (fenêtre technique ${FENETRE_ACCES_HEURES}h).`,
-      lien: '#paiements',
-      payload: {
-        tenant_id: auth.tenant_id,
-        abonnement_id: abonnement.id,
-        plan_id: planId,
-        soumis_le: now.toISOString()
-      }
-    })
-    .catch(() => {})
+  // CORRECTIF BUG-1 — messagePreuveRecue() calculé une seule fois, en
+  // amont, et protégé : si cette fonction lève une exception, on ne
+  // doit JAMAIS faire échouer la réponse HTTP alors que l'abonnement
+  // est déjà enregistré en base (c'était la cause du "Erreur interne
+  // du serveur" malgré un enregistrement réussi).
+  let messageConfirmation = 'Votre preuve de paiement a bien été reçue. Elle sera vérifiée sous peu.'
+  try {
+    messageConfirmation = messagePreuveRecue()
+  } catch (err) {
+    console.error('[PAIEMENT] Erreur non bloquante messagePreuveRecue():', err instanceof Error ? err.message : err)
+  }
 
-  await adminClient
-    .from('notifications_restaurant')
-    .insert({
-      tenant_id: auth.tenant_id,
-      type: 'info',
-      titre: 'Preuve de paiement reçue',
-      message: `Votre preuve de paiement pour le plan ${plan.nom} a bien été reçue. ${messagePreuveRecue()}`,
-      lien: '/dashboard/abonnement',
-      payload: { abonnement_id: abonnement.id, reference }
-    })
-    .catch(() => {})
+  // CORRECTIF BUG-1 — insert notification admin protégé par try/catch
+  // explicite (le .catch() chaîné sur .insert() ne protège que le rejet
+  // de la requête réseau/DB elle-même, pas une exception synchrone levée
+  // pendant la CONSTRUCTION de l'objet passé à .insert(), par exemple si
+  // une des valeurs utilisées ci-dessous provoque une erreur imprévue).
+  try {
+    await adminClient
+      .from('notifications_admin')
+      .insert({
+        type: 'warning',
+        titre: `Nouveau paiement à confirmer — ${auth.tenant_nom}`,
+        message: `Plan ${plan.nom} — Soumis le ${formaterDate(now.toISOString())}. SLA : ${SLA_ADMIN_HEURES}h (fenêtre technique ${FENETRE_ACCES_HEURES}h).`,
+        lien: '#paiements',
+        payload: {
+          tenant_id: auth.tenant_id,
+          abonnement_id: abonnement.id,
+          plan_id: planId,
+          soumis_le: now.toISOString()
+        }
+      })
+  } catch (err) {
+    console.error('[PAIEMENT] Erreur non bloquante notification admin:', err instanceof Error ? err.message : err)
+  }
+
+  // CORRECTIF BUG-1 — idem pour la notification restaurant (celle qui
+  // alimente la cloche du dashboard, section "Preuve de paiement reçue").
+  try {
+    await adminClient
+      .from('notifications_restaurant')
+      .insert({
+        tenant_id: auth.tenant_id,
+        type: 'info',
+        titre: 'Preuve de paiement reçue',
+        message: `Votre preuve de paiement pour le plan ${plan.nom} a bien été reçue. ${messageConfirmation}`,
+        lien: '/dashboard/abonnement',
+        payload: { abonnement_id: abonnement.id, reference }
+      })
+  } catch (err) {
+    console.error('[PAIEMENT] Erreur non bloquante notification restaurant:', err instanceof Error ? err.message : err)
+  }
 
   console.log(`[PAIEMENT] Preuve soumise — tenant: ${auth.tenant_id.slice(0, 8)}... plan: ${planId.slice(0, 8)}...`)
 
@@ -462,7 +527,7 @@ paiementRouter.post('/soumettre', async (c) => {
     delai_confirmation: deadline.toISOString(),
     heures_delai: FENETRE_ACCES_HEURES,
     sla_admin_heures: SLA_ADMIN_HEURES,
-    message: messagePreuveRecue(),
+    message: messageConfirmation,
     plan: { nom: plan.nom, montant: montantPaye, devise: plan.devise }
   })
 })
