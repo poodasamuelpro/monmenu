@@ -1,4 +1,4 @@
-// Module d'envoi email Brevo avec rotation intelligente de clés API
+// Module d'envoi email Brevo avec rotation intelligente de clés API 
 // Section 12 du cahier des charges
 //
 // AJOUT — L'expéditeur (email + nom) n'est plus codé en dur : il est lu
