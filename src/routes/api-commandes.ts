@@ -27,6 +27,15 @@
 // commande n'apparaissait jamais dans l'onglet Notifications, même en
 // production. C'est purement additif — non bloquant (waitUntil + catch
 // silencieux), aucun risque de régression sur la création de commande.
+//
+// CORRECTIF BUG-3 (corollaire) — POST / (création de commande) filtrait
+// le tenant sur .in('statut', ['actif', 'essai']), ce qui empêchait toute
+// commande sur la boutique d'un tenant en 'en_attente_paiement_initial'
+// (plan payant choisi à l'inscription, avant le premier paiement). Ce
+// statut est désormais accepté, en cohérence avec le correctif appliqué
+// à GET /:slug et GET /:slug/menu dans src/routes/api-tenants.ts : la
+// boutique publique d'un tel tenant doit rester pleinement fonctionnelle
+// (affichage ET commande) pendant cette fenêtre.
 
 import { Hono } from 'hono'
 import type { Env } from '../types/database'
@@ -147,11 +156,17 @@ commandesRouter.post('/', async (c) => {
 
   const adminClient = createSupabaseAdminClient(env)
 
+  // CORRECTIF BUG-3 — 'en_attente_paiement_initial' ajouté : un tenant
+  // ayant choisi un plan payant à l'inscription doit pouvoir recevoir des
+  // commandes pendant sa fenêtre d'attente de premier paiement, tout comme
+  // un tenant en 'essai'. Sans ce statut, la boutique était visible
+  // (après correctif api-tenants.ts) mais toute tentative de commande
+  // échouait avec "Restaurant introuvable ou inactif".
   const { data: tenantRow, error: tenantError } = await adminClient
     .from('tenants')
     .select('*')
     .eq('id', data.tenant_id)
-    .in('statut', ['actif', 'essai'])
+    .in('statut', ['actif', 'essai', 'en_attente_paiement_initial'])
     .is('deleted_at', null)
     .single()
 
