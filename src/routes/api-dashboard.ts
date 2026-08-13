@@ -84,6 +84,22 @@
 // session. La vérification du mot de passe actuel (signInWithPassword)
 // utilise désormais un client Supabase FRAIS (non mis en cache), au lieu
 // du singleton partagé entre toutes les requêtes de l'isolate Workers.
+//
+// CORRECTIF BUG-CATCH-NOTIF (2026-08) — POST /profil/change-password
+// plantait ENCORE en 500 après le fix ci-dessus, mais APRÈS que le mot de
+// passe ait déjà été changé avec succès côté Supabase Auth. Cause :
+// l'insertion de la notification "Mot de passe modifié" utilisait
+// `.insert({...}).catch(() => {})`. Le retour de `.insert()` sur le
+// client supabase-js est un PostgrestFilterBuilder : c'est un objet
+// "thenable" (il a `.then()`), mais PAS une vraie instance de Promise —
+// il n'expose pas de méthode `.catch()`. Une fois minifié/bundlé, cet
+// appel levait `TypeError: c2.from(...).insert(...).catch is not a
+// function`, exception non catchée → 500 générique, alors que le mot de
+// passe avait déjà été mis à jour avec succès (d'où la confusion : échec
+// annoncé au frontend malgré une opération réussie côté base). Fix :
+// remplacement du `.catch()` chaîné par un `try/catch` classique autour
+// du `await`, seule méthode fiable pour ignorer une erreur non bloquante
+// sur ce type de builder.
 
 import { Hono } from 'hono'
 import { getCookie } from 'hono/cookie'
@@ -1432,6 +1448,15 @@ dashboardRouter.get('/profil', async (c) => {
 //      auparavant AUCUNE limite, contrairement à /upload-image : un
 //      compte déjà connecté pouvait tenter de deviner le mot de passe
 //      actuel sans restriction.
+//
+// CORRECTIF BUG-CATCH-NOTIF (2026-08) — voir le commentaire détaillé en
+// tête de fichier ("CORRECTIF BUG-CATCH-NOTIF"). Résumé : le
+// PostgrestFilterBuilder retourné par .insert() n'a pas de méthode
+// .catch() propre ; le `.catch(() => {})` chaîné après l'insert de la
+// notification "Mot de passe modifié" levait donc un TypeError non
+// catché → 500, alors que le mot de passe était déjà changé avec succès.
+// Remplacé par un try/catch classique autour du await, qui ne fait
+// jamais échouer la route en cas d'erreur d'insertion de notification.
 dashboardRouter.post('/profil/change-password', async (c) => {
   setSecurityHeaders(c)
   const auth = await verifyAuth(c)
@@ -1481,16 +1506,23 @@ dashboardRouter.post('/profil/change-password', async (c) => {
   })
   if (updateError) return c.json({ error: 'Erreur lors du changement de mot de passe.', detail: updateError.message }, 500)
 
-  await adminClient
-    .from('notifications_restaurant')
-    .insert({
-      tenant_id: auth.tenant_id,
-      type: 'info',
-      titre: 'Mot de passe modifié',
-      message: 'Votre mot de passe a été changé avec succès. Si vous n\'êtes pas à l\'origine de cette action, contactez le support immédiatement.',
-      lien: '/dashboard/parametres'
-    })
-    .catch(() => {})
+  // FIX BUG-CATCH-NOTIF — try/catch classique au lieu de .catch() chaîné
+  // (le builder Supabase n'expose pas de vraie méthode .catch()). Une
+  // erreur ici est volontairement ignorée : elle ne doit jamais faire
+  // échouer la réponse, le mot de passe étant déjà changé avec succès.
+  try {
+    await adminClient
+      .from('notifications_restaurant')
+      .insert({
+        tenant_id: auth.tenant_id,
+        type: 'info',
+        titre: 'Mot de passe modifié',
+        message: 'Votre mot de passe a été changé avec succès. Si vous n\'êtes pas à l\'origine de cette action, contactez le support immédiatement.',
+        lien: '/dashboard/parametres'
+      })
+  } catch {
+    // Non bloquant : le changement de mot de passe a déjà réussi.
+  }
 
   return c.json({ success: true, message: 'Mot de passe mis à jour.' })
 })
