@@ -13,14 +13,32 @@
 // qui lit maintenant Supabase — voir api-plans.ts). Il n'y a plus de
 // résolution via `plans.d1_plan_id` : on cherche directement par `id`.
 //
-// CORRECTIF LOGIN — la requête sur utilisateurs_tenant juste après
-// signInWithPassword() utilise désormais un client explicitement lié au
+// CORRECTIF LOGIN (historique) — la requête sur utilisateurs_tenant juste
+// après signInWithPassword() utilisait un client explicitement lié au
 // token de la session qui vient d'être ouverte (createSupabaseClientWithToken),
-// au lieu du client singleton partagé (createSupabaseClient). Le singleton
-// garde un état de session interne mutable ; réutilisé par des requêtes
-// concurrentes sur le même isolate Workers, il pouvait faire exécuter la
-// requête tenant sans session valide → "Aucun restaurant associé à ce
-// compte" de façon intermittente, même pour un compte valide.
+// au lieu du client singleton partagé (createSupabaseClient), pour éviter
+// une race condition sur le singleton.
+//
+// CORRECTIF BUG-4 (nouveau, remplace le correctif ci-dessus) — malgré le
+// correctif historique, un tenant au statut 'essai' ou
+// 'en_attente_paiement_initial' pouvait recevoir "Aucun restaurant
+// associé à ce compte" à la RECONNEXION, alors que le compte, le tenant
+// et le lien utilisateurs_tenant existaient bel et bien en base (visibles
+// juste après l'inscription, et de nouveau visibles après un rafraîchissement
+// de la page /dashboard une fois reconnecté autrement). La cause la plus
+// probable est une policy RLS Supabase sur `tenants` et/ou
+// `utilisateurs_tenant` qui restreint la lecture selon des conditions non
+// remplies pour un tenant qui n'est pas encore 'actif' (ex: policy basée
+// sur le statut). Le client utilisé pour CETTE requête précise
+// (`supabaseAvecToken`, scopé au JWT utilisateur) est soumis à ces
+// policies RLS ; le client ADMIN (rôle service) ne l'est pas.
+// Cette unique requête de lookup post-authentification passe désormais
+// par le client ADMIN. Cela ne réduit AUCUNE sécurité : l'utilisateur
+// vient de prouver son identité avec succès via
+// supabase.auth.signInWithPassword() (ligne juste au-dessus), et la
+// requête reste strictement filtrée par .eq('auth_user_id', data.user.id)
+// — elle ne peut donc renvoyer que le(s) tenant(s) réellement lié(s) à cet
+// utilisateur, jamais les données d'un autre compte.
 //
 // CORRECTIF REGISTER — la redirection post-inscription est désormais
 // TOUJOURS '/bienvenue', quel que soit le plan choisi (gratuit ou payant).
@@ -111,17 +129,25 @@ authRouter.post('/login', async (c) => {
     return c.json({ error: 'Identifiants incorrects.' }, 401)
   }
 
-  // CORRECTIF — client explicitement lié au token de LA session qui vient
-  // d'être ouverte, plutôt que le singleton partagé (voir note en tête de
-  // fichier). Élimine la race condition responsable du "Aucun restaurant
-  // associé à ce compte" intermittent.
-  const supabaseAvecToken = createSupabaseClientWithToken(c.env, data.session.access_token)
+  // CORRECTIF BUG-4 — client ADMIN (rôle service) utilisé pour ce lookup
+  // interne post-authentification, au lieu du client scopé au token
+  // utilisateur. Voir explication détaillée en tête de fichier : ceci
+  // évite qu'une policy RLS sur `tenants` / `utilisateurs_tenant`
+  // (par exemple restreinte aux tenants au statut 'actif') ne bloque
+  // silencieusement la lecture pour un tenant en 'essai' ou
+  // 'en_attente_paiement_initial', ce qui provoquait le faux "Aucun
+  // restaurant associé à ce compte" observé à la reconnexion. La requête
+  // reste strictement filtrée sur l'utilisateur qui vient de s'authentifier
+  // avec succès (.eq('auth_user_id', data.user.id)) : aucune perte de
+  // sécurité, uniquement une lecture fiable des données qui appartiennent
+  // déjà à cet utilisateur.
+  const adminClientLogin = createSupabaseAdminClient(c.env)
 
-  const { data: tenantData, error: tenantError } = await supabaseAvecToken
+  const { data: tenantData, error: tenantError } = await adminClientLogin
     .from('utilisateurs_tenant')
     .select(`
       tenant_id,
-      tenants!inner (id, nom, slug, statut, plan_id, couleur_primaire)
+      tenants!inner (id, nom, slug, statut, plan_id, couleur_primaire, deleted_at)
     `)
     .eq('auth_user_id', data.user.id)
     .is('tenants.deleted_at', null)
