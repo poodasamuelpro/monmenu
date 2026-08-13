@@ -45,17 +45,24 @@ const app = new Hono<{ Bindings: Env }>()
 // Nom du cookie httpOnly — doit rester identique à celui posé dans api-auth.ts
 const ACCESS_TOKEN_COOKIE = 'sb-access-token'
 
-// FIX (audit statut boutiques) — Liste centralisée des statuts tenant qui
-// doivent afficher une page boutique publique normale. AVANT : seuls
-// 'actif' et 'essai' étaient acceptés, ce qui renvoyait un 404 pour tout
-// tenant en 'en_attente_paiement_initial' (compte payant tout juste créé,
-// en attente de validation du premier paiement) — alors même que
-// api-commandes.ts autorisait déjà la prise de commande pour ce statut.
-// Un tenant dans cet état DOIT pouvoir afficher sa boutique et recevoir
-// des commandes ; seul un statut 'suspendu' (ou tenant introuvable/supprimé)
-// doit bloquer l'accès public à la boutique.
-const STATUTS_BOUTIQUE_VISIBLE = ['actif', 'essai', 'en_attente_paiement_initial']
-
+// FIX (audit statut boutiques) — v2. La v1 utilisait une liste figée de
+// tenant.statut ('actif', 'essai', 'en_attente_paiement_initial'), ce qui a
+// bien réglé le 404 pour un tout premier paiement en attente, mais
+// ignorait complètement la fenêtre de grâce de 72h définie dans
+// acces-tenant.ts (mode 'grace_confirmation') : un tenant en RENOUVELLEMENT
+// (statut 'inactif', pas 'en_attente_paiement_initial') qui vient de
+// soumettre son paiement a accesComplet=true côté dashboard pendant 72h,
+// mais sa boutique publique restait 404 puisque 'inactif' n'était pas
+// dans la liste — incohérence visible par ses clients.
+// Fix définitif : ne plus dupliquer la logique de statuts ici, déléguer à
+// verifierAccesTenant() (src/lib/acces-tenant.ts), source de vérité unique
+// déjà utilisée par le dashboard. La boutique est visible si le tenant a
+// accesComplet (actif / essai / grace_confirmation) OU s'il est en attente
+// de son tout premier paiement (mode 'paiement_initial' — jamais eu de
+// service à couper, doit pouvoir présenter sa boutique et prendre commande
+// dès l'inscription, comme le permet déjà api-commandes.ts). Seuls
+// 'suspendu' (mur admin) et 'bloque' (renouvellement en retard, sans
+// fenêtre de grâce active) restent 404.
 async function fetchTenantAvecPdv(env: Env, filtre: { colonne: 'slug' | 'domaine_perso'; valeur: string }): Promise<TenantBoutique | null> {
   const adminClient = createSupabaseAdminClient(env)
   const { data: tenantRaw } = await adminClient
@@ -66,12 +73,15 @@ async function fetchTenantAvecPdv(env: Env, filtre: { colonne: 'slug' | 'domaine
       points_de_vente(nom, adresse, horaires, latitude, longitude, actif)
     `)
     .eq(filtre.colonne, filtre.valeur)
-    .in('statut', STATUTS_BOUTIQUE_VISIBLE)
     .is('deleted_at', null)
     .limit(1)
     .maybeSingle()
 
   if (!tenantRaw) return null
+
+  const acces = await verifierAccesTenant(env, tenantRaw.id)
+  const boutiqueVisible = acces.accesComplet || acces.mode === 'paiement_initial'
+  if (!boutiqueVisible) return null
 
   const pdvArr = Array.isArray(tenantRaw.points_de_vente) ? tenantRaw.points_de_vente : []
   const pdv = pdvArr.find((p: any) => p.actif) ?? pdvArr[0] ?? null
