@@ -1,4 +1,19 @@
-// src/pages/forgot-password.ts — Page de récupération de mot de passe par OTP (§1.7) 
+// src/pages/forgot-password.ts — Page de récupération de mot de passe par OTP (§1.7)
+//
+// CORRECTIF (aligné sur src/routes/api-auth.ts) — la page était encore
+// configurée pour un OTP à 6 chiffres (pattern HTML [0-9]{6}, maxlength=6,
+// libellés "6 chiffres") alors que l'API a été migrée vers un OTP à
+// 8 chiffres (Supabase Dashboard > Authentication > Emails > Email OTP
+// Length = 8, et /verify-otp valide désormais /^\d{8}$/). Avec
+// maxlength="6", un utilisateur ne pouvait même pas saisir le 8e chiffre
+// de son code : le formulaire bloquait silencieusement la soumission
+// avant d'atteindre l'API. Corrigé partout ci-dessous :
+//   - input maxlength="6" → "8"
+//   - pattern="[0-9]{6}" → "[0-9]{8}"
+//   - tous les libellés "6 chiffres" → "8 chiffres"
+//   - tracking/font de l'input OTP légèrement réduits (tracking-[0.5em]
+//     → tracking-[0.35em], text-2xl → text-xl) pour que les 8 chiffres
+//     restent lisibles et ne débordent pas sur petit écran mobile.
 import { renderHead } from '../components/head'
 
 export function renderForgotPasswordPage(nomProjet: string): string {
@@ -24,7 +39,7 @@ export function renderForgotPasswordPage(nomProjet: string): string {
     <div id="step-email" class="bg-white rounded-2xl shadow-sm border border-gray-100 p-8">
       <h1 class="text-xl font-bold text-gray-900 mb-1">Mot de passe oublié</h1>
       <p class="text-sm text-gray-500 mb-6">
-        Entrez votre adresse email. Nous vous enverrons un code OTP à 6 chiffres.
+        Entrez votre adresse email. Nous vous enverrons un code OTP à 8 chiffres.
       </p>
       <form id="form-email" onsubmit="sendOtp(event)" class="space-y-4">
         <div>
@@ -58,11 +73,11 @@ export function renderForgotPasswordPage(nomProjet: string): string {
       <form id="form-otp" onsubmit="verifyOtp(event)" class="space-y-4">
         <div>
           <label class="block text-sm font-semibold text-gray-700 mb-1.5">
-            Code OTP à 6 chiffres
+            Code OTP à 8 chiffres
           </label>
-          <input id="input-otp" type="text" required pattern="[0-9]{6}" maxlength="6" inputmode="numeric" autocomplete="one-time-code"
-            class="w-full border border-gray-200 bg-white text-gray-900 rounded-xl px-4 py-3 text-center text-2xl font-mono tracking-[0.5em] focus:outline-none focus:ring-2 focus:ring-red-200 focus:border-red-400"
-            placeholder="000000">
+          <input id="input-otp" type="text" required pattern="[0-9]{8}" maxlength="8" inputmode="numeric" autocomplete="one-time-code"
+            class="w-full border border-gray-200 bg-white text-gray-900 rounded-xl px-4 py-3 text-center text-xl font-mono tracking-[0.35em] focus:outline-none focus:ring-2 focus:ring-red-200 focus:border-red-400"
+            placeholder="00000000">
         </div>
         <p id="otp-error" class="text-xs text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2 hidden"></p>
         <button type="submit" id="btn-verify-otp"
@@ -161,9 +176,11 @@ export function renderForgotPasswordPage(nomProjet: string): string {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ email: otpEmail })
         })
-        // Toujours afficher step-otp (message générique)
+        // Toujours afficher step-otp (message générique) — cohérent avec
+        // la réponse volontairement générique de l'API (ne jamais révéler
+        // si l'email existe).
         document.getElementById('otp-hint').textContent =
-          'Code OTP envoyé à ' + otpEmail + '. Vérifiez vos spams si besoin.'
+          'Code OTP à 8 chiffres envoyé à ' + otpEmail + '. Vérifiez vos spams si besoin.'
         showStep('step-otp')
         document.getElementById('input-otp').focus()
       } catch {
@@ -177,6 +194,10 @@ export function renderForgotPasswordPage(nomProjet: string): string {
       e.preventDefault()
       hideError('otp-error')
       const token = document.getElementById('input-otp').value.trim()
+      if (!/^\\d{8}$/.test(token)) {
+        showError('otp-error', 'Le code doit contenir 8 chiffres.')
+        return
+      }
       setLoading('btn-verify-otp', true)
       try {
         const r = await fetch('/api/v1/auth/verify-otp', {
