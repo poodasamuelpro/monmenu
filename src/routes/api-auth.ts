@@ -1,4 +1,4 @@
-// API Auth — Supabase Auth (connexion, inscription, déconnexion restaurant) 
+// API Auth — Supabase Auth (connexion, inscription, déconnexion restaurant)
 // ARCHITECTURE :
 //   • Supabase Auth  → authentification (signIn, signUp, JWT, refresh)
 //   • Supabase DB    → tenants, utilisateurs_tenant, points_de_vente, plans (APPLICATION)
@@ -44,6 +44,48 @@
 // TOUJOURS '/bienvenue', quel que soit le plan choisi (gratuit ou payant).
 // La page bienvenue.ts gère déjà nativement les deux cas (étape 5 pour les
 // plans payants avec formulaire de preuve de paiement intégré).
+//
+// ============================================================
+// CORRECTIF RESET PASSWORD (nouveau) — le flow était cassé à 3 niveaux :
+//
+// 1) /forgot-password appelait supabase.auth.signInWithOtp(), qui envoie
+//    l'email via le template Supabase "Magic Link" (flow de CONNEXION),
+//    pas le template "Reset Password" (flow de RÉCUPÉRATION). Or le
+//    template "Magic Link" du dashboard ne contient par défaut que
+//    {{ .ConfirmationURL }} (un lien cliquable) et AUCUN {{ .Token }} —
+//    donc aucun code n'était jamais envoyé, et /verify-otp ne pouvait
+//    jamais matcher quoi que ce soit. Remplacé par
+//    supabase.auth.resetPasswordForEmail(), qui utilise le template dédié
+//    "Reset Password" (type Supabase = 'recovery').
+//
+// 2) /verify-otp vérifiait le code avec type:'email' (le type du flow
+//    Magic Link), incohérent avec le nouveau flow 'recovery' utilisé par
+//    resetPasswordForEmail(). Corrigé en type:'recovery'.
+//
+// 3) /reset-password appelait supabase.auth.updateUser({password}) sur le
+//    client anon SINGLETON, qui n'a jamais de session active en mémoire
+//    dans ce contexte (persistSession:false, pas de setSession() appelé
+//    nulle part) : updateUser() a besoin d'une session active pour savoir
+//    QUEL utilisateur modifier, cet appel échouait donc silencieusement
+//    ("Auth session missing"). Remplacé par admin.updateUserById(), qui
+//    modifie directement l'utilisateur ciblé via son ID (vérifié juste
+//    avant par getUser(token)) sans dépendre d'un état de session client.
+//
+// Longueur du code — désormais 8 chiffres (réglé côté Supabase Dashboard,
+// Authentication > Emails > Email OTP Length = 8 ; ce réglage s'applique
+// à tous les emails OTP du projet, dont le flow "Reset Password"). Le
+// code applicatif ci-dessous vérifie la regex /^\d{8}$/ en conséquence.
+//
+// Rate limiting — ajout d'une limite secondaire PAR EMAIL (en plus de
+// celle par IP déjà existante) sur /forgot-password et /verify-otp, pour
+// empêcher un attaquant de cibler un compte précis en changeant d'IP.
+//
+// Déconnexion globale après reset — une fois le mot de passe changé,
+// TOUTES les sessions actives de l'utilisateur sont révoquées (autres
+// appareils/navigateurs inclus) via admin.signOut(jwt, 'global'), et le
+// cookie du navigateur courant est également effacé : une reconnexion
+// explicite avec le nouveau mot de passe est requise partout.
+// ============================================================
 
 import { Hono } from 'hono'
 import { setCookie, deleteCookie, getCookie } from 'hono/cookie'
@@ -454,31 +496,54 @@ authRouter.post('/refresh', async (c) => {
 })
 
 // ============================================================
-// Récupération mot de passe par OTP 6 chiffres (Supabase)
+// Récupération mot de passe par OTP 8 chiffres (Supabase) — flow 'recovery'
 // ============================================================
 
+// POST /api/v1/auth/forgot-password
 authRouter.post('/forgot-password', async (c) => {
   setSecurityHeaders(c)
   const ip = c.req.header('CF-Connecting-IP') ?? 'unknown'
-  const rateLimit = await checkRateLimit(`forgot-pwd:${ip}`, 5, 3600000)
-  if (!rateLimit.allowed) return c.json({ error: 'Trop de tentatives. Réessayez plus tard.' }, 429)
+
+  const rateLimit = await checkRateLimit(`auth_forgot-pwd:${ip}`, 5, 3600000)
+  if (!rateLimit.allowed) {
+    return c.json({ error: 'Trop de tentatives. Réessayez plus tard.' }, 429)
+  }
 
   let body: { email?: string }
   try { body = await c.req.json() } catch { return c.json({ error: 'JSON invalide.' }, 400) }
 
   if (!body.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(body.email)) {
-    return c.json({ message: "Si ce compte existe, un code OTP a été envoyé." })
+    // Réponse générique volontaire : ne jamais révéler si l'email existe.
+    return c.json({ message: "Si ce compte existe, un code de récupération a été envoyé." })
+  }
+
+  const emailNormalise = body.email.toLowerCase().trim()
+
+  // Rate limit secondaire PAR EMAIL, en plus de celui par IP ci-dessus —
+  // empêche un attaquant de cibler un compte précis en changeant d'IP.
+  const rateLimitEmail = await checkRateLimit(`auth_forgot-pwd-email:${emailNormalise}`, 5, 3600000)
+  if (!rateLimitEmail.allowed) {
+    return c.json({ message: "Si ce compte existe, un code de récupération a été envoyé." })
   }
 
   const supabase = createSupabaseClient(c.env)
-  await supabase.auth.signInWithOtp({
-    email: body.email.toLowerCase().trim(),
-    options: { shouldCreateUser: false }
-  })
 
-  return c.json({ message: "Si ce compte existe, un code OTP à 6 chiffres a été envoyé à votre adresse." })
+  // CORRECTIF — resetPasswordForEmail() (flow "recovery" dédié) au lieu
+  // de signInWithOtp() (flow "magic link" de connexion). Voir explication
+  // complète en tête de fichier. Le template Supabase "Reset Password"
+  // doit contenir {{ .Token }} pour afficher le code à 8 chiffres (voir
+  // gabarit HTML fourni séparément pour ce template).
+  try {
+    await supabase.auth.resetPasswordForEmail(emailNormalise)
+  } catch (err) {
+    console.error('Erreur resetPasswordForEmail:', err instanceof Error ? err.message : err)
+    // On ne renvoie jamais l'erreur brute au client : réponse générique.
+  }
+
+  return c.json({ message: "Si ce compte existe, un code de récupération à 8 chiffres a été envoyé à votre adresse." })
 })
 
+// POST /api/v1/auth/verify-otp
 authRouter.post('/verify-otp', async (c) => {
   setSecurityHeaders(c)
   const ip = c.req.header('CF-Connecting-IP') ?? 'unknown'
@@ -487,18 +552,35 @@ authRouter.post('/verify-otp', async (c) => {
 
   let body: { email?: string; token?: string }
   try { body = await c.req.json() } catch { return c.json({ error: 'JSON invalide.' }, 400) }
-  if (!body.email || !body.token || !/^\d{6}$/.test(body.token)) {
-    return c.json({ error: 'Email et code OTP à 6 chiffres requis.' }, 422)
+
+  // CORRECTIF — 8 chiffres (réglage Supabase Dashboard : Authentication >
+  // Emails > Email OTP Length = 8), au lieu de 6 précédemment.
+  if (!body.email || !body.token || !/^\d{8}$/.test(body.token)) {
+    return c.json({ error: 'Email et code à 8 chiffres requis.' }, 422)
+  }
+
+  const emailNormalise = body.email.toLowerCase().trim()
+
+  // Rate limit secondaire PAR EMAIL — un code à 8 chiffres est déjà bien
+  // plus résistant au brute force qu'un code à 6 (10^8 vs 10^6
+  // combinaisons), mais on limite aussi les tentatives par compte ciblé,
+  // pas seulement par IP (qui peut être contournée).
+  const rateLimitEmail = await checkRateLimit(`verify-otp-email:${emailNormalise}`, 10, 900000)
+  if (!rateLimitEmail.allowed) {
+    return c.json({ error: 'Trop de tentatives pour ce compte. Réessayez dans 15 minutes.' }, 429)
   }
 
   const supabase = createSupabaseClient(c.env)
+
+  // CORRECTIF — type:'recovery' (au lieu de 'email') pour matcher le flow
+  // resetPasswordForEmail() utilisé dans /forgot-password ci-dessus.
   const { data, error } = await supabase.auth.verifyOtp({
-    email: body.email.toLowerCase().trim(),
+    email: emailNormalise,
     token: body.token,
-    type: 'email'
+    type: 'recovery'
   })
 
-  if (error || !data.session) return c.json({ error: 'Code OTP invalide ou expiré.' }, 401)
+  if (error || !data.session) return c.json({ error: 'Code invalide ou expiré.' }, 401)
 
   setAuthCookies(c, data.session.access_token, data.session.refresh_token)
 
@@ -509,6 +591,7 @@ authRouter.post('/verify-otp', async (c) => {
   })
 })
 
+// POST /api/v1/auth/reset-password
 authRouter.post('/reset-password', async (c) => {
   setSecurityHeaders(c)
 
@@ -526,16 +609,47 @@ authRouter.post('/reset-password', async (c) => {
   }
 
   const supabase = createSupabaseClient(c.env)
-  const { error: userError } = await supabase.auth.getUser(token)
-  if (userError) {
+  const { data: userData, error: userError } = await supabase.auth.getUser(token)
+  if (userError || !userData.user) {
     clearAuthCookies(c)
     return c.json({ error: 'Session invalide ou expirée.' }, 401)
   }
 
-  const { error } = await supabase.auth.updateUser({ password: body.password })
-  if (error) return c.json({ error: 'Erreur changement mot de passe.', detail: error.message }, 500)
+  // CORRECTIF (bug racine du reset password) — l'ancien code appelait
+  // supabase.auth.updateUser({password}) sur le client anon SINGLETON, qui
+  // n'a jamais de session active en mémoire ici (persistSession:false,
+  // aucun setSession() appelé) : updateUser() a besoin d'une session
+  // active pour savoir QUEL utilisateur modifier, donc cet appel échouait
+  // silencieusement ("Auth session missing"). Remplacé par
+  // admin.updateUserById(), qui modifie directement l'utilisateur ciblé
+  // via son ID (déjà vérifié juste au-dessus par getUser(token)), sans
+  // dépendre d'un état de session côté client.
+  const adminClient = createSupabaseAdminClient(c.env)
+  const { error: updateError } = await adminClient.auth.admin.updateUserById(
+    userData.user.id,
+    { password: body.password }
+  )
+  if (updateError) {
+    return c.json({ error: 'Erreur changement mot de passe.', detail: updateError.message }, 500)
+  }
 
-  return c.json({ success: true, message: 'Mot de passe mis à jour avec succès.' })
+  // AJOUT — déconnexion globale après reset : révoque TOUTES les sessions
+  // actives de l'utilisateur (autres appareils/navigateurs inclus) via
+  // l'API admin signOut(jwt, 'global'). Non bloquant pour la réponse : le
+  // mot de passe est déjà changé avec succès à ce stade, une erreur ici
+  // n'annule pas l'opération.
+  try {
+    await adminClient.auth.admin.signOut(token, 'global')
+  } catch (err) {
+    console.error('Erreur signOut global post-reset:', err instanceof Error ? err.message : err)
+  }
+
+  // Le cookie de CE navigateur est également invalidé côté serveur, pour
+  // forcer une reconnexion explicite avec le nouveau mot de passe partout,
+  // y compris ici.
+  clearAuthCookies(c)
+
+  return c.json({ success: true, message: 'Mot de passe mis à jour avec succès. Veuillez vous reconnecter.' })
 })
 
 export { authRouter }
