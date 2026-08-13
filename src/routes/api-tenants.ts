@@ -13,20 +13,31 @@
 // chaque produit (table `supplements`), pour que la boutique publique
 // puisse les proposer au client à l'ajout au panier.
 //
-// CORRECTIF BUG-3 — GET /:slug et GET /:slug/menu filtraient uniquement
-// sur .in('statut', ['actif', 'essai']). Or un tenant qui vient de
-// choisir un plan PAYANT à l'inscription reçoit le statut
+// CORRECTIF BUG-3 (statut) — GET /:slug et GET /:slug/menu filtraient
+// uniquement sur .in('statut', ['actif', 'essai']). Or un tenant qui
+// vient de choisir un plan PAYANT à l'inscription reçoit le statut
 // 'en_attente_paiement_initial' (voir api-auth.ts, POST /register) tant
-// qu'il n'a pas soumis son premier paiement. Ce statut n'étant pas dans
-// la liste, la requête Supabase ne retournait aucune ligne → 404
-// "Restaurant introuvable" sur la boutique publique, alors que le
-// restaurant existe bel et bien et doit rester visible/commandable
-// pendant sa fenêtre d'essai/attente initiale (cohérent avec
-// verifierAccesTenant() dans lib/acces-tenant.ts, qui autorise déjà ce
-// statut ailleurs dans l'application — ex: verifyAuthOnboarding()).
-// 'en_attente_paiement_initial' est désormais inclus dans les deux
-// requêtes. Voir aussi src/routes/api-commandes.ts (POST /) pour le
-// même correctif appliqué à la création de commande.
+// qu'il n'a pas soumis son premier paiement. Ce statut est désormais
+// inclus dans les deux requêtes.
+//
+// CORRECTIF BUG-3-BIS (CAUSE RÉELLE DU 404 PERSISTANT, y compris pour des
+// restaurants EXISTANTS et actifs) — GET /:slug utilisait
+// `points_de_vente!inner(...)` dans son .select(). `!inner` impose une
+// JOINTURE INTERNE côté PostgREST/Supabase : si le tenant n'a AUCUNE
+// ligne correspondante dans `points_de_vente` avec la condition demandée
+// (ou si son unique PDV a `actif = false` / a été supprimé), la requête
+// ne retourne PAS le tenant du tout — quel que soit son statut
+// ('actif', 'essai', peu importe). Le correctif sur la liste des statuts
+// ci-dessus ne pouvait donc RIEN changer pour ce cas : le problème n'est
+// pas le filtre `statut`, c'est le filtre implicite introduit par la
+// jointure interne sur une table qui peut légitimement être vide (PDV
+// jamais configuré depuis /dashboard/pdv, ou désactivé).
+// Correctif : la requête tenant ne fait plus AUCUNE jointure sur
+// points_de_vente. Le PDV est récupéré séparément (comme le fait déjà
+// GET /profil dans api-dashboard.ts), et son absence ne bloque plus
+// l'affichage du tenant — la boutique s'affiche simplement sans
+// pdv_id/pdv_latitude/etc (l'UI boutique.js gère déjà pdvData === null,
+// elle désactive juste le calcul de frais de livraison GPS).
 
 import { Hono } from 'hono'
 import type { Env } from '../types/database'
@@ -101,17 +112,21 @@ tenantsRouter.get('/:slug', async (c) => {
 
   const adminClient = createSupabaseAdminClient(c.env)
 
-  // CORRECTIF BUG-3 — ajout de 'en_attente_paiement_initial' : un tenant
+  // CORRECTIF BUG-3 — 'en_attente_paiement_initial' ajouté : un tenant
   // ayant choisi un plan payant à l'inscription doit rester visible sur
   // sa boutique publique tant qu'il est dans cette fenêtre (avant son
   // premier paiement), exactement comme un tenant en 'essai'.
+  //
+  // CORRECTIF BUG-3-BIS — plus AUCUNE jointure sur points_de_vente ici
+  // (voir commentaire en tête de fichier). On ne sélectionne QUE les
+  // colonnes du tenant lui-même : une absence de PDV actif ne peut plus
+  // faire disparaître le tenant de la réponse.
   const { data: tenant, error } = await adminClient
     .from('tenants')
     .select(`
       id, nom, slug, logo_url, banniere_url,
       couleur_primaire, couleur_secondaire,
-      whatsapp_number, metadata, statut, pays_id,
-      points_de_vente!inner(id, nom, adresse, latitude, longitude, horaires)
+      whatsapp_number, metadata, statut, pays_id
     `)
     .eq('slug', slug)
     .in('statut', ['actif', 'essai', 'en_attente_paiement_initial'])
@@ -119,9 +134,27 @@ tenantsRouter.get('/:slug', async (c) => {
     .limit(1)
     .maybeSingle()
 
+  if (error) {
+    console.error('[Tenants] Erreur Supabase (GET /:slug):', error.message)
+    return c.json({ error: 'Erreur lors de la récupération du restaurant.' }, 500)
+  }
+
   if (!tenant) {
     return c.json({ error: 'Restaurant introuvable.' }, 404)
   }
+
+  // CORRECTIF BUG-3-BIS — requête PDV séparée, non bloquante. Si aucun
+  // PDV actif n'existe pour ce tenant, pdv reste simplement `null` et la
+  // boutique s'affiche quand même (sans calcul de frais de livraison
+  // GPS tant que le PDV n'est pas configuré depuis /dashboard/pdv).
+  const { data: pdv } = await adminClient
+    .from('points_de_vente')
+    .select('id, nom, adresse, latitude, longitude, horaires')
+    .eq('tenant_id', tenant.id)
+    .eq('actif', true)
+    .order('created_at', { ascending: true })
+    .limit(1)
+    .maybeSingle()
 
   let paysInfo: any = null
   if (tenant.pays_id) {
@@ -132,10 +165,6 @@ tenantsRouter.get('/:slug', async (c) => {
         .first()
     } catch { /* pays table may not exist yet */ }
   }
-
-  const pdv = Array.isArray(tenant.points_de_vente)
-    ? tenant.points_de_vente[0]
-    : tenant.points_de_vente
 
   const result = {
     id: tenant.id,
@@ -159,6 +188,8 @@ tenantsRouter.get('/:slug', async (c) => {
     pdv_horaires: pdv?.horaires ?? null
   }
 
+  // Non bloquant : on ne met en cache que si le tenant a bien été trouvé,
+  // jamais un 404 (évite de figer une absence temporaire en cache 5 min).
   try { if (c.env.KV_CACHE) await c.env.KV_CACHE.put(cacheKey, JSON.stringify(result), { expirationTtl: 300 }) } catch {}
 
   return c.json(result)
@@ -170,8 +201,9 @@ tenantsRouter.get('/:slug', async (c) => {
 // (pas de N+1 par produit).
 // CORRECTIF BUG-3 — même ajout de 'en_attente_paiement_initial' que pour
 // GET /:slug ci-dessus, pour que le menu reste chargeable pendant cette
-// fenêtre (sinon la boutique s'affiche sans son statut mais le menu reste
-// en 404, ce qui casse quand même la page).
+// fenêtre. Cette route ne faisait déjà PAS de jointure inner sur
+// points_de_vente — elle n'était donc pas affectée par le bug 3-bis
+// décrit en tête de fichier, seul le filtre statut était en cause ici.
 tenantsRouter.get('/:slug/menu', async (c) => {
   setSecurityHeaders(c)
   const slug = c.req.param('slug')
