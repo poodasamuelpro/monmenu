@@ -45,6 +45,17 @@ const app = new Hono<{ Bindings: Env }>()
 // Nom du cookie httpOnly — doit rester identique à celui posé dans api-auth.ts
 const ACCESS_TOKEN_COOKIE = 'sb-access-token'
 
+// FIX (audit statut boutiques) — Liste centralisée des statuts tenant qui
+// doivent afficher une page boutique publique normale. AVANT : seuls
+// 'actif' et 'essai' étaient acceptés, ce qui renvoyait un 404 pour tout
+// tenant en 'en_attente_paiement_initial' (compte payant tout juste créé,
+// en attente de validation du premier paiement) — alors même que
+// api-commandes.ts autorisait déjà la prise de commande pour ce statut.
+// Un tenant dans cet état DOIT pouvoir afficher sa boutique et recevoir
+// des commandes ; seul un statut 'suspendu' (ou tenant introuvable/supprimé)
+// doit bloquer l'accès public à la boutique.
+const STATUTS_BOUTIQUE_VISIBLE = ['actif', 'essai', 'en_attente_paiement_initial']
+
 async function fetchTenantAvecPdv(env: Env, filtre: { colonne: 'slug' | 'domaine_perso'; valeur: string }): Promise<TenantBoutique | null> {
   const adminClient = createSupabaseAdminClient(env)
   const { data: tenantRaw } = await adminClient
@@ -55,7 +66,7 @@ async function fetchTenantAvecPdv(env: Env, filtre: { colonne: 'slug' | 'domaine
       points_de_vente(nom, adresse, horaires, latitude, longitude, actif)
     `)
     .eq(filtre.colonne, filtre.valeur)
-    .in('statut', ['actif', 'essai'])
+    .in('statut', STATUTS_BOUTIQUE_VISIBLE)
     .is('deleted_at', null)
     .limit(1)
     .maybeSingle()
