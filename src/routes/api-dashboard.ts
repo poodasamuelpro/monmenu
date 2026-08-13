@@ -22,6 +22,22 @@
 // "whatsapp_number" indépendamment (aucune régression, comportement
 // inchangé — le frontend dashboard.js expose maintenant un bouton
 // "Modifier" qui utilise cette route existante).
+//
+// CORRECTIF CRITIQUE (401 setup-restaurant / notifications) — Un tenant
+// qui vient de choisir un PLAN PAYANT à l'inscription a le statut
+// 'en_attente_paiement_initial' tant qu'il n'a pas soumis son premier
+// paiement (voir src/lib/acces-tenant.ts : accesComplet=false,
+// accesAbonnementSeul=true dans ce cas). verifyAuth() exige
+// accesComplet STRICTEMENT, ce qui bloquait alors avec un 401 :
+//   - POST /setup-restaurant (onboarding étapes 1-4 de /bienvenue)
+//   - GET  /notifications et /notifications/liste (bandeau de rappel)
+// ...alors même que ces routes sont indispensables AVANT tout paiement.
+// GET /profil fonctionnait car elle a son propre check permissif déjà en
+// place — d'où l'incohérence observée (profil OK, setup-restaurant KO).
+// Nouvelle fonction verifyAuthOnboarding() : accepte accesComplet OU
+// accesAbonnementSeul, appliquée UNIQUEMENT à ces 3 routes. Toutes les
+// autres routes opérationnelles (commandes, menu, stats, etc.) restent
+// strictement verifyAuth() / accesComplet, comme avant.
 
 import { Hono } from 'hono'
 import { getCookie } from 'hono/cookie'
@@ -67,7 +83,7 @@ function extractToken(c: any): string | null {
   return null
 }
 
-// ---- Middleware d'authentification ----
+// ---- Middleware d'authentification (STRICT — accès complet requis) ----
 async function verifyAuth(c: any): Promise<{ user_id: string; tenant_id: string; tenant_slug: string; token: string } | null> {
   const token = extractToken(c)
   if (!token) return null
@@ -96,10 +112,47 @@ async function verifyAuth(c: any): Promise<{ user_id: string; tenant_id: string;
   } catch { return null }
 }
 
+// ---- Middleware d'authentification ONBOARDING (PERMISSIF) ----
+// Accepte accesComplet OU accesAbonnementSeul. Réservé aux routes
+// nécessaires AVANT le premier paiement d'un compte ayant choisi un plan
+// payant : configuration initiale du restaurant (setup-restaurant) et
+// affichage des rappels/notifications (essai qui expire, paiement en
+// attente, etc.), qui doivent rester visibles/utilisables pendant toute
+// la phase 'en_attente_paiement_initial' ou 'bloque'.
+// NE JAMAIS utiliser cette variante pour les routes opérationnelles
+// (commandes, menu, stats, livreurs...) — celles-ci doivent rester
+// strictement verifyAuth() / accesComplet.
+async function verifyAuthOnboarding(c: any): Promise<{ user_id: string; tenant_id: string; tenant_slug: string; token: string } | null> {
+  const token = extractToken(c)
+  if (!token) return null
+
+  try {
+    const supabase = createSupabaseClient(c.env)
+    const { data: { user }, error } = await supabase.auth.getUser(token)
+    if (error || !user) return null
+
+    const adminClient = createSupabaseAdminClient(c.env)
+    const { data: utData, error: utError } = await adminClient
+      .from('utilisateurs_tenant')
+      .select('tenant_id, tenants!inner(id, slug, deleted_at)')
+      .eq('auth_user_id', user.id)
+      .is('tenants.deleted_at', null)
+      .single()
+
+    if (utError || !utData) return null
+    const tenant = utData.tenants as any
+
+    const resultat = await verifierAccesTenant(c.env, utData.tenant_id)
+    if (!resultat.accesComplet && !resultat.accesAbonnementSeul) return null
+
+    return { user_id: user.id, tenant_id: utData.tenant_id, tenant_slug: tenant.slug, token }
+  } catch { return null }
+}
+
 // ---- GET /api/v1/dashboard/notifications ----
 dashboardRouter.get('/notifications', async (c) => {
   setSecurityHeaders(c)
-  const auth = await verifyAuth(c)
+  const auth = await verifyAuthOnboarding(c)
   if (!auth) return c.json({ error: 'Non authentifié.' }, 401)
 
   const adminClient = createSupabaseAdminClient(c.env)
@@ -1313,6 +1366,12 @@ dashboardRouter.get('/profil', async (c) => {
 })
 
 // ---- POST /api/v1/dashboard/profil/change-password ----
+// Le restaurant change lui-même son mot de passe depuis /dashboard/parametres,
+// en fournissant son mot de passe actuel (ré-authentification) + le nouveau.
+// Aucune déconnexion nécessaire : la session Supabase reste valide après
+// updateUser({ password }). Une notification in-app est créée pour que le
+// restaurateur soit informé du changement, avec une alerte s'il n'en est
+// pas à l'origine.
 dashboardRouter.post('/profil/change-password', async (c) => {
   setSecurityHeaders(c)
   const auth = await verifyAuth(c)
@@ -1345,6 +1404,18 @@ dashboardRouter.post('/profil/change-password', async (c) => {
   const supabase = createSupabaseClientWithToken(c.env, auth.token)
   const { error: updateError } = await supabase.auth.updateUser({ password: body.new_password })
   if (updateError) return c.json({ error: 'Erreur lors du changement de mot de passe.', detail: updateError.message }, 500)
+
+  const adminClient = createSupabaseAdminClient(c.env)
+  await adminClient
+    .from('notifications_restaurant')
+    .insert({
+      tenant_id: auth.tenant_id,
+      type: 'info',
+      titre: 'Mot de passe modifié',
+      message: 'Votre mot de passe a été changé avec succès. Si vous n\'êtes pas à l\'origine de cette action, contactez le support immédiatement.',
+      lien: '/dashboard/parametres'
+    })
+    .catch(() => {})
 
   return c.json({ success: true, message: 'Mot de passe mis à jour.' })
 })
@@ -1734,9 +1805,17 @@ dashboardRouter.get('/stats-journalieres', async (c) => {
 })
 
 // ---- POST /api/v1/dashboard/setup-restaurant — Onboarding bienvenue ----
+// CORRECTIF 401 — utilise désormais verifyAuthOnboarding() (permissif) au
+// lieu de verifyAuth() (strict). Un tenant ayant choisi un plan PAYANT à
+// l'inscription a le statut 'en_attente_paiement_initial' tant qu'il n'a
+// pas soumis son 1er paiement (accesComplet=false). Cette route étant
+// justement l'étape de configuration AVANT le paiement (étape 5 de
+// /bienvenue), elle doit rester accessible dans cet état — sinon aucun
+// utilisateur ayant choisi un plan payant ne peut jamais configurer son
+// restaurant.
 dashboardRouter.post('/setup-restaurant', async (c) => {
   setSecurityHeaders(c)
-  const auth = await verifyAuth(c)
+  const auth = await verifyAuthOnboarding(c)
   if (!auth) return c.json({ error: 'Non authentifié.' }, 401)
 
   let formData: FormData
@@ -1854,9 +1933,12 @@ dashboardRouter.post('/setup-restaurant', async (c) => {
 // ============================================================
 
 // ---- GET /api/v1/dashboard/notifications/liste ----
+// CORRECTIF 401 — même raison que /setup-restaurant : cette route est
+// utilisée par la page /bienvenue avant tout paiement, donc doit rester
+// accessible en mode accesAbonnementSeul (voir verifyAuthOnboarding).
 dashboardRouter.get('/notifications/liste', async (c) => {
   setSecurityHeaders(c)
-  const auth = await verifyAuth(c)
+  const auth = await verifyAuthOnboarding(c)
   if (!auth) return c.json({ error: 'Non authentifié.' }, 401)
 
   const page  = Math.max(1, parseInt(c.req.query('page')  || '1'))
