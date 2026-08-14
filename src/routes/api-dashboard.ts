@@ -573,9 +573,14 @@ dashboardRouter.get('/menu', async (c) => {
   const auth = await verifyAuth(c)
   if (!auth) return c.json({ error: 'Non authentifié.' }, 401)
 
+  // [session-3] Corr#9 — Pagination au niveau des produits
+  const page = Math.max(1, parseInt(c.req.query('page') ?? '1'))
+  const limit = Math.min(100, Math.max(1, parseInt(c.req.query('limit') ?? '100')))
+  const offset = (page - 1) * limit
+
   const supabase = createSupabaseClientWithToken(c.env, auth.token)
 
-  const [{ data: categories, error: catError }, { data: produits, error: prodError }] = await Promise.all([
+  const [{ data: categories, error: catError }, { data: produits, error: prodError, count: prodCount }] = await Promise.all([
     supabase
       .from('categories_menu')
       .select('id, nom, description, ordre_affichage, actif, created_at')
@@ -584,10 +589,11 @@ dashboardRouter.get('/menu', async (c) => {
 
     supabase
       .from('produits')
-      .select('id, categorie_id, nom, description, prix, photo_url, disponible, ordre_affichage, created_at, categories_menu!inner(nom)')
+      .select('id, categorie_id, nom, description, prix, photo_url, disponible, ordre_affichage, created_at, categories_menu!inner(nom)', { count: 'exact' })
       .eq('tenant_id', auth.tenant_id)
       .is('deleted_at', null)
       .order('ordre_affichage', { ascending: true })
+      .range(offset, offset + limit - 1)
   ])
 
   if (catError) return c.json({ error: 'Erreur récupération menu.', detail: catError.message }, 500)
@@ -612,7 +618,8 @@ dashboardRouter.get('/menu', async (c) => {
     stats: {
       nb_categories: categories?.length ?? 0,
       nb_produits: produits?.length ?? 0
-    }
+    },
+    pagination: { page, limit, total: prodCount ?? 0, pages: Math.ceil((prodCount ?? 0) / limit) }
   })
 })
 
@@ -1031,17 +1038,26 @@ dashboardRouter.get('/livreurs', async (c) => {
   const auth = await verifyAuth(c)
   if (!auth) return c.json({ error: 'Non authentifié.' }, 401)
 
+  // [session-3] Corr#9 — Pagination ajoutée
+  const page = Math.max(1, parseInt(c.req.query('page') ?? '1'))
+  const limit = Math.min(50, Math.max(1, parseInt(c.req.query('limit') ?? '50')))
+  const offset = (page - 1) * limit
+
   const supabase = createSupabaseClientWithToken(c.env, auth.token)
 
-  const { data: livreurs, error } = await supabase
+  const { data: livreurs, error, count } = await supabase
     .from('livreurs')
-    .select('id, nom, whatsapp_number, actif, created_at')
+    .select('id, nom, whatsapp_number, actif, created_at', { count: 'exact' })
     .eq('tenant_id', auth.tenant_id)
     .order('nom', { ascending: true })
+    .range(offset, offset + limit - 1)
 
   if (error) return c.json({ error: 'Erreur récupération livreurs.', detail: error.message }, 500)
 
-  return c.json({ livreurs: livreurs ?? [] })
+  return c.json({
+    livreurs: livreurs ?? [],
+    pagination: { page, limit, total: count ?? 0, pages: Math.ceil((count ?? 0) / limit) }
+  })
 })
 
 // ---- POST /api/v1/dashboard/livreurs ----
@@ -1519,17 +1535,26 @@ dashboardRouter.get('/codes-promo', async (c) => {
   const auth = await verifyAuth(c)
   if (!auth) return c.json({ error: 'Non authentifié.' }, 401)
 
+  // [session-3] Corr#9 — Pagination ajoutée
+  const page = Math.max(1, parseInt(c.req.query('page') ?? '1'))
+  const limit = Math.min(50, Math.max(1, parseInt(c.req.query('limit') ?? '20')))
+  const offset = (page - 1) * limit
+
   const supabase = createSupabaseClientWithToken(c.env, auth.token)
 
-  const { data: codes, error } = await supabase
+  const { data: codes, error, count } = await supabase
     .from('codes_promo')
-    .select('id, code, type, valeur, date_debut, date_fin, usage_max, usage_actuel, actif, created_at')
+    .select('id, code, type, valeur, date_debut, date_fin, usage_max, usage_actuel, actif, created_at', { count: 'exact' })
     .eq('tenant_id', auth.tenant_id)
     .order('created_at', { ascending: false })
+    .range(offset, offset + limit - 1)
 
   if (error) return c.json({ error: 'Erreur récupération codes promo.', detail: error.message }, 500)
 
-  return c.json({ codes: codes ?? [] })
+  return c.json({
+    codes: codes ?? [],
+    pagination: { page, limit, total: count ?? 0, pages: Math.ceil((count ?? 0) / limit) }
+  })
 })
 
 // ---- GET /api/v1/dashboard/codes-promo/export-csv ----
