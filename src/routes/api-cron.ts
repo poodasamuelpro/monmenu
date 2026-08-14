@@ -473,7 +473,15 @@ async function bloquerPaiementsExpires(env: Env): Promise<void> {
           .eq('statut', 'essai') // Ne toucher que les tenants en essai (pas actif, pas paiement_initial — voir note ci-dessus)
 
         if (env.KV_CACHE) {
-          try { await env.KV_CACHE.delete(`tenant:${tenant.slug}`) } catch {}
+          // B2 session-4 — Corr#8b complété : tenants:public invalidé ici aussi
+          // (identique à verifierEssaisExpires et verifierAbonnementsExpires)
+          try {
+            await Promise.allSettled([
+              env.KV_CACHE.delete(`tenant:${tenant.slug}`),
+              env.KV_CACHE.delete('tenants:public:12'),
+              env.KV_CACHE.delete('tenants:public:24')
+            ])
+          } catch {}
         }
       }
 
