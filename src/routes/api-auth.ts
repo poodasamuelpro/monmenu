@@ -92,6 +92,7 @@ import { setCookie, deleteCookie, getCookie } from 'hono/cookie'
 import type { Env } from '../types/database'
 import { checkRateLimit, setSecurityHeaders, sanitizeSlug } from '../lib/security'
 import { createSupabaseClient, createSupabaseClientWithToken, createSupabaseAdminClient } from '../lib/supabase'
+import { envoyerEmailBienvenue } from '../lib/brevo'
 
 const authRouter = new Hono<{ Bindings: Env }>()
 
@@ -411,6 +412,16 @@ authRouter.post('/register', async (c) => {
     }
     setAuthCookies(c, authData.session.access_token, authData.session.refresh_token)
   }
+
+  // [session-3] Email de bienvenue non-bloquant
+  try {
+    if (authData.user.email) {
+      envoyerEmailBienvenue(c.env, {
+        email: authData.user.email,
+        nom_restaurant: nom_restaurant.trim()
+      }).catch(() => {})
+    }
+  } catch {}
 
   // CORRECTIF — toujours rediriger vers /bienvenue, quel que soit le plan
   // choisi. bienvenue.ts (étape 5) gère déjà l'affichage du plan payant

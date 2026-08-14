@@ -143,6 +143,7 @@ export function setSecurityHeaders(c: Context, nonce?: string): void {
     ? `'nonce-${nonce}' cdn.tailwindcss.com cdn.jsdelivr.net api.mapbox.com`
     : `'unsafe-inline' cdn.tailwindcss.com cdn.jsdelivr.net api.mapbox.com`
 
+  c.header('Strict-Transport-Security', 'max-age=31536000; includeSubDomains; preload')
   c.header('X-Content-Type-Options', 'nosniff')
   c.header('X-Frame-Options', 'DENY')
   c.header('X-XSS-Protection', '1; mode=block')

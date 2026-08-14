@@ -71,6 +71,7 @@ import { createSupabaseClient, createSupabaseAdminClient } from '../lib/supabase
 import { setSecurityHeaders, checkRateLimit } from '../lib/security'
 import { verifierAccesTenant } from '../lib/acces-tenant'
 import { chargerPlan } from '../lib/plans'
+import { envoyerEmailPaiementSoumis } from '../lib/brevo'
 import {
   genererReferencePaiement,
   calculerDeadlineConfirmation,
@@ -517,6 +518,23 @@ paiementRouter.post('/soumettre', async (c) => {
   } catch (err) {
     console.error('[PAIEMENT] Erreur non bloquante notification restaurant:', err instanceof Error ? err.message : err)
   }
+
+  // [session-3] Email paiement soumis — non-bloquant, récupère l'email via adminAuth
+  try {
+    const adminClient2 = createSupabaseAdminClient(c.env)
+    adminClient2.auth.admin.getUserById(auth.user_id).then(({ data }) => {
+      if (data?.user?.email) {
+        envoyerEmailPaiementSoumis(c.env, {
+          email: data.user.email,
+          nom_restaurant: auth.tenant_nom
+        }, {
+          plan_nom: plan.nom,
+          reference,
+          delai_confirmation_iso: deadline.toISOString()
+        }).catch(() => {})
+      }
+    }).catch(() => {})
+  } catch {}
 
   console.log(`[PAIEMENT] Preuve soumise — tenant: ${auth.tenant_id.slice(0, 8)}... plan: ${planId.slice(0, 8)}...`)
 

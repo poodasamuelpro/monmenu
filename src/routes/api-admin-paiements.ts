@@ -40,6 +40,7 @@ import { formaterDate, SLA_ADMIN_HEURES, FENETRE_ACCES_HEURES } from '../lib/pai
 import { chargerPlan } from '../lib/plans'
 import { notifierPaiementConfirme, notifierPaiementRejete } from '../lib/whatsapp'
 import { sendFcmToTenant } from '../lib/fcm'
+import { envoyerEmailPaiementConfirme, envoyerEmailPaiementRejete } from '../lib/brevo'
 
 const adminPaiementsRouter = new Hono<{ Bindings: Env }>()
 
@@ -86,22 +87,28 @@ adminPaiementsRouter.get('/', async (c) => {
     return c.json({ error: 'Erreur lors de la récupération.' }, 500)
   }
 
-  // MIGRATION — enrichissement du nom de plan via Supabase (chargerPlan),
-  // plus de requête D1.
-  const enrichis = await Promise.all(
-    (abonnements ?? []).map(async (ab: any) => {
-      let plan_nom = null
-      if (ab.plan_id) {
-        const plan = await chargerPlan(c.env, ab.plan_id)
-        plan_nom = plan?.nom ?? null
-      }
-      const heuresRestantes = ab.delai_confirmation_expire_le
-        ? Math.ceil((new Date(ab.delai_confirmation_expire_le).getTime() - Date.now()) / 3600000)
-        : null
-      const urgent = heuresRestantes !== null && heuresRestantes < 12
-      return { ...ab, plan_nom, heures_restantes: heuresRestantes, urgent }
-    })
-  )
+  // Corr#14.2 — Anti-N+1 : charger tous les plans distincts en une requête .in()
+  // au lieu de N appels chargerPlan individuels dans Promise.all.
+  const planIds = [...new Set((abonnements ?? []).map((ab: any) => ab.plan_id).filter(Boolean))]
+  const plansMap = new Map<string, string>()
+  if (planIds.length > 0) {
+    const { data: plansData } = await adminClient
+      .from('plans')
+      .select('id, nom')
+      .in('id', planIds)
+    for (const p of (plansData ?? [])) {
+      plansMap.set(p.id, p.nom)
+    }
+  }
+
+  const enrichis = (abonnements ?? []).map((ab: any) => {
+    const plan_nom = ab.plan_id ? (plansMap.get(ab.plan_id) ?? null) : null
+    const heuresRestantes = ab.delai_confirmation_expire_le
+      ? Math.ceil((new Date(ab.delai_confirmation_expire_le).getTime() - Date.now()) / 3600000)
+      : null
+    const urgent = heuresRestantes !== null && heuresRestantes < 12
+    return { ...ab, plan_nom, heures_restantes: heuresRestantes, urgent }
+  })
 
   return c.json({
     paiements: enrichis,
@@ -236,6 +243,47 @@ adminPaiementsRouter.post('/confirmer', async (c) => {
     })
     .catch(() => {})
 
+  // [session-3] Email paiement confirmé — non-bloquant
+  try {
+    if (tenant?.id) {
+      adminClient
+        .from('utilisateurs_tenant')
+        .select('auth_user_id')
+        .eq('tenant_id', tenant.id)
+        .limit(1)
+        .maybeSingle()
+        .then(({ data: ut }) => {
+          if (ut?.auth_user_id) {
+            return adminClient.auth.admin.getUserById(ut.auth_user_id)
+          }
+        })
+        .then((res: any) => {
+          const email = res?.data?.user?.email
+          if (email && tenant?.nom) {
+            envoyerEmailPaiementConfirme(c.env, {
+              email,
+              nom_restaurant: tenant.nom
+            }, {
+              plan_nom: planNom ?? '',
+              reference: abonnement.reference_paiement ?? '',
+              date_fin_iso: dateFin ?? undefined
+            }).catch(() => {})
+          }
+        })
+        .catch(() => {})
+    }
+  } catch {}
+
+  // [session-3] Invalider aussi tenants:public dans KV
+  if (c.env.KV_CACHE) {
+    try {
+      await Promise.allSettled([
+        c.env.KV_CACHE.delete('tenants:public:12'),
+        c.env.KV_CACHE.delete('tenants:public:24')
+      ])
+    } catch {}
+  }
+
   console.log(`[admin-paiements] Paiement confirmé — tenant: ${abonnement.tenant_id.slice(0, 8)}... abonnement: ${abonnement_id.slice(0, 8)}...`)
 
   return c.json({
@@ -355,6 +403,45 @@ adminPaiementsRouter.post('/rejeter', async (c) => {
         payload: { abonnement_id, rejete_le: now, motif }
       })
       .catch(() => {})
+  }
+
+  // [session-3] Email paiement rejeté — non-bloquant
+  try {
+    if (tenant?.id) {
+      adminClient
+        .from('utilisateurs_tenant')
+        .select('auth_user_id')
+        .eq('tenant_id', tenant.id)
+        .limit(1)
+        .maybeSingle()
+        .then(({ data: ut }: any) => {
+          if (ut?.auth_user_id) return adminClient.auth.admin.getUserById(ut.auth_user_id)
+        })
+        .then((res: any) => {
+          const email = res?.data?.user?.email
+          if (email && tenant?.nom) {
+            envoyerEmailPaiementRejete(c.env, {
+              email,
+              nom_restaurant: tenant.nom
+            }, {
+              plan_nom: '',
+              reference: abonnement.reference_paiement ?? '',
+              motif: motif.trim()
+            }).catch(() => {})
+          }
+        })
+        .catch(() => {})
+    }
+  } catch {}
+
+  // [session-3] Invalider tenants:public dans KV
+  if (c.env.KV_CACHE) {
+    try {
+      await Promise.allSettled([
+        c.env.KV_CACHE.delete('tenants:public:12'),
+        c.env.KV_CACHE.delete('tenants:public:24')
+      ])
+    } catch {}
   }
 
   console.log(`[admin-paiements] Paiement rejeté — tenant: ${abonnement.tenant_id.slice(0, 8)}... motif: ${motif.slice(0, 30)}...`)
@@ -500,6 +587,96 @@ adminPaiementsRouter.patch('/moyens/:id', async (c) => {
   }
 
   return c.json({ success: true, moyen: data })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Corr#11 — Routes admin suppression de compte
+// ─────────────────────────────────────────────────────────────────────────────
+
+// GET /api/v1/admin/suppressions — Liste des suppressions programmées
+adminPaiementsRouter.get('/suppressions', async (c) => {
+  const adminClient = createSupabaseAdminClient(c.env)
+
+  const { data: tenants, error } = await adminClient
+    .from('tenants')
+    .select('id, nom, slug, statut, suppression_demandee_le, suppression_prevue_le')
+    .not('suppression_prevue_le', 'is', null)
+    .is('deleted_at', null)
+    .order('suppression_prevue_le', { ascending: true })
+
+  if (error) {
+    console.error('[Admin/Suppressions] Erreur liste:', error.message)
+    return c.json({ error: 'Erreur récupération suppressions.' }, 500)
+  }
+
+  return c.json({ suppressions: tenants ?? [] })
+})
+
+// POST /api/v1/admin/suppressions/:tenant_id/executer
+// Exécute la suppression définitive : soft-delete tenants + deleteUser Auth.
+// Conditions : suppression_prevue_le doit être passée (sinon 422).
+adminPaiementsRouter.post('/suppressions/:tenant_id/executer', async (c) => {
+  const tenantId = c.req.param('tenant_id')
+  if (!tenantId) return c.json({ error: 'tenant_id requis.' }, 422)
+
+  const adminClient = createSupabaseAdminClient(c.env)
+
+  const { data: tenant, error: fetchError } = await adminClient
+    .from('tenants')
+    .select('id, nom, suppression_prevue_le')
+    .eq('id', tenantId)
+    .is('deleted_at', null)
+    .maybeSingle()
+
+  if (fetchError || !tenant) {
+    return c.json({ error: 'Tenant introuvable ou déjà supprimé.' }, 404)
+  }
+
+  if (!tenant.suppression_prevue_le) {
+    return c.json({ error: 'Aucune suppression programmée pour ce tenant.' }, 422)
+  }
+
+  if (new Date(tenant.suppression_prevue_le) > new Date()) {
+    return c.json({
+      error: 'Suppression non encore exigible.',
+      suppression_prevue_le: tenant.suppression_prevue_le
+    }, 422)
+  }
+
+  // 1. Récupérer l'auth_user_id avant le soft-delete
+  const { data: utRow } = await adminClient
+    .from('utilisateurs_tenant')
+    .select('auth_user_id')
+    .eq('tenant_id', tenantId)
+    .maybeSingle()
+
+  // 2. Soft-delete tenant (deleted_at = now) — les FK CASCADE suppriment
+  //    les tables enfants selon la configuration Supabase.
+  const { error: softDeleteError } = await adminClient
+    .from('tenants')
+    .update({ deleted_at: new Date().toISOString() })
+    .eq('id', tenantId)
+
+  if (softDeleteError) {
+    console.error('[Admin/Suppressions] Erreur soft-delete:', softDeleteError.message)
+    return c.json({ error: 'Erreur lors de la suppression.' }, 500)
+  }
+
+  // 3. Suppression Auth Supabase (non bloquante — ne doit pas faire échouer
+  //    la suppression si le user Auth est déjà absent)
+  if (utRow?.auth_user_id) {
+    try {
+      await adminClient.auth.admin.deleteUser(utRow.auth_user_id)
+    } catch (e: any) {
+      console.warn('[Admin/Suppressions] deleteUser Auth échoué (non bloquant):', e?.message ?? e)
+    }
+  }
+
+  return c.json({
+    success: true,
+    message: `Compte "${tenant.nom}" supprimé définitivement.`,
+    tenant_id: tenantId
+  })
 })
 
 export { adminPaiementsRouter }

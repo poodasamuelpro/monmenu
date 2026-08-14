@@ -116,6 +116,9 @@ tenantsRouter.get('/:slug', async (c) => {
   // ayant choisi un plan payant à l'inscription doit rester visible sur
   // sa boutique publique tant qu'il est dans cette fenêtre (avant son
   // premier paiement), exactement comme un tenant en 'essai'.
+  // Corr#14.6 — 'inactif' ajouté : grace_confirmation — un tenant inactif
+  // (essai expiré ou abonnement expiré) peut entrer dans une fenêtre de
+  // grace côté front, la boutique doit rester résolvable pour l'afficher.
   //
   // CORRECTIF BUG-3-BIS — plus AUCUNE jointure sur points_de_vente ici
   // (voir commentaire en tête de fichier). On ne sélectionne QUE les
@@ -129,7 +132,7 @@ tenantsRouter.get('/:slug', async (c) => {
       whatsapp_number, metadata, statut, pays_id
     `)
     .eq('slug', slug)
-    .in('statut', ['actif', 'essai', 'en_attente_paiement_initial'])
+    .in('statut', ['actif', 'essai', 'en_attente_paiement_initial', 'inactif'])
     .is('deleted_at', null)
     .limit(1)
     .maybeSingle()
@@ -218,11 +221,12 @@ tenantsRouter.get('/:slug/menu', async (c) => {
 
   const adminClient = createSupabaseAdminClient(c.env)
 
+  // Corr#14.6 — 'inactif' ajouté au filtre statut (grace_confirmation).
   const { data: tenantRow, error: tenantError } = await adminClient
     .from('tenants')
     .select('id')
     .eq('slug', slug)
-    .in('statut', ['actif', 'essai', 'en_attente_paiement_initial'])
+    .in('statut', ['actif', 'essai', 'en_attente_paiement_initial', 'inactif'])
     .is('deleted_at', null)
     .single()
 

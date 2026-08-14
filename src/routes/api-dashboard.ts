@@ -110,8 +110,26 @@ import { setSecurityHeaders, checkRateLimit } from '../lib/security'
 import { genererMessageLivreur, genererLienWhatsApp, envoyerNotificationWhatsApp } from '../lib/whatsapp'
 import { verifierAccesTenant } from '../lib/acces-tenant'
 import { chargerPlan } from '../lib/plans'
+import { envoyerEmailSuppressionDemande } from '../lib/brevo'
 
 const dashboardRouter = new Hono<{ Bindings: Env }>()
+
+// Corr#12 — Validation magic bytes pour les uploads image.
+// Vérifie les octets d'en-tête réels du fichier (indépendamment de file.type).
+// Retourne le MIME réel ou null si non reconnu.
+function validerMimeImage(buffer: ArrayBuffer): string | null {
+  const bytes = new Uint8Array(buffer.slice(0, 12))
+  // JPEG : FF D8 FF
+  if (bytes[0] === 0xFF && bytes[1] === 0xD8 && bytes[2] === 0xFF) return 'image/jpeg'
+  // PNG : 89 50 4E 47 0D 0A 1A 0A
+  if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47) return 'image/png'
+  // GIF : 47 49 46 38
+  if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x38) return 'image/gif'
+  // WebP : 52 49 46 46 ?? ?? ?? ?? 57 45 42 50
+  if (bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
+      bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) return 'image/webp'
+  return null
+}
 
 const ACCESS_TOKEN_COOKIE = 'sb-access-token'
 
@@ -479,8 +497,12 @@ dashboardRouter.get('/stats', async (c) => {
   const monthStart = today.substring(0, 7) + '-01'
   const thirtyDaysAgo = new Date(Date.now() - 29 * 86400000).toISOString().split('T')[0]
 
+  // Corr#9-fin — allCommandes remplacé par 3 COUNT SQL (plus de fetch mémoire).
+  // Les taux livraison/annulation utilisent désormais des requêtes head-only.
   const [
-    { data: allCommandes },
+    { count: totalAll },
+    { count: livrees },
+    { count: annulees },
     { data: todayCommandes },
     { data: monthCommandes },
     { data: last30Days },
@@ -488,8 +510,22 @@ dashboardRouter.get('/stats', async (c) => {
   ] = await Promise.all([
     supabase
       .from('commandes')
-      .select('statut, montant_total')
+      .select('id', { count: 'exact', head: true })
       .eq('tenant_id', auth.tenant_id)
+      .is('deleted_at', null),
+
+    supabase
+      .from('commandes')
+      .select('id', { count: 'exact', head: true })
+      .eq('tenant_id', auth.tenant_id)
+      .eq('statut', 'livree')
+      .is('deleted_at', null),
+
+    supabase
+      .from('commandes')
+      .select('id', { count: 'exact', head: true })
+      .eq('tenant_id', auth.tenant_id)
+      .eq('statut', 'annulee')
       .is('deleted_at', null),
 
     supabase
@@ -525,12 +561,11 @@ dashboardRouter.get('/stats', async (c) => {
   const caToday = (todayCommandes ?? []).reduce((s, c) => s + (c.montant_total ?? 0), 0)
   const caMonth = (monthCommandes ?? []).reduce((s, c) => s + (c.montant_total ?? 0), 0)
 
-  const totalAll = (allCommandes ?? []).length
-  const livrees = (allCommandes ?? []).filter(c => c.statut === 'livree').length
-  const annulees = (allCommandes ?? []).filter(c => c.statut === 'annulee').length
-  const statutsMap: Record<string, number> = {}
-  for (const c of (allCommandes ?? [])) {
-    statutsMap[c.statut] = (statutsMap[c.statut] ?? 0) + 1
+  // NOTE : statuts map non disponible sans fetch mémoire — on retourne les
+  // compteurs explicites uniquement (total, livrees, annulees).
+  const statutsMap: Record<string, number> = {
+    livree: livrees ?? 0,
+    annulee: annulees ?? 0
   }
 
   const labels: string[] = []
@@ -557,8 +592,8 @@ dashboardRouter.get('/stats', async (c) => {
     ca_today: caToday,
     month: monthCommandes?.length ?? 0,
     ca_month: caMonth,
-    taux_livraison: totalAll > 0 ? Math.round((livrees / totalAll) * 100) : 0,
-    taux_annulation: totalAll > 0 ? Math.round((annulees / totalAll) * 100) : 0,
+    taux_livraison: (totalAll ?? 0) > 0 ? Math.round(((livrees ?? 0) / (totalAll ?? 1)) * 100) : 0,
+    taux_annulation: (totalAll ?? 0) > 0 ? Math.round(((annulees ?? 0) / (totalAll ?? 1)) * 100) : 0,
     nb_produits: nbProduits ?? 0,
     statuts: statutsMap,
     labels,
@@ -573,9 +608,14 @@ dashboardRouter.get('/menu', async (c) => {
   const auth = await verifyAuth(c)
   if (!auth) return c.json({ error: 'Non authentifié.' }, 401)
 
+  // [session-3] Corr#9 — Pagination au niveau des produits
+  const page = Math.max(1, parseInt(c.req.query('page') ?? '1'))
+  const limit = Math.min(100, Math.max(1, parseInt(c.req.query('limit') ?? '100')))
+  const offset = (page - 1) * limit
+
   const supabase = createSupabaseClientWithToken(c.env, auth.token)
 
-  const [{ data: categories, error: catError }, { data: produits, error: prodError }] = await Promise.all([
+  const [{ data: categories, error: catError }, { data: produits, error: prodError, count: prodCount }] = await Promise.all([
     supabase
       .from('categories_menu')
       .select('id, nom, description, ordre_affichage, actif, created_at')
@@ -584,10 +624,11 @@ dashboardRouter.get('/menu', async (c) => {
 
     supabase
       .from('produits')
-      .select('id, categorie_id, nom, description, prix, photo_url, disponible, ordre_affichage, created_at, categories_menu!inner(nom)')
+      .select('id, categorie_id, nom, description, prix, photo_url, disponible, ordre_affichage, created_at, categories_menu!inner(nom)', { count: 'exact' })
       .eq('tenant_id', auth.tenant_id)
       .is('deleted_at', null)
       .order('ordre_affichage', { ascending: true })
+      .range(offset, offset + limit - 1)
   ])
 
   if (catError) return c.json({ error: 'Erreur récupération menu.', detail: catError.message }, 500)
@@ -612,7 +653,8 @@ dashboardRouter.get('/menu', async (c) => {
     stats: {
       nb_categories: categories?.length ?? 0,
       nb_produits: produits?.length ?? 0
-    }
+    },
+    pagination: { page, limit, total: prodCount ?? 0, pages: Math.ceil((prodCount ?? 0) / limit) }
   })
 })
 
@@ -1031,17 +1073,26 @@ dashboardRouter.get('/livreurs', async (c) => {
   const auth = await verifyAuth(c)
   if (!auth) return c.json({ error: 'Non authentifié.' }, 401)
 
+  // [session-3] Corr#9 — Pagination ajoutée
+  const page = Math.max(1, parseInt(c.req.query('page') ?? '1'))
+  const limit = Math.min(50, Math.max(1, parseInt(c.req.query('limit') ?? '50')))
+  const offset = (page - 1) * limit
+
   const supabase = createSupabaseClientWithToken(c.env, auth.token)
 
-  const { data: livreurs, error } = await supabase
+  const { data: livreurs, error, count } = await supabase
     .from('livreurs')
-    .select('id, nom, whatsapp_number, actif, created_at')
+    .select('id, nom, whatsapp_number, actif, created_at', { count: 'exact' })
     .eq('tenant_id', auth.tenant_id)
     .order('nom', { ascending: true })
+    .range(offset, offset + limit - 1)
 
   if (error) return c.json({ error: 'Erreur récupération livreurs.', detail: error.message }, 500)
 
-  return c.json({ livreurs: livreurs ?? [] })
+  return c.json({
+    livreurs: livreurs ?? [],
+    pagination: { page, limit, total: count ?? 0, pages: Math.ceil((count ?? 0) / limit) }
+  })
 })
 
 // ---- POST /api/v1/dashboard/livreurs ----
@@ -1272,7 +1323,10 @@ dashboardRouter.patch('/apparence', async (c) => {
     return c.json({ error: 'Couleur secondaire invalide (format #RRGGBB).' }, 422)
   }
 
-  const supabase = createSupabaseClientWithToken(c.env, auth.token)
+  // [session-3] Corr#8a — switch vers adminClient (bypass RLS) + vérification rowCount
+  // Le client RLS (createSupabaseClientWithToken) retournait succès silencieux si la
+  // politique RLS bloquait l'update (0 lignes modifiées, pas d'erreur).
+  const adminClient = createSupabaseAdminClient(c.env)
 
   const updateData: any = { updated_at: new Date().toISOString() }
   if (body.couleur_primaire !== undefined) updateData.couleur_primaire = body.couleur_primaire
@@ -1280,12 +1334,15 @@ dashboardRouter.patch('/apparence', async (c) => {
   if (body.logo_url !== undefined) updateData.logo_url = body.logo_url
   if (body.banniere_url !== undefined) updateData.banniere_url = body.banniere_url
 
-  const { error } = await supabase
+  const { data: updated, error } = await adminClient
     .from('tenants')
     .update(updateData)
     .eq('id', auth.tenant_id)
+    .is('deleted_at', null)
+    .select('id')
 
   if (error) return c.json({ error: 'Erreur mise à jour apparence.', detail: error.message }, 500)
+  if (!updated || updated.length === 0) return c.json({ error: 'Restaurant introuvable ou accès refusé.' }, 404)
 
   try { if (c.env.KV_CACHE) await c.env.KV_CACHE.delete(`tenant:${auth.tenant_slug}`) } catch {}
 
@@ -1300,7 +1357,7 @@ dashboardRouter.patch('/parametres', async (c) => {
   const auth = await verifyAuth(c)
   if (!auth) return c.json({ error: 'Non authentifié.' }, 401)
 
-  let body: { nom?: string; whatsapp_number?: string; domaine_perso?: string | null }
+  let body: { nom?: string; whatsapp_number?: string }
   try { body = await c.req.json() } catch { return c.json({ error: 'JSON invalide.' }, 400) }
 
   if (!body.nom || body.nom.trim().length < 2) return c.json({ error: 'Nom invalide.' }, 422)
@@ -1310,30 +1367,10 @@ dashboardRouter.patch('/parametres', async (c) => {
 
   const supabase = createSupabaseClientWithToken(c.env, auth.token)
 
-  if (body.domaine_perso !== undefined && body.domaine_perso !== null && body.domaine_perso !== '') {
-    const { data: tenantInfo } = await supabase
-      .from('tenants')
-      .select('plan_id')
-      .eq('id', auth.tenant_id)
-      .single()
-
-    if (tenantInfo?.plan_id) {
-      // MIGRATION — chargerPlan() lit directement Supabase avec l'UUID
-      // natif de tenant.plan_id (plus de résolution D1).
-      const planActuel = await chargerPlan(c.env, tenantInfo.plan_id)
-      const planNom = (planActuel?.nom ?? '').toLowerCase()
-      if (!planNom.includes('mogho')) {
-        return c.json({
-          error: 'Le domaine personnalisé est réservé au plan Mogho.',
-          upgrade_required: true
-        }, 403)
-      }
-    }
-  }
+  // [session-3] domaine_perso supprimé — toute logique de validation/mise à jour retirée
 
   const updateData: any = { nom: body.nom.trim(), updated_at: new Date().toISOString() }
   if (body.whatsapp_number !== undefined) updateData.whatsapp_number = body.whatsapp_number
-  if (body.domaine_perso !== undefined) updateData.domaine_perso = body.domaine_perso
 
   const { error } = await supabase
     .from('tenants')
@@ -1381,34 +1418,35 @@ dashboardRouter.get('/profil', async (c) => {
 
   const { data: tenant, error: tenantError } = await supabaseToken
     .from('tenants')
-    .select('id, nom, slug, logo_url, banniere_url, couleur_primaire, couleur_secondaire, whatsapp_number, domaine_perso, statut, created_at, plan_id')
+    .select('id, nom, slug, logo_url, banniere_url, couleur_primaire, couleur_secondaire, whatsapp_number, statut, created_at, plan_id')
     .eq('id', tenantId)
     .maybeSingle()
 
   const tenantFinal = tenant ?? (await adminClient
     .from('tenants')
-    .select('id, nom, slug, logo_url, banniere_url, couleur_primaire, couleur_secondaire, whatsapp_number, domaine_perso, statut, created_at, plan_id')
+    .select('id, nom, slug, logo_url, banniere_url, couleur_primaire, couleur_secondaire, whatsapp_number, statut, created_at, plan_id')
     .eq('id', tenantId)
     .maybeSingle()).data
 
   if (!tenantFinal) return c.json({ error: 'Restaurant introuvable.' }, 404)
 
   // MIGRATION — chargerPlan() lit directement Supabase (plus de D1)
-  const planActuel = await chargerPlan(c.env, tenantFinal.plan_id)
-
-  const { data: pdv } = await adminClient
-    .from('points_de_vente')
-    .select('id, nom, adresse, latitude, longitude, horaires')
-    .eq('tenant_id', tenantId)
-    .eq('actif', true)
-    .limit(1)
-    .maybeSingle()
-
-  const { count: totalCommandes } = await adminClient
-    .from('commandes')
-    .select('id', { count: 'exact', head: true })
-    .eq('tenant_id', tenantId)
-    .is('deleted_at', null)
+  // Corr#14.3 — pdv + totalCommandes en Promise.all (2 requêtes parallèles)
+  const [planActuel, { data: pdv }, { count: totalCommandes }] = await Promise.all([
+    chargerPlan(c.env, tenantFinal.plan_id),
+    adminClient
+      .from('points_de_vente')
+      .select('id, nom, adresse, latitude, longitude, horaires')
+      .eq('tenant_id', tenantId)
+      .eq('actif', true)
+      .limit(1)
+      .maybeSingle(),
+    adminClient
+      .from('commandes')
+      .select('id', { count: 'exact', head: true })
+      .eq('tenant_id', tenantId)
+      .is('deleted_at', null)
+  ])
 
   return c.json({
     ...tenantFinal,
@@ -1533,17 +1571,26 @@ dashboardRouter.get('/codes-promo', async (c) => {
   const auth = await verifyAuth(c)
   if (!auth) return c.json({ error: 'Non authentifié.' }, 401)
 
+  // [session-3] Corr#9 — Pagination ajoutée
+  const page = Math.max(1, parseInt(c.req.query('page') ?? '1'))
+  const limit = Math.min(50, Math.max(1, parseInt(c.req.query('limit') ?? '20')))
+  const offset = (page - 1) * limit
+
   const supabase = createSupabaseClientWithToken(c.env, auth.token)
 
-  const { data: codes, error } = await supabase
+  const { data: codes, error, count } = await supabase
     .from('codes_promo')
-    .select('id, code, type, valeur, date_debut, date_fin, usage_max, usage_actuel, actif, created_at')
+    .select('id, code, type, valeur, date_debut, date_fin, usage_max, usage_actuel, actif, created_at', { count: 'exact' })
     .eq('tenant_id', auth.tenant_id)
     .order('created_at', { ascending: false })
+    .range(offset, offset + limit - 1)
 
   if (error) return c.json({ error: 'Erreur récupération codes promo.', detail: error.message }, 500)
 
-  return c.json({ codes: codes ?? [] })
+  return c.json({
+    codes: codes ?? [],
+    pagination: { page, limit, total: count ?? 0, pages: Math.ceil((count ?? 0) / limit) }
+  })
 })
 
 // ---- GET /api/v1/dashboard/codes-promo/export-csv ----
@@ -1789,14 +1836,43 @@ dashboardRouter.post('/upload-image', async (c) => {
     return c.json({ error: 'Fichier trop volumineux (max 5 MB).' }, 413)
   }
 
-  const ext = file.type.split('/')[1].replace('jpeg', 'jpg')
-  const key = `${auth.tenant_id}/${Date.now()}-${crypto.randomUUID().slice(0, 8)}.${ext}`
   const buffer = await file.arrayBuffer()
 
-  await c.env.R2_MEDIA.put(key, buffer, {
-    httpMetadata: { contentType: file.type },
-    customMetadata: { tenant_id: auth.tenant_id, uploaded_at: new Date().toISOString() }
-  })
+  // Corr#12 — Validation magic bytes (anti-spoofing MIME)
+  // Vérifie les octets d'en-tête réels du fichier, pas seulement file.type.
+  const validatedMime = validerMimeImage(buffer)
+  if (!validatedMime) {
+    return c.json({ error: 'Fichier invalide. Seuls les vrais JPEG, PNG, WebP et GIF sont acceptés.' }, 415)
+  }
+
+  const ext = validatedMime.split('/')[1].replace('jpeg', 'jpg')
+  const key = `${auth.tenant_id}/${Date.now()}-${crypto.randomUUID().slice(0, 8)}.${ext}`
+
+  // Corr#12 — Clé ancienne (optionnelle, pour suppression post-upload)
+  const ancienneClé = (formData.get('ancienne_cle') as string | null)?.trim() || null
+
+  // Corr#12 — try/catch sur R2.put() (erreur R2 non-fatale ignorée auparavant)
+  try {
+    await c.env.R2_MEDIA.put(key, buffer, {
+      httpMetadata: { contentType: validatedMime },
+      customMetadata: { tenant_id: auth.tenant_id, uploaded_at: new Date().toISOString() }
+    })
+  } catch (r2Err: any) {
+    console.error('[Upload] Erreur R2.put:', r2Err?.message ?? r2Err)
+    return c.json({ error: 'Erreur lors de l\'enregistrement du fichier. Réessayez.' }, 502)
+  }
+
+  // Corr#12 — Supprimer l'ancien fichier R2 (non bloquant, sécurisé)
+  if (ancienneClé &&
+      !ancienneClé.includes('..') &&
+      !ancienneClé.startsWith('/') &&
+      ancienneClé.startsWith(`${auth.tenant_id}/`)) {
+    try {
+      await c.env.R2_MEDIA.delete(ancienneClé)
+    } catch {
+      /* Suppression ancienne clé non bloquante */
+    }
+  }
 
   const origin = new URL(c.req.url).origin
   const publicUrl = `${origin}/api/v1/dashboard/media/${encodeURIComponent(key)}`
@@ -2300,6 +2376,176 @@ dashboardRouter.delete('/fcm-token', async (c) => {
   }
 
   return c.json({ success: true })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Corr#11 — Flux de suppression de compte (migration 016)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// POST /api/v1/dashboard/compte/demander-suppression
+// Génère un token UUID, enregistre les champs suppression sur le tenant,
+// envoie l'email de confirmation. Rate-limit 3/24h par tenant.
+dashboardRouter.post('/compte/demander-suppression', async (c) => {
+  setSecurityHeaders(c)
+  const auth = await verifyAuth(c)
+  if (!auth) return c.json({ error: 'Non authentifié.' }, 401)
+
+  const rateLimitKey = `suppression_demande:${auth.tenant_id}`
+  const rl = await checkRateLimit(rateLimitKey, 3, 86400000, c.env.KV_CACHE)
+  if (!rl.allowed) {
+    return c.json({ error: 'Trop de demandes. Réessayez dans 24h.' }, 429)
+  }
+
+  const adminClient = createSupabaseAdminClient(c.env)
+
+  // Récupérer l'email de l'utilisateur via Auth
+  let userEmail: string | null = null
+  let nomRestaurant: string | null = null
+  try {
+    const [{ data: authUser }, { data: tenant }] = await Promise.all([
+      adminClient.auth.admin.getUserById(auth.user_id),
+      adminClient.from('tenants').select('nom').eq('id', auth.tenant_id).maybeSingle()
+    ])
+    userEmail = authUser.user?.email ?? null
+    nomRestaurant = tenant?.nom ?? null
+  } catch {
+    return c.json({ error: 'Impossible de récupérer les informations du compte.' }, 500)
+  }
+
+  if (!userEmail) {
+    return c.json({ error: 'Email introuvable pour ce compte.' }, 422)
+  }
+
+  const token = crypto.randomUUID()
+  const now = new Date()
+  const expire = new Date(now.getTime() + 48 * 3600000)   // 48h
+  const prevue = new Date(now.getTime() + 30 * 86400000)  // 30 jours
+
+  const { error: updateError } = await adminClient
+    .from('tenants')
+    .update({
+      suppression_demandee_le: now.toISOString(),
+      suppression_prevue_le: prevue.toISOString(),
+      suppression_token: token,
+      suppression_token_expire_le: expire.toISOString()
+    })
+    .eq('id', auth.tenant_id)
+
+  if (updateError) {
+    console.error('[Suppression] Erreur update tenant:', updateError.message)
+    return c.json({ error: 'Erreur lors de l\'enregistrement de la demande.' }, 500)
+  }
+
+  // Email non bloquant
+  try {
+    envoyerEmailSuppressionDemande(c.env, { email: userEmail }, {
+      nom_restaurant: nomRestaurant ?? auth.tenant_slug,
+      token,
+      suppression_prevue_le: prevue.toISOString()
+    }).catch(() => {})
+  } catch {}
+
+  return c.json({
+    success: true,
+    message: 'Demande enregistrée. Un email de confirmation a été envoyé.',
+    suppression_prevue_le: prevue.toISOString()
+  })
+})
+
+// GET /api/v1/dashboard/compte/confirmer-suppression?token=...
+// Vérifie le token, confirme la suppression programmée.
+// NOTE : route GET volontaire (lien cliquable depuis l'email).
+dashboardRouter.get('/compte/confirmer-suppression', async (c) => {
+  setSecurityHeaders(c)
+
+  const token = c.req.query('token')
+  if (!token || token.length < 10) {
+    return c.html('<h2>Lien invalide ou expiré.</h2>', 400)
+  }
+
+  const adminClient = createSupabaseAdminClient(c.env)
+
+  const { data: tenant, error } = await adminClient
+    .from('tenants')
+    .select('id, nom, suppression_token, suppression_token_expire_le, suppression_prevue_le')
+    .eq('suppression_token', token)
+    .is('deleted_at', null)
+    .maybeSingle()
+
+  if (error || !tenant) {
+    return c.html('<h2>Lien invalide ou déjà utilisé.</h2>', 404)
+  }
+
+  if (!tenant.suppression_token_expire_le ||
+      new Date(tenant.suppression_token_expire_le) < new Date()) {
+    return c.html('<h2>Ce lien de confirmation a expiré (48h). Faites une nouvelle demande depuis votre tableau de bord.</h2>', 410)
+  }
+
+  // Confirmation : effacer le token (usage unique), conserver suppression_prevue_le
+  const { error: confirmError } = await adminClient
+    .from('tenants')
+    .update({
+      suppression_token: null,
+      suppression_token_expire_le: null
+    })
+    .eq('id', tenant.id)
+
+  if (confirmError) {
+    console.error('[Suppression] Erreur confirmation:', confirmError.message)
+    return c.html('<h2>Erreur lors de la confirmation. Contactez le support.</h2>', 500)
+  }
+
+  return c.html(`
+    <!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8">
+    <title>Suppression confirmée — MonMenu</title></head>
+    <body style="font-family:sans-serif;max-width:480px;margin:40px auto;padding:20px">
+      <h2>Suppression confirmée</h2>
+      <p>La suppression de votre compte <strong>${tenant.nom}</strong> est programmée pour le
+         <strong>${new Date(tenant.suppression_prevue_le!).toLocaleDateString('fr-FR')}</strong>.</p>
+      <p>Vous pouvez annuler cette demande depuis votre tableau de bord avant cette date.</p>
+    </body></html>
+  `)
+})
+
+// POST /api/v1/dashboard/compte/annuler-suppression
+// Annule la demande en cours : efface tous les champs suppression.
+dashboardRouter.post('/compte/annuler-suppression', async (c) => {
+  setSecurityHeaders(c)
+  const auth = await verifyAuth(c)
+  if (!auth) return c.json({ error: 'Non authentifié.' }, 401)
+
+  const adminClient = createSupabaseAdminClient(c.env)
+
+  const { data: tenant, error: fetchError } = await adminClient
+    .from('tenants')
+    .select('suppression_demandee_le')
+    .eq('id', auth.tenant_id)
+    .maybeSingle()
+
+  if (fetchError || !tenant) {
+    return c.json({ error: 'Restaurant introuvable.' }, 404)
+  }
+
+  if (!tenant.suppression_demandee_le) {
+    return c.json({ error: 'Aucune demande de suppression en cours.' }, 422)
+  }
+
+  const { error: updateError } = await adminClient
+    .from('tenants')
+    .update({
+      suppression_demandee_le: null,
+      suppression_prevue_le: null,
+      suppression_token: null,
+      suppression_token_expire_le: null
+    })
+    .eq('id', auth.tenant_id)
+
+  if (updateError) {
+    console.error('[Suppression] Erreur annulation:', updateError.message)
+    return c.json({ error: 'Erreur lors de l\'annulation.' }, 500)
+  }
+
+  return c.json({ success: true, message: 'Demande de suppression annulée.' })
 })
 
 export { dashboardRouter }

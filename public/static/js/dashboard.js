@@ -1682,11 +1682,6 @@ async function loadParametres() {
             </div>
             <p class="text-xs text-gray-400 mt-1">Le slug ne peut pas être modifié.</p>
           </div>
-          <div>
-            <label class="block text-sm font-semibold text-gray-700 mb-1.5">Domaine personnalisé (optionnel)</label>
-            <input id="param-domaine" type="text" value="${escHtml(tenant.domaine_perso||'')}" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200" placeholder="monrestaurant.com">
-            <p class="text-xs text-gray-400 mt-1">Configurez un CNAME vers <code>monmenu.app</code> chez votre registrar.</p>
-          </div>
           <p id="param-feedback" class="text-xs hidden rounded-lg px-3 py-2"></p>
           <button type="submit" class="w-full bg-red-600 text-white font-bold py-3 rounded-xl hover:bg-red-700">
             <i class="fa-solid fa-floppy-disk mr-1.5"></i> Enregistrer
@@ -1745,8 +1740,7 @@ async function saveParametres(e) {
   const fb = document.getElementById('param-feedback'); fb.classList.remove('hidden');
   const data = {
     nom: document.getElementById('param-nom').value.trim(),
-    whatsapp_number: formatWhatsAppNumberAvecPlus(document.getElementById('param-whatsapp').value.trim()),
-    domaine_perso: document.getElementById('param-domaine')?.value?.trim() || null
+    whatsapp_number: formatWhatsAppNumberAvecPlus(document.getElementById('param-whatsapp').value.trim())
   };
   try {
     const res = await dashFetch('/api/v1/dashboard/parametres', {

@@ -448,7 +448,6 @@ export function renderHomePage(nomProjet: string): string {
               notifications_whatsapp: 'Notifications WhatsApp',
               statistiques_avancees: 'Statistiques avancées',
               codes_promo: 'Codes promo',
-              domaine_perso: 'Domaine personnalisé',
               export_csv: 'Export CSV',
               support_whatsapp_prioritaire: 'Support WhatsApp prioritaire',
               multi_boutique: 'Multi-boutique',

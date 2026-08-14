@@ -69,7 +69,7 @@ export async function verifierAccesTenant(env: Env, tenantId: string): Promise<R
 
   const { data: tenant } = await adminClient
     .from('tenants')
-    .select('statut, deleted_at')
+    .select('statut, deleted_at, essai_expire_le')
     .eq('id', tenantId)
     .is('deleted_at', null)
     .maybeSingle()
@@ -83,7 +83,16 @@ export async function verifierAccesTenant(env: Env, tenantId: string): Promise<R
   }
 
   if (tenant.statut === 'essai') {
-    return { accesComplet: true, accesAbonnementSeul: false, mode: 'essai', tenant_statut: tenant.statut }
+    // Corr#10b — vérification date real-time : le cron peut avoir du retard.
+    // Si essai_expire_le est passé, l'accès est bloqué immédiatement.
+    if (tenant.essai_expire_le && new Date(tenant.essai_expire_le) < new Date()) {
+      // Pas de fenêtre de grâce pour un essai expiré : chute directe en bloqué
+      // (le cron le passera en 'inactif' d'ici la prochaine exécution).
+      // On ne retourne PAS ici : on laisse la vérification abonnement se
+      // faire normalement en dessous (règle 4 du contrat métier en tête de fichier).
+    } else {
+      return { accesComplet: true, accesAbonnementSeul: false, mode: 'essai', tenant_statut: tenant.statut }
+    }
   }
 
   if (tenant.statut === 'suspendu') {
