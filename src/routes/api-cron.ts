@@ -44,6 +44,7 @@ import { createSupabaseAdminClient } from '../lib/supabase'
 import { capturerScreenshotBoutique } from '../lib/screenshot'
 import { notifierBlocageAutomatique } from '../lib/whatsapp'
 import { SLA_ADMIN_HEURES, FENETRE_ACCES_HEURES } from '../lib/paiement'
+import { envoyerEmailRappelExpiration } from '../lib/brevo'
 
 const MAX_SCREENSHOTS_PAR_EXECUTION = 30
 
@@ -237,7 +238,38 @@ async function verifierEssaisExpires(env: Env): Promise<void> {
         continue
       }
 
-      try { if (env.KV_CACHE) await env.KV_CACHE.delete(`tenant:${tenant.slug}`) } catch {}
+      try {
+        if (env.KV_CACHE) {
+          await Promise.allSettled([
+            env.KV_CACHE.delete(`tenant:${tenant.slug}`),
+            env.KV_CACHE.delete('tenants:public:12'),
+            env.KV_CACHE.delete('tenants:public:24')
+          ])
+        }
+      } catch {}
+
+      // [session-3] Email notification expiration essai — non-bloquant
+      try {
+        const { data: ut } = await adminClient
+          .from('utilisateurs_tenant')
+          .select('auth_user_id')
+          .eq('tenant_id', tenant.id)
+          .limit(1)
+          .maybeSingle()
+        if (ut?.auth_user_id) {
+          const { data: userAuth } = await adminClient.auth.admin.getUserById(ut.auth_user_id)
+          if (userAuth?.user?.email) {
+            envoyerEmailRappelExpiration(env, {
+              email: userAuth.user.email,
+              nom_restaurant: tenant.slug
+            }, {
+              type: 'essai',
+              jours_restants: 0,
+              date_expiration_iso: nowIso
+            }).catch(() => {})
+          }
+        }
+      } catch {}
 
       console.log(`[CRON:essais] Tenant ${tenant.id} (${tenant.slug}) passé essai → inactif.`)
     } catch (err) {

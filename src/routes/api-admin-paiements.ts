@@ -40,6 +40,7 @@ import { formaterDate, SLA_ADMIN_HEURES, FENETRE_ACCES_HEURES } from '../lib/pai
 import { chargerPlan } from '../lib/plans'
 import { notifierPaiementConfirme, notifierPaiementRejete } from '../lib/whatsapp'
 import { sendFcmToTenant } from '../lib/fcm'
+import { envoyerEmailPaiementConfirme, envoyerEmailPaiementRejete } from '../lib/brevo'
 
 const adminPaiementsRouter = new Hono<{ Bindings: Env }>()
 
@@ -236,6 +237,47 @@ adminPaiementsRouter.post('/confirmer', async (c) => {
     })
     .catch(() => {})
 
+  // [session-3] Email paiement confirmé — non-bloquant
+  try {
+    if (tenant?.id) {
+      adminClient
+        .from('utilisateurs_tenant')
+        .select('auth_user_id')
+        .eq('tenant_id', tenant.id)
+        .limit(1)
+        .maybeSingle()
+        .then(({ data: ut }) => {
+          if (ut?.auth_user_id) {
+            return adminClient.auth.admin.getUserById(ut.auth_user_id)
+          }
+        })
+        .then((res: any) => {
+          const email = res?.data?.user?.email
+          if (email && tenant?.nom) {
+            envoyerEmailPaiementConfirme(c.env, {
+              email,
+              nom_restaurant: tenant.nom
+            }, {
+              plan_nom: planNom ?? '',
+              reference: abonnement.reference_paiement ?? '',
+              date_fin_iso: dateFin ?? undefined
+            }).catch(() => {})
+          }
+        })
+        .catch(() => {})
+    }
+  } catch {}
+
+  // [session-3] Invalider aussi tenants:public dans KV
+  if (c.env.KV_CACHE) {
+    try {
+      await Promise.allSettled([
+        c.env.KV_CACHE.delete('tenants:public:12'),
+        c.env.KV_CACHE.delete('tenants:public:24')
+      ])
+    } catch {}
+  }
+
   console.log(`[admin-paiements] Paiement confirmé — tenant: ${abonnement.tenant_id.slice(0, 8)}... abonnement: ${abonnement_id.slice(0, 8)}...`)
 
   return c.json({
@@ -355,6 +397,45 @@ adminPaiementsRouter.post('/rejeter', async (c) => {
         payload: { abonnement_id, rejete_le: now, motif }
       })
       .catch(() => {})
+  }
+
+  // [session-3] Email paiement rejeté — non-bloquant
+  try {
+    if (tenant?.id) {
+      adminClient
+        .from('utilisateurs_tenant')
+        .select('auth_user_id')
+        .eq('tenant_id', tenant.id)
+        .limit(1)
+        .maybeSingle()
+        .then(({ data: ut }: any) => {
+          if (ut?.auth_user_id) return adminClient.auth.admin.getUserById(ut.auth_user_id)
+        })
+        .then((res: any) => {
+          const email = res?.data?.user?.email
+          if (email && tenant?.nom) {
+            envoyerEmailPaiementRejete(c.env, {
+              email,
+              nom_restaurant: tenant.nom
+            }, {
+              plan_nom: '',
+              reference: abonnement.reference_paiement ?? '',
+              motif: motif.trim()
+            }).catch(() => {})
+          }
+        })
+        .catch(() => {})
+    }
+  } catch {}
+
+  // [session-3] Invalider tenants:public dans KV
+  if (c.env.KV_CACHE) {
+    try {
+      await Promise.allSettled([
+        c.env.KV_CACHE.delete('tenants:public:12'),
+        c.env.KV_CACHE.delete('tenants:public:24')
+      ])
+    } catch {}
   }
 
   console.log(`[admin-paiements] Paiement rejeté — tenant: ${abonnement.tenant_id.slice(0, 8)}... motif: ${motif.slice(0, 30)}...`)
