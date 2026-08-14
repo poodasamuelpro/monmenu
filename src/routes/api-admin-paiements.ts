@@ -583,4 +583,94 @@ adminPaiementsRouter.patch('/moyens/:id', async (c) => {
   return c.json({ success: true, moyen: data })
 })
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Corr#11 — Routes admin suppression de compte
+// ─────────────────────────────────────────────────────────────────────────────
+
+// GET /api/v1/admin/suppressions — Liste des suppressions programmées
+adminPaiementsRouter.get('/suppressions', async (c) => {
+  const adminClient = createSupabaseAdminClient(c.env)
+
+  const { data: tenants, error } = await adminClient
+    .from('tenants')
+    .select('id, nom, slug, statut, suppression_demandee_le, suppression_prevue_le')
+    .not('suppression_prevue_le', 'is', null)
+    .is('deleted_at', null)
+    .order('suppression_prevue_le', { ascending: true })
+
+  if (error) {
+    console.error('[Admin/Suppressions] Erreur liste:', error.message)
+    return c.json({ error: 'Erreur récupération suppressions.' }, 500)
+  }
+
+  return c.json({ suppressions: tenants ?? [] })
+})
+
+// POST /api/v1/admin/suppressions/:tenant_id/executer
+// Exécute la suppression définitive : soft-delete tenants + deleteUser Auth.
+// Conditions : suppression_prevue_le doit être passée (sinon 422).
+adminPaiementsRouter.post('/suppressions/:tenant_id/executer', async (c) => {
+  const tenantId = c.req.param('tenant_id')
+  if (!tenantId) return c.json({ error: 'tenant_id requis.' }, 422)
+
+  const adminClient = createSupabaseAdminClient(c.env)
+
+  const { data: tenant, error: fetchError } = await adminClient
+    .from('tenants')
+    .select('id, nom, suppression_prevue_le')
+    .eq('id', tenantId)
+    .is('deleted_at', null)
+    .maybeSingle()
+
+  if (fetchError || !tenant) {
+    return c.json({ error: 'Tenant introuvable ou déjà supprimé.' }, 404)
+  }
+
+  if (!tenant.suppression_prevue_le) {
+    return c.json({ error: 'Aucune suppression programmée pour ce tenant.' }, 422)
+  }
+
+  if (new Date(tenant.suppression_prevue_le) > new Date()) {
+    return c.json({
+      error: 'Suppression non encore exigible.',
+      suppression_prevue_le: tenant.suppression_prevue_le
+    }, 422)
+  }
+
+  // 1. Récupérer l'auth_user_id avant le soft-delete
+  const { data: utRow } = await adminClient
+    .from('utilisateurs_tenant')
+    .select('auth_user_id')
+    .eq('tenant_id', tenantId)
+    .maybeSingle()
+
+  // 2. Soft-delete tenant (deleted_at = now) — les FK CASCADE suppriment
+  //    les tables enfants selon la configuration Supabase.
+  const { error: softDeleteError } = await adminClient
+    .from('tenants')
+    .update({ deleted_at: new Date().toISOString() })
+    .eq('id', tenantId)
+
+  if (softDeleteError) {
+    console.error('[Admin/Suppressions] Erreur soft-delete:', softDeleteError.message)
+    return c.json({ error: 'Erreur lors de la suppression.' }, 500)
+  }
+
+  // 3. Suppression Auth Supabase (non bloquante — ne doit pas faire échouer
+  //    la suppression si le user Auth est déjà absent)
+  if (utRow?.auth_user_id) {
+    try {
+      await adminClient.auth.admin.deleteUser(utRow.auth_user_id)
+    } catch (e: any) {
+      console.warn('[Admin/Suppressions] deleteUser Auth échoué (non bloquant):', e?.message ?? e)
+    }
+  }
+
+  return c.json({
+    success: true,
+    message: `Compte "${tenant.nom}" supprimé définitivement.`,
+    tenant_id: tenantId
+  })
+})
+
 export { adminPaiementsRouter }

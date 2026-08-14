@@ -110,6 +110,7 @@ import { setSecurityHeaders, checkRateLimit } from '../lib/security'
 import { genererMessageLivreur, genererLienWhatsApp, envoyerNotificationWhatsApp } from '../lib/whatsapp'
 import { verifierAccesTenant } from '../lib/acces-tenant'
 import { chargerPlan } from '../lib/plans'
+import { envoyerEmailSuppressionDemande } from '../lib/brevo'
 
 const dashboardRouter = new Hono<{ Bindings: Env }>()
 
@@ -2329,6 +2330,176 @@ dashboardRouter.delete('/fcm-token', async (c) => {
   }
 
   return c.json({ success: true })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Corr#11 — Flux de suppression de compte (migration 016)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// POST /api/v1/dashboard/compte/demander-suppression
+// Génère un token UUID, enregistre les champs suppression sur le tenant,
+// envoie l'email de confirmation. Rate-limit 3/24h par tenant.
+dashboardRouter.post('/compte/demander-suppression', async (c) => {
+  setSecurityHeaders(c)
+  const auth = await verifyAuth(c)
+  if (!auth) return c.json({ error: 'Non authentifié.' }, 401)
+
+  const rateLimitKey = `suppression_demande:${auth.tenant_id}`
+  const rl = await checkRateLimit(rateLimitKey, 3, 86400000, c.env.KV_CACHE)
+  if (!rl.allowed) {
+    return c.json({ error: 'Trop de demandes. Réessayez dans 24h.' }, 429)
+  }
+
+  const adminClient = createSupabaseAdminClient(c.env)
+
+  // Récupérer l'email de l'utilisateur via Auth
+  let userEmail: string | null = null
+  let nomRestaurant: string | null = null
+  try {
+    const [{ data: authUser }, { data: tenant }] = await Promise.all([
+      adminClient.auth.admin.getUserById(auth.user_id),
+      adminClient.from('tenants').select('nom').eq('id', auth.tenant_id).maybeSingle()
+    ])
+    userEmail = authUser.user?.email ?? null
+    nomRestaurant = tenant?.nom ?? null
+  } catch {
+    return c.json({ error: 'Impossible de récupérer les informations du compte.' }, 500)
+  }
+
+  if (!userEmail) {
+    return c.json({ error: 'Email introuvable pour ce compte.' }, 422)
+  }
+
+  const token = crypto.randomUUID()
+  const now = new Date()
+  const expire = new Date(now.getTime() + 48 * 3600000)   // 48h
+  const prevue = new Date(now.getTime() + 30 * 86400000)  // 30 jours
+
+  const { error: updateError } = await adminClient
+    .from('tenants')
+    .update({
+      suppression_demandee_le: now.toISOString(),
+      suppression_prevue_le: prevue.toISOString(),
+      suppression_token: token,
+      suppression_token_expire_le: expire.toISOString()
+    })
+    .eq('id', auth.tenant_id)
+
+  if (updateError) {
+    console.error('[Suppression] Erreur update tenant:', updateError.message)
+    return c.json({ error: 'Erreur lors de l\'enregistrement de la demande.' }, 500)
+  }
+
+  // Email non bloquant
+  try {
+    envoyerEmailSuppressionDemande(c.env, { email: userEmail }, {
+      nom_restaurant: nomRestaurant ?? auth.tenant_slug,
+      token,
+      suppression_prevue_le: prevue.toISOString()
+    }).catch(() => {})
+  } catch {}
+
+  return c.json({
+    success: true,
+    message: 'Demande enregistrée. Un email de confirmation a été envoyé.',
+    suppression_prevue_le: prevue.toISOString()
+  })
+})
+
+// GET /api/v1/dashboard/compte/confirmer-suppression?token=...
+// Vérifie le token, confirme la suppression programmée.
+// NOTE : route GET volontaire (lien cliquable depuis l'email).
+dashboardRouter.get('/compte/confirmer-suppression', async (c) => {
+  setSecurityHeaders(c)
+
+  const token = c.req.query('token')
+  if (!token || token.length < 10) {
+    return c.html('<h2>Lien invalide ou expiré.</h2>', 400)
+  }
+
+  const adminClient = createSupabaseAdminClient(c.env)
+
+  const { data: tenant, error } = await adminClient
+    .from('tenants')
+    .select('id, nom, suppression_token, suppression_token_expire_le, suppression_prevue_le')
+    .eq('suppression_token', token)
+    .is('deleted_at', null)
+    .maybeSingle()
+
+  if (error || !tenant) {
+    return c.html('<h2>Lien invalide ou déjà utilisé.</h2>', 404)
+  }
+
+  if (!tenant.suppression_token_expire_le ||
+      new Date(tenant.suppression_token_expire_le) < new Date()) {
+    return c.html('<h2>Ce lien de confirmation a expiré (48h). Faites une nouvelle demande depuis votre tableau de bord.</h2>', 410)
+  }
+
+  // Confirmation : effacer le token (usage unique), conserver suppression_prevue_le
+  const { error: confirmError } = await adminClient
+    .from('tenants')
+    .update({
+      suppression_token: null,
+      suppression_token_expire_le: null
+    })
+    .eq('id', tenant.id)
+
+  if (confirmError) {
+    console.error('[Suppression] Erreur confirmation:', confirmError.message)
+    return c.html('<h2>Erreur lors de la confirmation. Contactez le support.</h2>', 500)
+  }
+
+  return c.html(`
+    <!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8">
+    <title>Suppression confirmée — MonMenu</title></head>
+    <body style="font-family:sans-serif;max-width:480px;margin:40px auto;padding:20px">
+      <h2>Suppression confirmée</h2>
+      <p>La suppression de votre compte <strong>${tenant.nom}</strong> est programmée pour le
+         <strong>${new Date(tenant.suppression_prevue_le!).toLocaleDateString('fr-FR')}</strong>.</p>
+      <p>Vous pouvez annuler cette demande depuis votre tableau de bord avant cette date.</p>
+    </body></html>
+  `)
+})
+
+// POST /api/v1/dashboard/compte/annuler-suppression
+// Annule la demande en cours : efface tous les champs suppression.
+dashboardRouter.post('/compte/annuler-suppression', async (c) => {
+  setSecurityHeaders(c)
+  const auth = await verifyAuth(c)
+  if (!auth) return c.json({ error: 'Non authentifié.' }, 401)
+
+  const adminClient = createSupabaseAdminClient(c.env)
+
+  const { data: tenant, error: fetchError } = await adminClient
+    .from('tenants')
+    .select('suppression_demandee_le')
+    .eq('id', auth.tenant_id)
+    .maybeSingle()
+
+  if (fetchError || !tenant) {
+    return c.json({ error: 'Restaurant introuvable.' }, 404)
+  }
+
+  if (!tenant.suppression_demandee_le) {
+    return c.json({ error: 'Aucune demande de suppression en cours.' }, 422)
+  }
+
+  const { error: updateError } = await adminClient
+    .from('tenants')
+    .update({
+      suppression_demandee_le: null,
+      suppression_prevue_le: null,
+      suppression_token: null,
+      suppression_token_expire_le: null
+    })
+    .eq('id', auth.tenant_id)
+
+  if (updateError) {
+    console.error('[Suppression] Erreur annulation:', updateError.message)
+    return c.json({ error: 'Erreur lors de l\'annulation.' }, 500)
+  }
+
+  return c.json({ success: true, message: 'Demande de suppression annulée.' })
 })
 
 export { dashboardRouter }
