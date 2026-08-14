@@ -66,6 +66,7 @@ export interface Tenant {
   couleur_primaire: string
   couleur_secondaire: string
   whatsapp_number: string
+  /** @deprecated Fonctionnalité supprimée [session-3] — colonne DB conservée inerte */
   domaine_perso: string | null
   statut: 'actif' | 'inactif' | 'suspendu' | 'essai' | 'en_attente_paiement_initial'
   essai_expire_le: string | null

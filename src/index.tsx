@@ -63,7 +63,7 @@ const ACCESS_TOKEN_COOKIE = 'sb-access-token'
 // dès l'inscription, comme le permet déjà api-commandes.ts). Seuls
 // 'suspendu' (mur admin) et 'bloque' (renouvellement en retard, sans
 // fenêtre de grâce active) restent 404.
-async function fetchTenantAvecPdv(env: Env, filtre: { colonne: 'slug' | 'domaine_perso'; valeur: string }): Promise<TenantBoutique | null> {
+async function fetchTenantAvecPdv(env: Env, slug: string): Promise<TenantBoutique | null> {
   const adminClient = createSupabaseAdminClient(env)
   const { data: tenantRaw } = await adminClient
     .from('tenants')
@@ -72,7 +72,7 @@ async function fetchTenantAvecPdv(env: Env, filtre: { colonne: 'slug' | 'domaine
       couleur_primaire, couleur_secondaire, whatsapp_number,
       points_de_vente(nom, adresse, horaires, latitude, longitude, actif)
     `)
-    .eq(filtre.colonne, filtre.valeur)
+    .eq('slug', slug)
     .is('deleted_at', null)
     .limit(1)
     .maybeSingle()
@@ -139,23 +139,9 @@ app.use('/api/*', cors({
 app.use('/static/*', serveStatic({ root: './' }))
 app.use('/favicon.ico', serveStatic({ path: './favicon.ico' }))
 
-// ---- Middleware custom domain : résolution de domaine_perso vers boutique ----
-app.use('*', async (c, next) => {
-  const host = c.req.header('host') ?? ''
-  const domainesPlateforme = ['monmenu.app', 'monmenu.com', 'monmenu.bf', 'workers.dev', 'localhost']
-  const estPlateforme = domainesPlateforme.some(d => host.includes(d))
-
-  if (!estPlateforme && host.includes('.') && !c.req.path.startsWith('/api/')) {
-    try {
-      const tenant = await fetchTenantAvecPdv(c.env, { colonne: 'domaine_perso', valeur: host })
-      if (tenant) {
-        const nomProjet = await getNomProjet(c.env)
-        return c.html(renderBoutiquePage(tenant, nomProjet))
-      }
-    } catch { /* Ignorer les erreurs — continuer le routing normal */ }
-  }
-  return next()
-})
+// ---- Middleware custom domain supprimé [session-3] ----
+// La fonctionnalité "domaine personnalisé" est retirée définitivement.
+// La colonne domaine_perso reste en base (inerte) mais tout le code est supprimé.
 
 // ---- Routes API ----
 app.route('/api/v1/commandes', commandesRouter)
@@ -560,7 +546,7 @@ app.get('/:slug', async (c) => {
   setSecurityHeaders(c)
   const slug = c.req.param('slug')
 
-  const tenant = await fetchTenantAvecPdv(c.env, { colonne: 'slug', valeur: slug })
+  const tenant = await fetchTenantAvecPdv(c.env, slug)
 
   if (!tenant) {
     const nomP = await getNomProjet(c.env)

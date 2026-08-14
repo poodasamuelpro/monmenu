@@ -1300,7 +1300,7 @@ dashboardRouter.patch('/parametres', async (c) => {
   const auth = await verifyAuth(c)
   if (!auth) return c.json({ error: 'Non authentifié.' }, 401)
 
-  let body: { nom?: string; whatsapp_number?: string; domaine_perso?: string | null }
+  let body: { nom?: string; whatsapp_number?: string }
   try { body = await c.req.json() } catch { return c.json({ error: 'JSON invalide.' }, 400) }
 
   if (!body.nom || body.nom.trim().length < 2) return c.json({ error: 'Nom invalide.' }, 422)
@@ -1310,30 +1310,10 @@ dashboardRouter.patch('/parametres', async (c) => {
 
   const supabase = createSupabaseClientWithToken(c.env, auth.token)
 
-  if (body.domaine_perso !== undefined && body.domaine_perso !== null && body.domaine_perso !== '') {
-    const { data: tenantInfo } = await supabase
-      .from('tenants')
-      .select('plan_id')
-      .eq('id', auth.tenant_id)
-      .single()
-
-    if (tenantInfo?.plan_id) {
-      // MIGRATION — chargerPlan() lit directement Supabase avec l'UUID
-      // natif de tenant.plan_id (plus de résolution D1).
-      const planActuel = await chargerPlan(c.env, tenantInfo.plan_id)
-      const planNom = (planActuel?.nom ?? '').toLowerCase()
-      if (!planNom.includes('mogho')) {
-        return c.json({
-          error: 'Le domaine personnalisé est réservé au plan Mogho.',
-          upgrade_required: true
-        }, 403)
-      }
-    }
-  }
+  // [session-3] domaine_perso supprimé — toute logique de validation/mise à jour retirée
 
   const updateData: any = { nom: body.nom.trim(), updated_at: new Date().toISOString() }
   if (body.whatsapp_number !== undefined) updateData.whatsapp_number = body.whatsapp_number
-  if (body.domaine_perso !== undefined) updateData.domaine_perso = body.domaine_perso
 
   const { error } = await supabase
     .from('tenants')
@@ -1381,13 +1361,13 @@ dashboardRouter.get('/profil', async (c) => {
 
   const { data: tenant, error: tenantError } = await supabaseToken
     .from('tenants')
-    .select('id, nom, slug, logo_url, banniere_url, couleur_primaire, couleur_secondaire, whatsapp_number, domaine_perso, statut, created_at, plan_id')
+    .select('id, nom, slug, logo_url, banniere_url, couleur_primaire, couleur_secondaire, whatsapp_number, statut, created_at, plan_id')
     .eq('id', tenantId)
     .maybeSingle()
 
   const tenantFinal = tenant ?? (await adminClient
     .from('tenants')
-    .select('id, nom, slug, logo_url, banniere_url, couleur_primaire, couleur_secondaire, whatsapp_number, domaine_perso, statut, created_at, plan_id')
+    .select('id, nom, slug, logo_url, banniere_url, couleur_primaire, couleur_secondaire, whatsapp_number, statut, created_at, plan_id')
     .eq('id', tenantId)
     .maybeSingle()).data
 

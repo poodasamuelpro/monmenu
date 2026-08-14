@@ -297,7 +297,6 @@ export function renderTarifsPage(nomProjet: string): string {
             <li class="flex items-start gap-2"><i class="fa-solid fa-check text-green-500 flex-shrink-0 mt-0.5"></i>Boutique en ligne + QR Code</li>
             <li class="flex items-start gap-2"><i class="fa-solid fa-check text-green-500 flex-shrink-0 mt-0.5"></i>Notifications WhatsApp</li>
             \${features.codes_promo ? '<li class=\\"flex items-start gap-2\\"><i class=\\"fa-solid fa-check text-green-500 flex-shrink-0 mt-0.5\\"></i>Codes promotionnels</li>' : ''}
-            \${features.domaine_perso ? '<li class=\\"flex items-start gap-2\\"><i class=\\"fa-solid fa-check text-green-500 flex-shrink-0 mt-0.5\\"></i>Domaine personnalisé</li>' : ''}
             \${features.export_csv ? '<li class=\\"flex items-start gap-2\\"><i class=\\"fa-solid fa-check text-green-500 flex-shrink-0 mt-0.5\\"></i>Export CSV</li>' : ''}
             \${features.support_whatsapp ? '<li class=\\"flex items-start gap-2\\"><i class=\\"fa-solid fa-check text-green-500 flex-shrink-0 mt-0.5\\"></i>Support WhatsApp prioritaire</li>' : ''}
           </ul>
