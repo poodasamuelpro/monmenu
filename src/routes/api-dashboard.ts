@@ -479,8 +479,12 @@ dashboardRouter.get('/stats', async (c) => {
   const monthStart = today.substring(0, 7) + '-01'
   const thirtyDaysAgo = new Date(Date.now() - 29 * 86400000).toISOString().split('T')[0]
 
+  // Corr#9-fin — allCommandes remplacé par 3 COUNT SQL (plus de fetch mémoire).
+  // Les taux livraison/annulation utilisent désormais des requêtes head-only.
   const [
-    { data: allCommandes },
+    { count: totalAll },
+    { count: livrees },
+    { count: annulees },
     { data: todayCommandes },
     { data: monthCommandes },
     { data: last30Days },
@@ -488,8 +492,22 @@ dashboardRouter.get('/stats', async (c) => {
   ] = await Promise.all([
     supabase
       .from('commandes')
-      .select('statut, montant_total')
+      .select('id', { count: 'exact', head: true })
       .eq('tenant_id', auth.tenant_id)
+      .is('deleted_at', null),
+
+    supabase
+      .from('commandes')
+      .select('id', { count: 'exact', head: true })
+      .eq('tenant_id', auth.tenant_id)
+      .eq('statut', 'livree')
+      .is('deleted_at', null),
+
+    supabase
+      .from('commandes')
+      .select('id', { count: 'exact', head: true })
+      .eq('tenant_id', auth.tenant_id)
+      .eq('statut', 'annulee')
       .is('deleted_at', null),
 
     supabase
@@ -525,12 +543,11 @@ dashboardRouter.get('/stats', async (c) => {
   const caToday = (todayCommandes ?? []).reduce((s, c) => s + (c.montant_total ?? 0), 0)
   const caMonth = (monthCommandes ?? []).reduce((s, c) => s + (c.montant_total ?? 0), 0)
 
-  const totalAll = (allCommandes ?? []).length
-  const livrees = (allCommandes ?? []).filter(c => c.statut === 'livree').length
-  const annulees = (allCommandes ?? []).filter(c => c.statut === 'annulee').length
-  const statutsMap: Record<string, number> = {}
-  for (const c of (allCommandes ?? [])) {
-    statutsMap[c.statut] = (statutsMap[c.statut] ?? 0) + 1
+  // NOTE : statuts map non disponible sans fetch mémoire — on retourne les
+  // compteurs explicites uniquement (total, livrees, annulees).
+  const statutsMap: Record<string, number> = {
+    livree: livrees ?? 0,
+    annulee: annulees ?? 0
   }
 
   const labels: string[] = []
@@ -557,8 +574,8 @@ dashboardRouter.get('/stats', async (c) => {
     ca_today: caToday,
     month: monthCommandes?.length ?? 0,
     ca_month: caMonth,
-    taux_livraison: totalAll > 0 ? Math.round((livrees / totalAll) * 100) : 0,
-    taux_annulation: totalAll > 0 ? Math.round((annulees / totalAll) * 100) : 0,
+    taux_livraison: (totalAll ?? 0) > 0 ? Math.round(((livrees ?? 0) / (totalAll ?? 1)) * 100) : 0,
+    taux_annulation: (totalAll ?? 0) > 0 ? Math.round(((annulees ?? 0) / (totalAll ?? 1)) * 100) : 0,
     nb_produits: nbProduits ?? 0,
     statuts: statutsMap,
     labels,
@@ -1396,21 +1413,22 @@ dashboardRouter.get('/profil', async (c) => {
   if (!tenantFinal) return c.json({ error: 'Restaurant introuvable.' }, 404)
 
   // MIGRATION — chargerPlan() lit directement Supabase (plus de D1)
-  const planActuel = await chargerPlan(c.env, tenantFinal.plan_id)
-
-  const { data: pdv } = await adminClient
-    .from('points_de_vente')
-    .select('id, nom, adresse, latitude, longitude, horaires')
-    .eq('tenant_id', tenantId)
-    .eq('actif', true)
-    .limit(1)
-    .maybeSingle()
-
-  const { count: totalCommandes } = await adminClient
-    .from('commandes')
-    .select('id', { count: 'exact', head: true })
-    .eq('tenant_id', tenantId)
-    .is('deleted_at', null)
+  // Corr#14.3 — pdv + totalCommandes en Promise.all (2 requêtes parallèles)
+  const [planActuel, { data: pdv }, { count: totalCommandes }] = await Promise.all([
+    chargerPlan(c.env, tenantFinal.plan_id),
+    adminClient
+      .from('points_de_vente')
+      .select('id, nom, adresse, latitude, longitude, horaires')
+      .eq('tenant_id', tenantId)
+      .eq('actif', true)
+      .limit(1)
+      .maybeSingle(),
+    adminClient
+      .from('commandes')
+      .select('id', { count: 'exact', head: true })
+      .eq('tenant_id', tenantId)
+      .is('deleted_at', null)
+  ])
 
   return c.json({
     ...tenantFinal,

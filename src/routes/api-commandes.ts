@@ -164,7 +164,7 @@ commandesRouter.post('/', async (c) => {
   // échouait avec "Restaurant introuvable ou inactif".
   const { data: tenantRow, error: tenantError } = await adminClient
     .from('tenants')
-    .select('*')
+    .select('id, whatsapp_number, statut')
     .eq('id', data.tenant_id)
     .in('statut', ['actif', 'essai', 'en_attente_paiement_initial'])
     .is('deleted_at', null)
@@ -174,7 +174,7 @@ commandesRouter.post('/', async (c) => {
 
   const { data: pdvRow, error: pdvError } = await adminClient
     .from('points_de_vente')
-    .select('*')
+    .select('id, latitude, longitude')
     .eq('id', data.point_de_vente_id)
     .eq('tenant_id', data.tenant_id)
     .eq('actif', true)
@@ -186,7 +186,7 @@ commandesRouter.post('/', async (c) => {
 
   const { data: produitsRows, error: prodsError } = await adminClient
     .from('produits')
-    .select('*')
+    .select('id, nom, prix, disponible')
     .in('id', produitIds)
     .eq('tenant_id', data.tenant_id)
     .eq('disponible', true)
