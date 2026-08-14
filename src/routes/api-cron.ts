@@ -1,43 +1,46 @@
 // src/routes/api-cron.ts — Handler Cron Cloudflare Workers (§1.8)
 //
-// CORRECTIONS CYCLE-5 :
-//   FIX-G — Messages harmonisés avec SLA_ADMIN_HEURES (48h, engagement
-//           annoncé au client) / FENETRE_ACCES_HEURES (72h, coupure
-//           technique réelle), importés depuis src/lib/paiement.ts.
-//   FIX-H — verifierEssaisExpires() : le filtre qui protège un tenant
-//           ayant un abonnement 'en_attente_confirmation' encore valide
-//           vérifie désormais AUSSI que la deadline n'est pas déjà
-//           dépassée (.gt('delai_confirmation_expire_le', nowIso)),
-//           cohérent avec la même vérification faite par
-//           verifierAccesTenant() (src/lib/acces-tenant.ts). Avant, un
-//           tenant dont la fenêtre de 72h était techniquement expirée
-//           (mais pas encore traité par bloquerPaiementsExpires, qui ne
-//           tourne que toutes les 6h) pouvait être compté comme "protégé"
-//           par erreur pendant que verifierAccesTenant() lui refusait déjà
-//           l'accès — pas un problème de sécurité (l'accès réel reste
-//           strictement déterminé par verifierAccesTenant à chaque
-//           requête), mais une incohérence d'affichage/timing à corriger.
+// CORRECTIONS CYCLE-6 — Passage de 7 à 5 cron triggers (limite Free Cloudflare :
+// 5 max par compte). Deux fusions choisies pour leur FAIBLE risque CPU
+// (chaque fusion ne regroupe QUE des tâches légères — de simples transitions
+// de statut ou des envois d'email — jamais avec le calcul de stats, qui est
+// la tâche la plus consommatrice en CPU synchrone du fichier) :
 //
-// NOTE — Pourquoi bloquerPaiementsExpires() reste nécessaire malgré le
-// calcul d'accès "live" de verifierAccesTenant() :
-//   1. Sans le passage à statut='expire', la ligne resterait visible comme
-//      "en attente" dans le panel admin (GET /api/v1/admin/paiements)
-//      indéfiniment.
-//   2. Sans ce passage, POST /api/v1/paiement/soumettre bloquerait à tort
-//      une NOUVELLE soumission avec un 409 "déjà en cours" — CYCLE-5 a
-//      corrigé ce cas précis côté /soumettre (filtre .gt() ajouté), donc
-//      ce n'est plus un problème bloquant même si le cron a du retard,
-//      mais le nettoyage explicite reste la bonne pratique.
+//   FUSION 1 — verifierEssaisExpires() + verifierAbonnementsExpires()
+//              → verifierTenantsExpires() (une seule invocation, 02h10 UTC)
+//              Les deux ne font que boucler sur une liste de tenants et
+//              écrire un update Supabase par tenant : quasi aucun calcul
+//              CPU synchrone, l'essentiel du temps est de l'attente réseau
+//              (non comptée dans le budget CPU Free).
 //
-// AJOUT (fiabilité) — les tâches nocturnes tournent en 4 déclenchements
-// cron distincts (voir wrangler.jsonc "crons") pour que chacune ait son
-// propre budget de temps et ses propres logs.
+//   FUSION 2 — envoyerRappelsExpiration(5) + envoyerRappelsExpiration(2)
+//              → appelées l'une après l'autre dans un seul handler
+//              (08h00 UTC). Même logique : boucles + envois d'email,
+//              pas de calcul lourd.
 //
-// Déclenchements (wrangler.jsonc, heures UTC) :
+// NON fusionnées, gardées isolées :
+//   - calculerStatsJournalieres : seule tâche avec du vrai calcul CPU
+//     synchrone (boucles de comptage produits + tri) → on ne veut pas
+//     qu'un dépassement CPU sur elle bloque les transitions de statut.
+//   - capturerScreenshotsQuotidiens : dépend d'un service externe (thum.io),
+//     latence imprévisible → isolée pour ne pas impacter les autres tâches.
+//   - bloquerPaiementsExpires : tâche la plus sensible (contrôle d'accès
+//     lié au paiement), garde sa fréquence propre (*/6h) et son isolement
+//     total, aucune fusion possible avec les tâches journalières.
+//
+// RAPPEL — bloquerPaiementsExpires() et les tâches de nettoyage (essais/
+// abonnements expirés) ne sont PAS la source de vérité de l'accès : c'est
+// verifierAccesTenant() (src/lib/acces-tenant.ts) qui fait le contrôle
+// live à chaque requête. Ces crons ne font que synchroniser l'affichage
+// admin et le cache — les retarder ou les fusionner n'ouvre aucune faille
+// de sécurité.
+//
+// Déclenchements (wrangler.jsonc, heures UTC) — 5 cron triggers au total :
 //   "0 2 * * *"    → stats journalières
-//   "10 2 * * *"   → vérification essais expirés (essai → inactif)
+//   "10 2 * * *"   → tenants expirés (essais → inactif ET abonnements → inactif, fusionnés)
 //   "20 2 * * *"   → capture des screenshots boutique (thum.io → R2)
 //   "30 */6 * * *" → blocage paiements en_attente_confirmation expirés
+//   "0 8 * * *"    → rappels expiration J-5 ET J-2 (fusionnés)
 
 import type { Env } from '../types/database'
 import { createSupabaseAdminClient } from '../lib/supabase'
@@ -54,7 +57,9 @@ export async function handleScheduled(event: ScheduledEvent, env: Env, ctx: Exec
       ctx.waitUntil(calculerStatsJournalieres(env, event.scheduledTime))
       break
     case '10 2 * * *':
-      ctx.waitUntil(verifierEssaisExpires(env))
+      // FUSION 1 — voir bandeau d'en-tête. Chaque sous-tâche a son propre
+      // try/catch pour qu'un échec sur l'une n'empêche pas l'autre de tourner.
+      ctx.waitUntil(verifierTenantsExpires(env))
       break
     case '20 2 * * *':
       ctx.waitUntil(capturerScreenshotsQuotidiens(env))
@@ -62,15 +67,9 @@ export async function handleScheduled(event: ScheduledEvent, env: Env, ctx: Exec
     case '30 */6 * * *':
       ctx.waitUntil(bloquerPaiementsExpires(env))
       break
-    // [session-3] Nouveaux crons
     case '0 8 * * *':
-      ctx.waitUntil(envoyerRappelsExpiration(env, 5))
-      break
-    case '0 9 * * *':
-      ctx.waitUntil(envoyerRappelsExpiration(env, 2))
-      break
-    case '40 2 * * *':
-      ctx.waitUntil(verifierAbonnementsExpires(env))
+      // FUSION 2 — J-5 puis J-2, séquentiellement dans la même invocation.
+      ctx.waitUntil(envoyerTousLesRappels(env))
       break
     default:
       console.warn(`[CRON] Déclenchement non reconnu: ${event.cron}`)
@@ -185,7 +184,27 @@ async function calculerStatsUnTenant(
   if (upsertError) throw new Error(`upsert stats: ${upsertError.message}`)
 }
 
-// §5 — passage automatique essai → inactif
+// =====================================================================
+// FUSION 1 — §5 passage automatique essai → inactif
+//          + Corr#10a vérification abonnements payants expirés (actif → inactif)
+// Les deux fonctions internes sont conservées telles quelles (mêmes noms,
+// même logique) et simplement appelées l'une après l'autre, chacune dans
+// son propre try/catch : un échec sur l'une ne bloque pas l'autre.
+// =====================================================================
+async function verifierTenantsExpires(env: Env): Promise<void> {
+  try {
+    await verifierEssaisExpires(env)
+  } catch (err) {
+    console.error('[CRON:tenants-expires] Erreur bloc essais expirés:', err)
+  }
+
+  try {
+    await verifierAbonnementsExpires(env)
+  } catch (err) {
+    console.error('[CRON:tenants-expires] Erreur bloc abonnements expirés:', err)
+  }
+}
+
 async function verifierEssaisExpires(env: Env): Promise<void> {
   const adminClient = createSupabaseAdminClient(env)
   const nowIso = new Date().toISOString()
@@ -292,8 +311,81 @@ async function verifierEssaisExpires(env: Env): Promise<void> {
   }
 }
 
+async function verifierAbonnementsExpires(env: Env): Promise<void> {
+  const adminClient = createSupabaseAdminClient(env)
+  const nowIso = new Date().toISOString()
+
+  // Trouver les abonnements actifs dont date_fin est dépassée
+  const { data: abExpires, error } = await adminClient
+    .from('abonnements')
+    .select('id, tenant_id, date_fin')
+    .eq('statut', 'actif')
+    .not('date_fin', 'is', null)
+    .lt('date_fin', nowIso)
+
+  if (error) {
+    console.error('[CRON:abonnements-expires] Erreur récupération:', error.message)
+    return
+  }
+
+  if (!abExpires || abExpires.length === 0) {
+    console.log('[CRON:abonnements-expires] Aucun abonnement expiré.')
+    return
+  }
+
+  console.log(`[CRON:abonnements-expires] ${abExpires.length} abonnement(s) expiré(s) à traiter.`)
+
+  for (const ab of abExpires) {
+    try {
+      // Passer l'abonnement à 'expire'
+      await adminClient
+        .from('abonnements')
+        .update({ statut: 'expire', updated_at: nowIso })
+        .eq('id', ab.id)
+        .eq('statut', 'actif')
+
+      // Passer le tenant à 'inactif' si toujours 'actif' et aucun autre abonnement actif
+      const { data: autreActif } = await adminClient
+        .from('abonnements')
+        .select('id')
+        .eq('tenant_id', ab.tenant_id)
+        .eq('statut', 'actif')
+        .maybeSingle()
+
+      if (!autreActif) {
+        const { data: tenant } = await adminClient
+          .from('tenants')
+          .update({ statut: 'inactif', updated_at: nowIso })
+          .eq('id', ab.tenant_id)
+          .eq('statut', 'actif')
+          .select('id, slug, nom')
+          .maybeSingle()
+
+        if (tenant) {
+          // Invalider KV cache
+          try {
+            if (env.KV_CACHE) {
+              await Promise.allSettled([
+                env.KV_CACHE.delete(`tenant:${tenant.slug}`),
+                env.KV_CACHE.delete('tenants:public:12'),
+                env.KV_CACHE.delete('tenants:public:24')
+              ])
+            }
+          } catch {}
+          console.log(`[CRON:abonnements-expires] Tenant ${tenant.slug} passé actif → inactif.`)
+        }
+      }
+    } catch (err) {
+      console.error(`[CRON:abonnements-expires] Erreur tenant ${ab.tenant_id}:`, err)
+    }
+  }
+
+  console.log('[CRON:abonnements-expires] Terminé.')
+}
+
 // -----------------------------------------------------------------------
-// Blocage automatique des paiements expirés (72h)
+// Blocage automatique des paiements expirés (72h) — ISOLÉ, tâche la plus
+// sensible (contrôle d'accès), garde sa fréquence propre (*/6h).
 // -----------------------------------------------------------------------
 
 /**
@@ -430,7 +522,8 @@ async function bloquerPaiementsExpires(env: Env): Promise<void> {
 }
 
 // =====================================================================
-// Capture nocturne des screenshots boutique (inchangé)
+// Capture nocturne des screenshots boutique — ISOLÉ (dépendance externe
+// thum.io, latence imprévisible)
 // =====================================================================
 export async function capturerScreenshotsQuotidiens(env: Env): Promise<{ reussies: number; total: number }> {
   if (!env.R2_MEDIA) {
@@ -491,9 +584,28 @@ export async function capturerScreenshotsQuotidiens(env: Env): Promise<{ reussie
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// [session-3] Corr#7 — Rappels expiration J-5 et J-2
-// Envoyés à 08h00 UTC (J-5) et 09h00 UTC (J-2)
+// FUSION 2 — [session-3] Corr#7 — Rappels expiration J-5 et J-2
+// Les deux étaient auparavant deux cron triggers séparés (08h00 et 09h00 UTC).
+// Elles sont maintenant appelées l'une après l'autre dans un seul handler
+// à 08h00 UTC — chacune dans son propre try/catch, comme la FUSION 1.
+// L'heure d'envoi du rappel J-2 se décale donc de 09h00 à 08h00, ce qui est
+// sans incidence fonctionnelle (ce n'est qu'un rappel informatif, pas un
+// contrôle d'accès).
 // ─────────────────────────────────────────────────────────────────────────────
+async function envoyerTousLesRappels(env: Env): Promise<void> {
+  try {
+    await envoyerRappelsExpiration(env, 5)
+  } catch (err) {
+    console.error('[CRON:rappels] Erreur bloc J-5:', err)
+  }
+
+  try {
+    await envoyerRappelsExpiration(env, 2)
+  } catch (err) {
+    console.error('[CRON:rappels] Erreur bloc J-2:', err)
+  }
+}
+
 async function envoyerRappelsExpiration(env: Env, joursRestants: number): Promise<void> {
   const adminClient = createSupabaseAdminClient(env)
   const now = new Date()
@@ -574,80 +686,4 @@ async function envoyerRappelsExpiration(env: Env, joursRestants: number): Promis
   }
 
   console.log(`[CRON:rappels] J-${joursRestants} terminé — ${taches.length} rappel(s) envoyé(s).`)
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// [session-3] Corr#10a — Vérification abonnements payants expirés (actif → inactif)
-// Tourne à 02h40 UTC chaque nuit
-// ─────────────────────────────────────────────────────────────────────────────
-async function verifierAbonnementsExpires(env: Env): Promise<void> {
-  const adminClient = createSupabaseAdminClient(env)
-  const nowIso = new Date().toISOString()
-
-  // Trouver les abonnements actifs dont date_fin est dépassée
-  const { data: abExpires, error } = await adminClient
-    .from('abonnements')
-    .select('id, tenant_id, date_fin')
-    .eq('statut', 'actif')
-    .not('date_fin', 'is', null)
-    .lt('date_fin', nowIso)
-
-  if (error) {
-    console.error('[CRON:abonnements-expires] Erreur récupération:', error.message)
-    return
-  }
-
-  if (!abExpires || abExpires.length === 0) {
-    console.log('[CRON:abonnements-expires] Aucun abonnement expiré.')
-    return
-  }
-
-  console.log(`[CRON:abonnements-expires] ${abExpires.length} abonnement(s) expiré(s) à traiter.`)
-
-  for (const ab of abExpires) {
-    try {
-      // Passer l'abonnement à 'expire'
-      await adminClient
-        .from('abonnements')
-        .update({ statut: 'expire', updated_at: nowIso })
-        .eq('id', ab.id)
-        .eq('statut', 'actif')
-
-      // Passer le tenant à 'inactif' si toujours 'actif' et aucun autre abonnement actif
-      const { data: autreActif } = await adminClient
-        .from('abonnements')
-        .select('id')
-        .eq('tenant_id', ab.tenant_id)
-        .eq('statut', 'actif')
-        .maybeSingle()
-
-      if (!autreActif) {
-        const { data: tenant } = await adminClient
-          .from('tenants')
-          .update({ statut: 'inactif', updated_at: nowIso })
-          .eq('id', ab.tenant_id)
-          .eq('statut', 'actif')
-          .select('id, slug, nom')
-          .maybeSingle()
-
-        if (tenant) {
-          // Invalider KV cache
-          try {
-            if (env.KV_CACHE) {
-              await Promise.allSettled([
-                env.KV_CACHE.delete(`tenant:${tenant.slug}`),
-                env.KV_CACHE.delete('tenants:public:12'),
-                env.KV_CACHE.delete('tenants:public:24')
-              ])
-            }
-          } catch {}
-          console.log(`[CRON:abonnements-expires] Tenant ${tenant.slug} passé actif → inactif.`)
-        }
-      }
-    } catch (err) {
-      console.error(`[CRON:abonnements-expires] Erreur tenant ${ab.tenant_id}:`, err)
-    }
-  }
-
-  console.log('[CRON:abonnements-expires] Terminé.')
 }
