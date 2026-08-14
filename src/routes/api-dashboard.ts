@@ -114,6 +114,23 @@ import { envoyerEmailSuppressionDemande } from '../lib/brevo'
 
 const dashboardRouter = new Hono<{ Bindings: Env }>()
 
+// Corr#12 — Validation magic bytes pour les uploads image.
+// Vérifie les octets d'en-tête réels du fichier (indépendamment de file.type).
+// Retourne le MIME réel ou null si non reconnu.
+function validerMimeImage(buffer: ArrayBuffer): string | null {
+  const bytes = new Uint8Array(buffer.slice(0, 12))
+  // JPEG : FF D8 FF
+  if (bytes[0] === 0xFF && bytes[1] === 0xD8 && bytes[2] === 0xFF) return 'image/jpeg'
+  // PNG : 89 50 4E 47 0D 0A 1A 0A
+  if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47) return 'image/png'
+  // GIF : 47 49 46 38
+  if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x38) return 'image/gif'
+  // WebP : 52 49 46 46 ?? ?? ?? ?? 57 45 42 50
+  if (bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
+      bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) return 'image/webp'
+  return null
+}
+
 const ACCESS_TOKEN_COOKIE = 'sb-access-token'
 
 dashboardRouter.use('*', async (c, next) => {
@@ -1819,14 +1836,43 @@ dashboardRouter.post('/upload-image', async (c) => {
     return c.json({ error: 'Fichier trop volumineux (max 5 MB).' }, 413)
   }
 
-  const ext = file.type.split('/')[1].replace('jpeg', 'jpg')
-  const key = `${auth.tenant_id}/${Date.now()}-${crypto.randomUUID().slice(0, 8)}.${ext}`
   const buffer = await file.arrayBuffer()
 
-  await c.env.R2_MEDIA.put(key, buffer, {
-    httpMetadata: { contentType: file.type },
-    customMetadata: { tenant_id: auth.tenant_id, uploaded_at: new Date().toISOString() }
-  })
+  // Corr#12 — Validation magic bytes (anti-spoofing MIME)
+  // Vérifie les octets d'en-tête réels du fichier, pas seulement file.type.
+  const validatedMime = validerMimeImage(buffer)
+  if (!validatedMime) {
+    return c.json({ error: 'Fichier invalide. Seuls les vrais JPEG, PNG, WebP et GIF sont acceptés.' }, 415)
+  }
+
+  const ext = validatedMime.split('/')[1].replace('jpeg', 'jpg')
+  const key = `${auth.tenant_id}/${Date.now()}-${crypto.randomUUID().slice(0, 8)}.${ext}`
+
+  // Corr#12 — Clé ancienne (optionnelle, pour suppression post-upload)
+  const ancienneClé = (formData.get('ancienne_cle') as string | null)?.trim() || null
+
+  // Corr#12 — try/catch sur R2.put() (erreur R2 non-fatale ignorée auparavant)
+  try {
+    await c.env.R2_MEDIA.put(key, buffer, {
+      httpMetadata: { contentType: validatedMime },
+      customMetadata: { tenant_id: auth.tenant_id, uploaded_at: new Date().toISOString() }
+    })
+  } catch (r2Err: any) {
+    console.error('[Upload] Erreur R2.put:', r2Err?.message ?? r2Err)
+    return c.json({ error: 'Erreur lors de l\'enregistrement du fichier. Réessayez.' }, 502)
+  }
+
+  // Corr#12 — Supprimer l'ancien fichier R2 (non bloquant, sécurisé)
+  if (ancienneClé &&
+      !ancienneClé.includes('..') &&
+      !ancienneClé.startsWith('/') &&
+      ancienneClé.startsWith(`${auth.tenant_id}/`)) {
+    try {
+      await c.env.R2_MEDIA.delete(ancienneClé)
+    } catch {
+      /* Suppression ancienne clé non bloquante */
+    }
+  }
 
   const origin = new URL(c.req.url).origin
   const publicUrl = `${origin}/api/v1/dashboard/media/${encodeURIComponent(key)}`
