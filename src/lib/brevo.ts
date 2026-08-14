@@ -194,6 +194,7 @@ ${formulaire.message}`
 // ─────────────────────────────────────────────────────────────────────────────
 // Emails transactionnels [session-3] — 7 fonctions, toutes anti-XSS via
 // escapeHtml(). Toutes non-bloquantes (try/catch externe dans l'appelant).
+// URLs dynamiques via env.PUBLIC_BASE_URL (Cloudflare var) — fallback monmenu.com
 // ─────────────────────────────────────────────────────────────────────────────
 
 type BrevoEnv = {
@@ -202,6 +203,16 @@ type BrevoEnv = {
   BREVO_API_KEY_1: string
   BREVO_API_KEY_2: string
   BREVO_API_KEY_3: string
+  PUBLIC_BASE_URL?: string
+}
+
+/** URL de base de l'application — lue depuis PUBLIC_BASE_URL (Cloudflare var).
+ *  Fallback : https://monmenu.com (domaine officiel).
+ *  Ne jamais hardcoder une URL ici — toujours passer par cette fonction. */
+function getBaseUrl(env: BrevoEnv): string {
+  const url = env.PUBLIC_BASE_URL?.trim()
+  if (url && url.startsWith('http')) return url.replace(/\/$/, '')
+  return 'https://monmenu.com'
 }
 
 // 1. Email de bienvenue — envoyé après inscription réussie
@@ -210,6 +221,7 @@ export async function envoyerEmailBienvenue(
   destinataire: { email: string; nom_restaurant: string }
 ): Promise<{ success: boolean; error?: string }> {
   const nomApp = await getNomExpediteur(env)
+  const baseUrl = getBaseUrl(env)
   const nom = escapeHtml(destinataire.nom_restaurant)
 
   const htmlContent = `
@@ -219,7 +231,7 @@ export async function envoyerEmailBienvenue(
       <p>Votre restaurant <strong>${nom}</strong> est maintenant créé. Votre période d'essai gratuite a démarré.</p>
       <p>Connectez-vous à votre tableau de bord pour configurer votre boutique en ligne, ajouter vos produits et partager votre QR code.</p>
       <p style="margin-top:24px;">
-        <a href="https://monmenu.app/dashboard" style="background:#DC2626;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:bold;">
+        <a href="${baseUrl}/dashboard" style="background:#DC2626;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:bold;">
           Accéder à mon dashboard
         </a>
       </p>
@@ -231,7 +243,7 @@ export async function envoyerEmailBienvenue(
       to: [{ email: destinataire.email, name: destinataire.nom_restaurant }],
       subject: `Bienvenue sur ${nomApp} — votre restaurant est prêt !`,
       htmlContent,
-      textContent: `Bienvenue sur ${nomApp} ! Votre restaurant ${destinataire.nom_restaurant} est créé. Connectez-vous sur https://monmenu.app/dashboard`
+      textContent: `Bienvenue sur ${nomApp} ! Votre restaurant ${destinataire.nom_restaurant} est créé. Connectez-vous sur ${baseUrl}/dashboard`
     },
     env
   )
@@ -280,6 +292,7 @@ export async function envoyerEmailPaiementConfirme(
   details: { plan_nom: string; reference: string; date_fin_iso?: string }
 ): Promise<{ success: boolean; error?: string }> {
   const nomApp = await getNomExpediteur(env)
+  const baseUrl = getBaseUrl(env)
   const nom = escapeHtml(destinataire.nom_restaurant)
   const planNom = escapeHtml(details.plan_nom)
   const ref = escapeHtml(details.reference)
@@ -298,7 +311,7 @@ export async function envoyerEmailPaiementConfirme(
         ${dateFin ? `<tr><td style="padding:8px;border:1px solid #E5E7EB;font-weight:bold;">Valide jusqu'au</td><td style="padding:8px;border:1px solid #E5E7EB;">${escapeHtml(dateFin)}</td></tr>` : ''}
       </table>
       <p style="margin-top:24px;">
-        <a href="https://monmenu.app/dashboard" style="background:#16A34A;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:bold;">
+        <a href="${baseUrl}/dashboard" style="background:#16A34A;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:bold;">
           Accéder à mon dashboard
         </a>
       </p>
@@ -324,6 +337,7 @@ export async function envoyerEmailPaiementRejete(
 ): Promise<{ success: boolean; error?: string }> {
   const nomApp = await getNomExpediteur(env)
   const emailContact = await getEmailContact(env)
+  const baseUrl = getBaseUrl(env)
   const nom = escapeHtml(destinataire.nom_restaurant)
   const planNom = escapeHtml(details.plan_nom)
   const ref = escapeHtml(details.reference)
@@ -339,7 +353,7 @@ export async function envoyerEmailPaiementRejete(
       </div>
       <p>Vous pouvez soumettre une nouvelle preuve depuis votre tableau de bord ou contacter notre support.</p>
       <p style="margin-top:24px;">
-        <a href="https://monmenu.app/dashboard/abonnement" style="background:#DC2626;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:bold;">
+        <a href="${baseUrl}/dashboard/abonnement" style="background:#DC2626;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:bold;">
           Soumettre une nouvelle preuve
         </a>
       </p>
@@ -352,7 +366,7 @@ export async function envoyerEmailPaiementRejete(
       to: [{ email: destinataire.email, name: destinataire.nom_restaurant }],
       subject: `[${nomApp}] ❌ Preuve de paiement rejetée — action requise`,
       htmlContent,
-      textContent: `Votre preuve de paiement pour ${details.plan_nom} (réf. ${details.reference}) a été rejetée. Motif : ${details.motif}. Soumettez une nouvelle preuve sur https://monmenu.app/dashboard/abonnement`
+      textContent: `Votre preuve de paiement pour ${details.plan_nom} (réf. ${details.reference}) a été rejetée. Motif : ${details.motif}. Soumettez une nouvelle preuve sur ${baseUrl}/dashboard/abonnement`
     },
     env
   )
@@ -365,6 +379,7 @@ export async function envoyerEmailRappelExpiration(
   details: { type: 'essai' | 'abonnement'; jours_restants: number; date_expiration_iso: string; plan_nom?: string }
 ): Promise<{ success: boolean; error?: string }> {
   const nomApp = await getNomExpediteur(env)
+  const baseUrl = getBaseUrl(env)
   const nom = escapeHtml(destinataire.nom_restaurant)
   const dateExp = new Date(details.date_expiration_iso).toLocaleDateString('fr-FR', { timeZone: 'Africa/Ouagadougou' })
   const typeLabel = details.type === 'essai' ? 'période d\'essai' : `abonnement ${escapeHtml(details.plan_nom ?? '')}`
@@ -376,7 +391,7 @@ export async function envoyerEmailRappelExpiration(
       <p>Bonjour <strong>${nom}</strong>,</p>
       <p>Votre ${typeLabel} expire le <strong>${escapeHtml(dateExp)}</strong>. Sans renouvellement, votre boutique sera suspendue et vos clients ne pourront plus passer commande.</p>
       <p style="margin-top:24px;">
-        <a href="https://monmenu.app/dashboard/abonnement" style="background:${urgence};color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:bold;">
+        <a href="${baseUrl}/dashboard/abonnement" style="background:${urgence};color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:bold;">
           Renouveler maintenant
         </a>
       </p>
@@ -388,7 +403,7 @@ export async function envoyerEmailRappelExpiration(
       to: [{ email: destinataire.email, name: destinataire.nom_restaurant }],
       subject: `[${nomApp}] ⚠️ Votre ${details.type === 'essai' ? 'essai' : 'abonnement'} expire dans ${details.jours_restants} jour${details.jours_restants > 1 ? 's' : ''} — ${nom}`,
       htmlContent,
-      textContent: `Votre ${typeLabel} pour ${destinataire.nom_restaurant} expire le ${dateExp}. Renouvelez sur https://monmenu.app/dashboard/abonnement`
+      textContent: `Votre ${typeLabel} pour ${destinataire.nom_restaurant} expire le ${dateExp}. Renouvelez sur ${baseUrl}/dashboard/abonnement`
     },
     env
   )
@@ -401,9 +416,10 @@ export async function envoyerEmailSuppressionDemande(
   details: { token: string; date_suppression_iso: string }
 ): Promise<{ success: boolean; error?: string }> {
   const nomApp = await getNomExpediteur(env)
+  const baseUrl = getBaseUrl(env)
   const nom = escapeHtml(destinataire.nom_restaurant)
   const dateSuppr = new Date(details.date_suppression_iso).toLocaleDateString('fr-FR', { timeZone: 'Africa/Ouagadougou' })
-  const lienConfirmation = `https://monmenu.app/api/v1/dashboard/compte/confirmer-suppression?token=${encodeURIComponent(details.token)}`
+  const lienConfirmation = `${baseUrl}/api/v1/dashboard/compte/confirmer-suppression?token=${encodeURIComponent(details.token)}`
 
   const htmlContent = `
     <div style="font-family:sans-serif;max-width:600px;margin:0 auto;padding:24px;">
@@ -442,8 +458,7 @@ export async function envoyerEmailNewsletter(
   destinataire: { email: string; nom?: string },
   contenu: { sujet: string; corps_html: string; corps_texte: string }
 ): Promise<{ success: boolean; error?: string }> {
-  // Pas besoin d'escapeHtml ici — le contenu vient de l'admin (X-Admin-Secret).
-  // On fait confiance à l'admin pour le HTML, mais on valide quand même le sujet.
+  // Contenu vient de l'admin (X-Admin-Secret) — pas d'escapeHtml sur le corps.
   return sendEmail(
     {
       to: [{ email: destinataire.email, name: destinataire.nom ?? destinataire.email }],
