@@ -62,6 +62,16 @@ export async function handleScheduled(event: ScheduledEvent, env: Env, ctx: Exec
     case '30 */6 * * *':
       ctx.waitUntil(bloquerPaiementsExpires(env))
       break
+    // [session-3] Nouveaux crons
+    case '0 8 * * *':
+      ctx.waitUntil(envoyerRappelsExpiration(env, 5))
+      break
+    case '0 9 * * *':
+      ctx.waitUntil(envoyerRappelsExpiration(env, 2))
+      break
+    case '40 2 * * *':
+      ctx.waitUntil(verifierAbonnementsExpires(env))
+      break
     default:
       console.warn(`[CRON] Déclenchement non reconnu: ${event.cron}`)
   }
@@ -474,4 +484,166 @@ export async function capturerScreenshotsQuotidiens(env: Env): Promise<{ reussie
 
   console.log(`[CRON:screenshots] Terminé : ${reussies}/${tenants.length} capture(s) réussie(s).`)
   return { reussies, total: tenants.length }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// [session-3] Corr#7 — Rappels expiration J-5 et J-2
+// Envoyés à 08h00 UTC (J-5) et 09h00 UTC (J-2)
+// ─────────────────────────────────────────────────────────────────────────────
+async function envoyerRappelsExpiration(env: Env, joursRestants: number): Promise<void> {
+  const adminClient = createSupabaseAdminClient(env)
+  const now = new Date()
+
+  // Fenêtre cible : expire exactement dans `joursRestants` jours (±12h)
+  const debut = new Date(now)
+  debut.setDate(debut.getDate() + joursRestants)
+  debut.setHours(0, 0, 0, 0)
+  const fin = new Date(debut)
+  fin.setHours(23, 59, 59, 999)
+
+  const debutIso = debut.toISOString()
+  const finIso = fin.toISOString()
+
+  console.log(`[CRON:rappels] J-${joursRestants} — fenêtre: ${debutIso} → ${finIso}`)
+
+  // 1. Essais expirant dans joursRestants jours
+  const { data: essais } = await adminClient
+    .from('tenants')
+    .select('id, slug, nom, essai_expire_le')
+    .eq('statut', 'essai')
+    .gte('essai_expire_le', debutIso)
+    .lte('essai_expire_le', finIso)
+    .is('deleted_at', null)
+
+  // 2. Abonnements actifs expirant dans joursRestants jours
+  const { data: abonnements } = await adminClient
+    .from('abonnements')
+    .select('id, tenant_id, date_fin, tenants!inner(id, slug, nom, statut, deleted_at)')
+    .eq('statut', 'actif')
+    .gte('date_fin', debutIso)
+    .lte('date_fin', finIso)
+    .is('tenants.deleted_at', null)
+
+  const traiter = async (tenantId: string, tenantNom: string, type: 'essai' | 'abonnement', dateIso: string, planNom?: string) => {
+    try {
+      const { data: ut } = await adminClient
+        .from('utilisateurs_tenant')
+        .select('auth_user_id')
+        .eq('tenant_id', tenantId)
+        .limit(1)
+        .maybeSingle()
+      if (!ut?.auth_user_id) return
+      const { data: userAuth } = await adminClient.auth.admin.getUserById(ut.auth_user_id)
+      if (!userAuth?.user?.email) return
+      await envoyerEmailRappelExpiration(env, {
+        email: userAuth.user.email,
+        nom_restaurant: tenantNom
+      }, {
+        type,
+        jours_restants: joursRestants,
+        date_expiration_iso: dateIso,
+        plan_nom: planNom
+      })
+    } catch (err) {
+      console.error(`[CRON:rappels] Erreur tenant ${tenantId}:`, err)
+    }
+  }
+
+  const taches: Promise<void>[] = []
+
+  for (const essai of (essais ?? [])) {
+    if (essai.essai_expire_le) {
+      taches.push(traiter(essai.id, essai.nom ?? essai.slug, 'essai', essai.essai_expire_le))
+    }
+  }
+
+  for (const ab of (abonnements ?? [])) {
+    const tenant = Array.isArray(ab.tenants) ? ab.tenants[0] : ab.tenants as any
+    if (ab.date_fin && tenant?.id) {
+      taches.push(traiter(tenant.id, tenant.nom ?? tenant.slug, 'abonnement', ab.date_fin))
+    }
+  }
+
+  // Traiter en batches de 10 pour éviter de dépasser les limites Workers
+  for (let i = 0; i < taches.length; i += 10) {
+    await Promise.allSettled(taches.slice(i, i + 10))
+  }
+
+  console.log(`[CRON:rappels] J-${joursRestants} terminé — ${taches.length} rappel(s) envoyé(s).`)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// [session-3] Corr#10a — Vérification abonnements payants expirés (actif → inactif)
+// Tourne à 02h40 UTC chaque nuit
+// ─────────────────────────────────────────────────────────────────────────────
+async function verifierAbonnementsExpires(env: Env): Promise<void> {
+  const adminClient = createSupabaseAdminClient(env)
+  const nowIso = new Date().toISOString()
+
+  // Trouver les abonnements actifs dont date_fin est dépassée
+  const { data: abExpires, error } = await adminClient
+    .from('abonnements')
+    .select('id, tenant_id, date_fin')
+    .eq('statut', 'actif')
+    .not('date_fin', 'is', null)
+    .lt('date_fin', nowIso)
+
+  if (error) {
+    console.error('[CRON:abonnements-expires] Erreur récupération:', error.message)
+    return
+  }
+
+  if (!abExpires || abExpires.length === 0) {
+    console.log('[CRON:abonnements-expires] Aucun abonnement expiré.')
+    return
+  }
+
+  console.log(`[CRON:abonnements-expires] ${abExpires.length} abonnement(s) expiré(s) à traiter.`)
+
+  for (const ab of abExpires) {
+    try {
+      // Passer l'abonnement à 'expire'
+      await adminClient
+        .from('abonnements')
+        .update({ statut: 'expire', updated_at: nowIso })
+        .eq('id', ab.id)
+        .eq('statut', 'actif')
+
+      // Passer le tenant à 'inactif' si toujours 'actif' et aucun autre abonnement actif
+      const { data: autreActif } = await adminClient
+        .from('abonnements')
+        .select('id')
+        .eq('tenant_id', ab.tenant_id)
+        .eq('statut', 'actif')
+        .maybeSingle()
+
+      if (!autreActif) {
+        const { data: tenant } = await adminClient
+          .from('tenants')
+          .update({ statut: 'inactif', updated_at: nowIso })
+          .eq('id', ab.tenant_id)
+          .eq('statut', 'actif')
+          .select('id, slug, nom')
+          .maybeSingle()
+
+        if (tenant) {
+          // Invalider KV cache
+          try {
+            if (env.KV_CACHE) {
+              await Promise.allSettled([
+                env.KV_CACHE.delete(`tenant:${tenant.slug}`),
+                env.KV_CACHE.delete('tenants:public:12'),
+                env.KV_CACHE.delete('tenants:public:24')
+              ])
+            }
+          } catch {}
+          console.log(`[CRON:abonnements-expires] Tenant ${tenant.slug} passé actif → inactif.`)
+        }
+      }
+    } catch (err) {
+      console.error(`[CRON:abonnements-expires] Erreur tenant ${ab.tenant_id}:`, err)
+    }
+  }
+
+  console.log('[CRON:abonnements-expires] Terminé.')
 }

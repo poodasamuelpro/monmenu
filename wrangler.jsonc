@@ -34,7 +34,16 @@
   //   02h20 UTC → capture des screenshots boutique (thum.io → R2)
   //   toutes les 6h à :30 → blocage automatique paiements expirés (72h window)
   "triggers": {
-    "crons": ["0 2 * * *", "10 2 * * *", "20 2 * * *", "30 */6 * * *"]
+    // crons existants (heures UTC) :
+    //   "0 2 * * *"    → stats journalières
+    //   "10 2 * * *"   → vérification essais expirés (essai → inactif)
+    //   "20 2 * * *"   → capture screenshots boutique
+    //   "30 */6 * * *" → blocage paiements en_attente_confirmation expirés
+    // [session-3] ajoutés :
+    //   "0 8 * * *"    → rappels J-5 (essai + abonnement expirant dans 5j)
+    //   "0 9 * * *"    → rappels J-2 (essai + abonnement expirant dans 2j)
+    //   "40 2 * * *"   → vérification abonnements payants expirés (actif → inactif)
+    "crons": ["0 2 * * *", "10 2 * * *", "20 2 * * *", "30 */6 * * *", "0 8 * * *", "0 9 * * *", "40 2 * * *"]
   },
 
   // Variables non sensibles — PUBLIC_BASE_URL utilisée par le cron pour
