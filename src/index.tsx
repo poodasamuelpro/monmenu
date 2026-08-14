@@ -63,7 +63,22 @@ const ACCESS_TOKEN_COOKIE = 'sb-access-token'
 // dès l'inscription, comme le permet déjà api-commandes.ts). Seuls
 // 'suspendu' (mur admin) et 'bloque' (renouvellement en retard, sans
 // fenêtre de grâce active) restent 404.
+// [session-3] Corr#8c+#14.1 — Cache KV 30s sur fetchTenantAvecPdv
+// Réduit les appels Supabase sur les pages boutique (route publique /:slug)
+// TTL court (30s) pour rester cohérent avec les invalidations KV existantes.
+const BOUTIQUE_CACHE_TTL = 30 // secondes
+
 async function fetchTenantAvecPdv(env: Env, slug: string): Promise<TenantBoutique | null> {
+  const cacheKey = `boutique:${slug}`
+
+  // 1. Tenter lecture cache KV
+  if (env.KV_CACHE) {
+    try {
+      const cached = await env.KV_CACHE.get(cacheKey, 'json')
+      if (cached !== null) return cached as TenantBoutique | null
+    } catch {}
+  }
+
   const adminClient = createSupabaseAdminClient(env)
   const { data: tenantRaw } = await adminClient
     .from('tenants')
@@ -77,7 +92,13 @@ async function fetchTenantAvecPdv(env: Env, slug: string): Promise<TenantBoutiqu
     .limit(1)
     .maybeSingle()
 
-  if (!tenantRaw) return null
+  if (!tenantRaw) {
+    // Cacher le null aussi (évite les requêtes DB sur slug invalides) — TTL court 10s
+    if (env.KV_CACHE) {
+      try { await env.KV_CACHE.put(cacheKey, 'null', { expirationTtl: 10 }) } catch {}
+    }
+    return null
+  }
 
   const acces = await verifierAccesTenant(env, tenantRaw.id)
   const boutiqueVisible = acces.accesComplet || acces.mode === 'paiement_initial'
@@ -86,7 +107,7 @@ async function fetchTenantAvecPdv(env: Env, slug: string): Promise<TenantBoutiqu
   const pdvArr = Array.isArray(tenantRaw.points_de_vente) ? tenantRaw.points_de_vente : []
   const pdv = pdvArr.find((p: any) => p.actif) ?? pdvArr[0] ?? null
 
-  return {
+  const result: TenantBoutique = {
     id: tenantRaw.id,
     nom: tenantRaw.nom,
     slug: tenantRaw.slug,
@@ -101,6 +122,13 @@ async function fetchTenantAvecPdv(env: Env, slug: string): Promise<TenantBoutiqu
     pdv_latitude: pdv?.latitude ?? null,
     pdv_longitude: pdv?.longitude ?? null
   }
+
+  // 2. Écrire en cache KV
+  if (env.KV_CACHE) {
+    try { await env.KV_CACHE.put(cacheKey, JSON.stringify(result), { expirationTtl: BOUTIQUE_CACHE_TTL }) } catch {}
+  }
+
+  return result
 }
 
 // ---- Middleware globaux ----

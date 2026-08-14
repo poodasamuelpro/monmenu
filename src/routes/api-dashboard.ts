@@ -1272,7 +1272,10 @@ dashboardRouter.patch('/apparence', async (c) => {
     return c.json({ error: 'Couleur secondaire invalide (format #RRGGBB).' }, 422)
   }
 
-  const supabase = createSupabaseClientWithToken(c.env, auth.token)
+  // [session-3] Corr#8a — switch vers adminClient (bypass RLS) + vérification rowCount
+  // Le client RLS (createSupabaseClientWithToken) retournait succès silencieux si la
+  // politique RLS bloquait l'update (0 lignes modifiées, pas d'erreur).
+  const adminClient = createSupabaseAdminClient(c.env)
 
   const updateData: any = { updated_at: new Date().toISOString() }
   if (body.couleur_primaire !== undefined) updateData.couleur_primaire = body.couleur_primaire
@@ -1280,12 +1283,15 @@ dashboardRouter.patch('/apparence', async (c) => {
   if (body.logo_url !== undefined) updateData.logo_url = body.logo_url
   if (body.banniere_url !== undefined) updateData.banniere_url = body.banniere_url
 
-  const { error } = await supabase
+  const { data: updated, error } = await adminClient
     .from('tenants')
     .update(updateData)
     .eq('id', auth.tenant_id)
+    .is('deleted_at', null)
+    .select('id')
 
   if (error) return c.json({ error: 'Erreur mise à jour apparence.', detail: error.message }, 500)
+  if (!updated || updated.length === 0) return c.json({ error: 'Restaurant introuvable ou accès refusé.' }, 404)
 
   try { if (c.env.KV_CACHE) await c.env.KV_CACHE.delete(`tenant:${auth.tenant_slug}`) } catch {}
 
