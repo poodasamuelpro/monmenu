@@ -99,12 +99,16 @@ async function calculerStatsJournalieres(env: Env, scheduledTime: number): Promi
 
   console.log(`[CRON:stats] Calcul stats pour ${tenants.length} tenants — date: ${dateStr}`)
 
-  for (const tenant of tenants) {
-    try {
-      await calculerStatsUnTenant(adminClient, tenant.id, dateStr, debutJour, finJour)
-    } catch (err) {
-      console.error(`[CRON:stats] Erreur tenant ${tenant.id}:`, err)
-    }
+  // Corr#14.2 — Batches de 5 au lieu de boucle séquentielle (anti-N+1)
+  const BATCH_SIZE = 5
+  for (let i = 0; i < tenants.length; i += BATCH_SIZE) {
+    const batch = tenants.slice(i, i + BATCH_SIZE)
+    await Promise.allSettled(
+      batch.map((tenant) =>
+        calculerStatsUnTenant(adminClient, tenant.id, dateStr, debutJour, finJour)
+          .catch((err) => console.error(`[CRON:stats] Erreur tenant ${tenant.id}:`, err))
+      )
+    )
   }
 
   console.log(`[CRON:stats] Stats journalières ${dateStr} terminées.`)
@@ -460,7 +464,7 @@ export async function capturerScreenshotsQuotidiens(env: Env): Promise<{ reussie
   const debut = paquetIndex * MAX_SCREENSHOTS_PAR_EXECUTION
   const tenants = tousTenants.slice(debut, debut + MAX_SCREENSHOTS_PAR_EXECUTION)
 
-  const baseUrl = env.PUBLIC_BASE_URL ?? 'https://monmenu.app'
+  const baseUrl = env.PUBLIC_BASE_URL ?? 'https://monmenu.com'
   console.log(`[CRON:screenshots] Rotation jour ${jourEpoch} — paquet ${paquetIndex + 1}/${nbPaquets} — ${tenants.length}/${tousTenants.length} tenant(s).`)
 
   let reussies = 0

@@ -87,22 +87,28 @@ adminPaiementsRouter.get('/', async (c) => {
     return c.json({ error: 'Erreur lors de la récupération.' }, 500)
   }
 
-  // MIGRATION — enrichissement du nom de plan via Supabase (chargerPlan),
-  // plus de requête D1.
-  const enrichis = await Promise.all(
-    (abonnements ?? []).map(async (ab: any) => {
-      let plan_nom = null
-      if (ab.plan_id) {
-        const plan = await chargerPlan(c.env, ab.plan_id)
-        plan_nom = plan?.nom ?? null
-      }
-      const heuresRestantes = ab.delai_confirmation_expire_le
-        ? Math.ceil((new Date(ab.delai_confirmation_expire_le).getTime() - Date.now()) / 3600000)
-        : null
-      const urgent = heuresRestantes !== null && heuresRestantes < 12
-      return { ...ab, plan_nom, heures_restantes: heuresRestantes, urgent }
-    })
-  )
+  // Corr#14.2 — Anti-N+1 : charger tous les plans distincts en une requête .in()
+  // au lieu de N appels chargerPlan individuels dans Promise.all.
+  const planIds = [...new Set((abonnements ?? []).map((ab: any) => ab.plan_id).filter(Boolean))]
+  const plansMap = new Map<string, string>()
+  if (planIds.length > 0) {
+    const { data: plansData } = await adminClient
+      .from('plans')
+      .select('id, nom')
+      .in('id', planIds)
+    for (const p of (plansData ?? [])) {
+      plansMap.set(p.id, p.nom)
+    }
+  }
+
+  const enrichis = (abonnements ?? []).map((ab: any) => {
+    const plan_nom = ab.plan_id ? (plansMap.get(ab.plan_id) ?? null) : null
+    const heuresRestantes = ab.delai_confirmation_expire_le
+      ? Math.ceil((new Date(ab.delai_confirmation_expire_le).getTime() - Date.now()) / 3600000)
+      : null
+    const urgent = heuresRestantes !== null && heuresRestantes < 12
+    return { ...ab, plan_nom, heures_restantes: heuresRestantes, urgent }
+  })
 
   return c.json({
     paiements: enrichis,
