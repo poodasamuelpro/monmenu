@@ -1041,7 +1041,7 @@ async function submitEditProduit(e, prodId) {
       const upRes = await dashFetch('/api/v1/dashboard/upload-image', {
         method: 'POST', headers: {'X-Requested-With':'XMLHttpRequest'}, body: fd
       });
-      if (upRes.ok) { const upData = await upRes.json(); photo_url = upData.url; }
+      if (upRes.ok) { const upData = await upRes.json(); photo_url = escHtml(upData.url); }
       else { const err = await upRes.json(); alert('Erreur upload : ' + (err.error || 'Échec')); }
     } catch { alert('Erreur upload.'); }
     if (prog) prog.classList.add('hidden');
