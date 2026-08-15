@@ -982,7 +982,7 @@ async function submitAddProduit(e, categorieId) {
         const upData = await upRes.json();
         photo_url = upData.url;
         const prev = document.getElementById('photo-preview');
-        if (prev) { prev.innerHTML = `<img src="${upData.url}" class="w-16 h-16 rounded-lg object-cover border border-green-200">`; prev.classList.remove('hidden'); }
+        if (prev) { prev.innerHTML = `<img src="${escHtml(upData.url)}" class="w-16 h-16 rounded-lg object-cover border border-green-200">`; prev.classList.remove('hidden'); }
       } else { const err = await upRes.json(); alert('Erreur upload : '+(err.error||'Échec')); }
     } catch { alert('Erreur upload.'); }
     if (uploadDiv) uploadDiv.classList.add('hidden');
