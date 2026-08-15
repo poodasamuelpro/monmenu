@@ -204,9 +204,10 @@ authRouter.post('/login', async (c) => {
 
   const tenant = tenantData.tenants as any
 
-  if (tenant.statut === 'suspendu') {
-    return c.json({ error: 'Votre compte est suspendu. Contactez le support.' }, 403)
-  }
+  // B-AUTH-03 — fix session-5 : bloc if (tenant.statut === 'suspendu') supprimé.
+  // Ce bloc était du code mort : la requête juste au-dessus filtre déjà
+  // .neq('tenants.statut', 'suspendu'), donc cette branche ne pouvait jamais
+  // s'exécuter. Suppression pour éviter la confusion lors de futures maintenances.
 
   setAuthCookies(c, data.session.access_token, data.session.refresh_token)
 
@@ -386,7 +387,10 @@ authRouter.post('/register', async (c) => {
     return c.json({ error: 'Erreur lors de la création du restaurant.' }, 500)
   }
 
-  await adminClient
+  // B-AUTH-04 — fix session-5 : vérification du résultat des insertions PDV et
+  // utilisateurs_tenant. En cas d'échec, rollback soft du tenant (deleted_at = now())
+  // pour éviter un compte fantôme facturable mais inutilisable.
+  const { error: pdvInsertError } = await adminClient
     .from('points_de_vente')
     .insert({
       tenant_id: newTenant.id,
@@ -395,7 +399,16 @@ authRouter.post('/register', async (c) => {
       actif: true
     })
 
-  await adminClient
+  if (pdvInsertError) {
+    console.error('Erreur création PDV (register):', pdvInsertError.message)
+    // Rollback soft : marquer le tenant comme supprimé pour éviter un fantôme
+    try {
+      await adminClient.from('tenants').update({ deleted_at: new Date().toISOString() }).eq('id', newTenant.id)
+    } catch (e) { console.error('Rollback tenant échoué:', e) }
+    return c.json({ error: 'Erreur lors de la création du point de vente. Veuillez réessayer.' }, 500)
+  }
+
+  const { error: utInsertError } = await adminClient
     .from('utilisateurs_tenant')
     .insert({
       tenant_id: newTenant.id,
@@ -403,6 +416,15 @@ authRouter.post('/register', async (c) => {
       role: 'proprietaire',
       nom: nom_gerant
     })
+
+  if (utInsertError) {
+    console.error('Erreur création utilisateurs_tenant (register):', utInsertError.message)
+    // Rollback soft du tenant
+    try {
+      await adminClient.from('tenants').update({ deleted_at: new Date().toISOString() }).eq('id', newTenant.id)
+    } catch (e) { console.error('Rollback tenant échoué:', e) }
+    return c.json({ error: 'Erreur lors de l\'association du compte au restaurant. Veuillez réessayer.' }, 500)
+  }
 
   let sessionData: { access_token?: string; refresh_token?: string } = {}
   if (authData.session) {

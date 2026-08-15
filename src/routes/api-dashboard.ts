@@ -363,13 +363,20 @@ dashboardRouter.patch('/commandes/:id/statut', async (c) => {
   const updateData: any = { statut: body.statut, updated_at: now }
   if (body.livreur_id) updateData.livreur_id = body.livreur_id
 
-  const { error: updateError } = await supabase
+  // B-DASH-04 — fix session-5 : ajout de .is('deleted_at', null) (cohérence avec le SELECT
+  // de vérification juste au-dessus) + .select('id') + vérification rows affectées.
+  const { data: commandeUpdatedRows, error: updateError } = await supabase
     .from('commandes')
     .update(updateData)
     .eq('id', commandeId)
     .eq('tenant_id', auth.tenant_id)
+    .is('deleted_at', null)
+    .select('id')
 
   if (updateError) return c.json({ error: 'Erreur mise à jour statut.', detail: updateError.message }, 500)
+  if (!commandeUpdatedRows || commandeUpdatedRows.length === 0) {
+    return c.json({ error: 'Commande introuvable ou non modifiable.' }, 404)
+  }
 
   const adminClient = createSupabaseAdminClient(c.env)
   await adminClient
@@ -1139,13 +1146,19 @@ dashboardRouter.delete('/livreurs/:id', async (c) => {
   const livId = c.req.param('id')
   const supabase = createSupabaseClientWithToken(c.env, auth.token)
 
-  const { error } = await supabase
+  // B-DASH-05 — fix session-5 : ajout de .select('id') + vérification rows pour détecter
+  // une suppression sur un ID inexistant (0 lignes affectées n'est pas une erreur PostgreSQL).
+  const { data: livDeletedRows, error } = await supabase
     .from('livreurs')
     .delete()
     .eq('id', livId)
     .eq('tenant_id', auth.tenant_id)
+    .select('id')
 
   if (error) return c.json({ error: 'Erreur suppression livreur.', detail: error.message }, 500)
+  if (!livDeletedRows || livDeletedRows.length === 0) {
+    return c.json({ error: 'Livreur introuvable.' }, 404)
+  }
 
   return c.json({ success: true })
 })
@@ -1294,12 +1307,17 @@ dashboardRouter.patch('/pdv', async (c) => {
   if (body.tarif_par_km !== undefined) updateData.tarif_par_km = body.tarif_par_km
   if (body.horaires !== undefined) updateData.horaires = body.horaires
 
-  const { error } = await supabase
+  // B-DASH-01 — fix session-5 : ajout de .select('id') + vérification rows affectées.
+  const { data: pdvUpdatedRows, error } = await supabase
     .from('points_de_vente')
     .update(updateData)
     .eq('tenant_id', auth.tenant_id)
+    .select('id')
 
   if (error) return c.json({ error: 'Erreur mise à jour PDV.', detail: error.message }, 500)
+  if (!pdvUpdatedRows || pdvUpdatedRows.length === 0) {
+    return c.json({ error: 'Point de vente introuvable ou non modifiable.' }, 404)
+  }
 
   try { if (c.env.KV_CACHE) await c.env.KV_CACHE.delete(`tenant:${auth.tenant_slug}`) } catch {}
 
@@ -1372,12 +1390,17 @@ dashboardRouter.patch('/parametres', async (c) => {
   const updateData: any = { nom: body.nom.trim(), updated_at: new Date().toISOString() }
   if (body.whatsapp_number !== undefined) updateData.whatsapp_number = body.whatsapp_number
 
-  const { error } = await supabase
+  // B-DASH-03 — fix session-5 : ajout de .select('id') + vérification rows affectées.
+  const { data: parametresUpdatedRows, error } = await supabase
     .from('tenants')
     .update(updateData)
     .eq('id', auth.tenant_id)
+    .select('id')
 
   if (error) return c.json({ error: 'Erreur mise à jour paramètres.', detail: error.message }, 500)
+  if (!parametresUpdatedRows || parametresUpdatedRows.length === 0) {
+    return c.json({ error: 'Restaurant introuvable ou non modifiable.' }, 404)
+  }
 
   try { if (c.env.KV_CACHE) await c.env.KV_CACHE.delete(`tenant:${auth.tenant_slug}`) } catch {}
 
@@ -1764,13 +1787,18 @@ dashboardRouter.patch('/codes-promo/:id', async (c) => {
 
   if (!promo) return c.json({ error: 'Code promo introuvable.' }, 404)
 
-  const { error } = await supabase
+  // B-DASH-08 — fix session-5 : ajout de .select('id') + vérification rows sur l'UPDATE.
+  const { data: promoUpdatedRows, error } = await supabase
     .from('codes_promo')
     .update({ actif: actifBool })
     .eq('id', promoId)
     .eq('tenant_id', auth.tenant_id)
+    .select('id')
 
   if (error) return c.json({ error: 'Erreur mise à jour code promo.', detail: error.message }, 500)
+  if (!promoUpdatedRows || promoUpdatedRows.length === 0) {
+    return c.json({ error: 'Code promo introuvable ou non modifiable.' }, 404)
+  }
 
   return c.json({ success: true, actif: actifBool ? 1 : 0 })
 })
@@ -1784,13 +1812,18 @@ dashboardRouter.delete('/codes-promo/:id', async (c) => {
   const promoId = c.req.param('id')
   const supabase = createSupabaseClientWithToken(c.env, auth.token)
 
-  const { error } = await supabase
+  // B-DASH-06 — fix session-5 : ajout de .select('id') + vérification rows.
+  const { data: promoDeletedRows, error } = await supabase
     .from('codes_promo')
     .delete()
     .eq('id', promoId)
     .eq('tenant_id', auth.tenant_id)
+    .select('id')
 
   if (error) return c.json({ error: 'Erreur suppression code promo.', detail: error.message }, 500)
+  if (!promoDeletedRows || promoDeletedRows.length === 0) {
+    return c.json({ error: 'Code promo introuvable.' }, 404)
+  }
 
   return c.json({ success: true })
 })
@@ -2286,13 +2319,18 @@ dashboardRouter.patch('/notifications/:id', async (c) => {
 
   if (!existing) return c.json({ error: 'Notification introuvable.' }, 404)
 
-  const { error } = await adminClient
+  // B-DASH-09 — fix session-5 : ajout de .select('id') + vérification rows sur l'UPDATE.
+  const { data: notifUpdatedRows, error } = await adminClient
     .from('notifications_restaurant')
     .update({ lue: body.lue })
     .eq('id', notifId)
     .eq('tenant_id', auth.tenant_id)
+    .select('id')
 
   if (error) return c.json({ error: 'Erreur mise à jour notification.', detail: error.message }, 500)
+  if (!notifUpdatedRows || notifUpdatedRows.length === 0) {
+    return c.json({ error: 'Notification introuvable ou non modifiable.' }, 404)
+  }
 
   return c.json({ success: true, lue: body.lue })
 })
