@@ -59,6 +59,15 @@ import { sendFcmToTenant } from '../lib/fcm'
 const commandesRouter = new Hono<{ Bindings: Env }>()
 
 // ---- Helper auth dashboard ----
+// B-CMD-01 — fix session-5 : utilise createSupabaseAdminClient (service role) au lieu de
+// createSupabaseClientWithToken (RLS actif) pour ce lookup interne. Une policy RLS trop
+// stricte pouvait bloquer silencieusement un restaurateur légitime (utData null → 403
+// injustifié). La protection est conservée par la vérification MANUELLE de auth_user_id
+// (filtre strict, impossibilité d'accéder aux commandes d'un autre tenant).
+// NOTE SÉCURITÉ : le client admin bypasse RLS — c'est sécurisé ICI car :
+//   1. L'identité est vérifiée via supabase.auth.getUser(token) juste avant.
+//   2. Le filtre .eq('auth_user_id', user.id) garantit qu'on ne lit que le lien
+//      appartenant à cet utilisateur authentifié, jamais à un autre compte.
 async function verifyRestaurantAuth(c: any): Promise<{ user_id: string; tenant_id: string } | null> {
   const authHeader = c.req.header('Authorization')
   if (!authHeader?.startsWith('Bearer ')) return null
@@ -70,11 +79,12 @@ async function verifyRestaurantAuth(c: any): Promise<{ user_id: string; tenant_i
     const { data: { user }, error } = await supabase.auth.getUser(token)
     if (error || !user) return null
 
-    const supabaseToken = createSupabaseClientWithToken(c.env, token)
-    const { data: utData, error: utError } = await supabaseToken
+    // B-CMD-01 : client ADMIN (service role) — RLS bypassé, vérification manuelle obligatoire.
+    const adminClient = createSupabaseAdminClient(c.env)
+    const { data: utData, error: utError } = await adminClient
       .from('utilisateurs_tenant')
       .select('tenant_id, tenants!inner(id, statut, deleted_at)')
-      .eq('auth_user_id', user.id)
+      .eq('auth_user_id', user.id)  // vérification manuelle : uniquement le compte authentifié
       .is('tenants.deleted_at', null)
       .neq('tenants.statut', 'suspendu')
       .single()
@@ -482,6 +492,13 @@ commandesRouter.get('/suivi/:token', async (c) => {
 })
 
 // PATCH /api/v1/commandes/:id/statut — Mise à jour statut (AUTH JWT REQUISE)
+//
+// B-CMD-02 — note session-5 : cette route est une duplication intentionnelle de
+// PATCH /api/v1/dashboard/commandes/:id/statut (api-dashboard.ts).
+// Les deux routes coexistent pour des raisons historiques (l'app mobile utilise
+// celle-ci via header Bearer ; le dashboard web utilise celle de api-dashboard.ts
+// via cookie + X-Requested-With). Toute modification fonctionnelle sur l'une DOIT
+// être reportée sur l'autre. Renvoi croisé : voir api-dashboard.ts ligne ~335.
 commandesRouter.patch('/:id/statut', async (c) => {
   setSecurityHeaders(c)
 
@@ -514,13 +531,20 @@ commandesRouter.patch('/:id/statut', async (c) => {
   const updateData: any = { statut: body.statut, updated_at: now }
   if (body.livreur_id) updateData.livreur_id = body.livreur_id
 
-  const { error: updateError } = await adminClient
+  // B-CMD-02 — alignement sur api-dashboard.ts (même correction que B-DASH-04) :
+  // .is('deleted_at', null) + .select('id') + vérification rows.
+  const { data: cmdUpdatedRows, error: updateError } = await adminClient
     .from('commandes')
     .update(updateData)
     .eq('id', commandeId)
     .eq('tenant_id', auth.tenant_id)
+    .is('deleted_at', null)
+    .select('id')
 
   if (updateError) return c.json({ error: 'Erreur mise à jour statut.', detail: updateError.message }, 500)
+  if (!cmdUpdatedRows || cmdUpdatedRows.length === 0) {
+    return c.json({ error: 'Commande introuvable ou non modifiable.' }, 404)
+  }
 
   await adminClient
     .from('commandes_historique')

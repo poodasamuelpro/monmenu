@@ -332,6 +332,11 @@ dashboardRouter.get('/commandes', async (c) => {
 })
 
 // ---- PATCH /api/v1/dashboard/commandes/:id/statut ----
+// B-CMD-02 — note session-5 : cette route est dupliquée dans api-commandes.ts
+// (PATCH /api/v1/commandes/:id/statut). La version de api-commandes.ts est utilisée
+// par l'app mobile (header Bearer). Celle-ci est utilisée par le dashboard web
+// (cookie + X-Requested-With). Toute modification fonctionnelle ICI doit être
+// reportée sur api-commandes.ts. Renvoi croisé : voir api-commandes.ts ligne ~484.
 dashboardRouter.patch('/commandes/:id/statut', async (c) => {
   setSecurityHeaders(c)
   const auth = await verifyAuth(c)
