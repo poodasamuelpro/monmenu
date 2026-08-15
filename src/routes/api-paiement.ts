@@ -620,13 +620,23 @@ paiementRouter.get('/notifications', async (c) => {
     created_at: string
   }> = []
 
-  // B-PAY-02 — session-5 : Remplacement de la double requête séquentielle
-  // (tenant PUIS abonnement conditionnel) par une jointure unique via
-  // Promise.all. Avant ce correctif, la requête abonnement n'était lancée
-  // que si tenant.paiement_en_attente_depuis était non null, ce qui induisait
-  // une latence en cascade inutile. Désormais les deux requêtes partent
-  // simultanément ; le résultat abonnement est simplement ignoré si
-  // paiement_en_attente_depuis est null.
+  // C3 — session-6 : Clarification du commentaire hérité de session-5.
+  // La version précédente parlait de "jointure unique" — ce terme est inexact.
+  // Il s'agit de deux requêtes parallèles (Promise.all) vers deux tables distinctes,
+  // pas d'une jointure SQL en une seule requête.
+  //
+  // Pourquoi une vraie jointure imbriquée Supabase n'est pas retenue ici :
+  // La relation est tenants 1→N abonnements, avec un filtre conditionnel
+  // (statut = 'en_attente_confirmation'). Via le client Supabase JS v2, filtrer
+  // une relation !left embedded sans exclure le tenant parent quand aucun
+  // abonnement ne correspond requiert la syntaxe PostgREST brute non accessible
+  // proprement via l'API fluent. Le Promise.all actuel offre la même latence
+  // réseau qu'une jointure (les deux requêtes partent simultanément) sans
+  // introduire de complexité fragile.
+  //
+  // Référence : B-PAY-02 session-5 — remplacement du séquentiel conditionnel
+  // (tenant PUIS abonnement si paiement_en_attente_depuis non null) par le
+  // parallèle inconditionnel ci-dessous.
   const [{ data: tenant }, { data: abonnementAttente }] = await Promise.all([
     adminClient
       .from('tenants')
