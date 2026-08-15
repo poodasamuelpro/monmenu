@@ -117,6 +117,13 @@ export function estDeadlineDepassee(deadline: Date | string): boolean {
 /**
  * Valide le type réel d'un fichier par inspection des magic bytes.
  *
+ * @deprecated B8-session-5 — La version unifiée et étendue (JPEG/PNG/GIF/WebP,
+ * synchrone, retour string|null) est désormais dans src/lib/validation.ts
+ * (validerMimeImageUnifie). Cette version est conservée ici pour ne pas
+ * casser l'interface de api-paiement.ts (retour Promise<{valide,type}>).
+ * La migration complète de api-paiement.ts vers lib/validation.ts est
+ * documentée comme tâche future (hors périmètre session-5).
+ *
  * Validations effectuées dans l'ordre (cf. SEC-02) :
  *   - Couche 3 (magic bytes) : seule validation non falsifiable
  *   - JPEG : FF D8 FF (premiers 3 octets)

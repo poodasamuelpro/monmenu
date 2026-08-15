@@ -111,25 +111,11 @@ import { genererMessageLivreur, genererLienWhatsApp, envoyerNotificationWhatsApp
 import { verifierAccesTenant } from '../lib/acces-tenant'
 import { chargerPlan } from '../lib/plans'
 import { envoyerEmailSuppressionDemande } from '../lib/brevo'
+// B8 — session-5 : validerMimeImage migré vers lib/validation.ts (fonction partagée unifiée).
+// La fonction locale (Corr#12) est supprimée ici. Comportement identique : JPEG/PNG/GIF/WebP.
+import { validerMimeImageUnifie as validerMimeImage } from '../lib/validation'
 
 const dashboardRouter = new Hono<{ Bindings: Env }>()
-
-// Corr#12 — Validation magic bytes pour les uploads image.
-// Vérifie les octets d'en-tête réels du fichier (indépendamment de file.type).
-// Retourne le MIME réel ou null si non reconnu.
-function validerMimeImage(buffer: ArrayBuffer): string | null {
-  const bytes = new Uint8Array(buffer.slice(0, 12))
-  // JPEG : FF D8 FF
-  if (bytes[0] === 0xFF && bytes[1] === 0xD8 && bytes[2] === 0xFF) return 'image/jpeg'
-  // PNG : 89 50 4E 47 0D 0A 1A 0A
-  if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47) return 'image/png'
-  // GIF : 47 49 46 38
-  if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x38) return 'image/gif'
-  // WebP : 52 49 46 46 ?? ?? ?? ?? 57 45 42 50
-  if (bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
-      bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) return 'image/webp'
-  return null
-}
 
 const ACCESS_TOKEN_COOKIE = 'sb-access-token'
 
