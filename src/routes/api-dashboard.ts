@@ -2513,30 +2513,10 @@ dashboardRouter.post('/compte/demander-suppression', async (c) => {
     }).catch(() => {})
   } catch {}
 
-  // B4 — session-5 : Notification admin lors de la demande de suppression de compte.
-  // L'admin doit être alerté pour anticiper le nettoyage et éventuellement
-  // contacter le restaurant avant la suppression effective.
-  // Non bloquant — un échec d'insertion ne doit pas faire échouer la demande.
-  try {
-    const adminClientNotif = createSupabaseAdminClient(c.env)
-    await adminClientNotif
-      .from('notifications_admin')
-      .insert({
-        type: 'warning',
-        titre: `Demande de suppression de compte — ${nomRestaurant ?? auth.tenant_slug}`,
-        message: `Le restaurant "${nomRestaurant ?? auth.tenant_slug}" (ID: ${auth.tenant_id}) a demandé la suppression de son compte. Suppression prévue le ${prevue.toLocaleDateString('fr-FR')}. Un email de confirmation a été envoyé à ${userEmail}.`,
-        lien: '#suppressions',
-        payload: {
-          tenant_id: auth.tenant_id,
-          tenant_slug: auth.tenant_slug,
-          nom_restaurant: nomRestaurant ?? auth.tenant_slug,
-          suppression_prevue_le: prevue.toISOString(),
-          demandee_le: now.toISOString()
-        }
-      })
-  } catch (notifErr: any) {
-    console.warn('[Suppression/B4] Notification admin échouée (non bloquant):', notifErr?.message ?? notifErr)
-  }
+  // C5 — session-6 : La notification admin a été déplacée dans la route
+  // /confirmer-suppression (token confirmation step) pour ne déclencher
+  // l'alerte que lors d'une suppression réellement confirmée via email,
+  // pas à la simple demande initiale qui peut ne jamais être validée.
 
   return c.json({
     success: true,
@@ -2560,7 +2540,7 @@ dashboardRouter.get('/compte/confirmer-suppression', async (c) => {
 
   const { data: tenant, error } = await adminClient
     .from('tenants')
-    .select('id, nom, suppression_token, suppression_token_expire_le, suppression_prevue_le')
+    .select('id, nom, slug, suppression_token, suppression_token_expire_le, suppression_prevue_le')
     .eq('suppression_token', token)
     .is('deleted_at', null)
     .maybeSingle()
@@ -2586,6 +2566,36 @@ dashboardRouter.get('/compte/confirmer-suppression', async (c) => {
   if (confirmError) {
     console.error('[Suppression] Erreur confirmation:', confirmError.message)
     return c.html('<h2>Erreur lors de la confirmation. Contactez le support.</h2>', 500)
+  }
+
+  // C5 — session-6 : Notification admin ajoutée ici (étape de confirmation token),
+  // pas dans /demander-suppression. À ce stade, la suppression est réellement programmée
+  // (tenant a cliqué sur le lien email) — pas une simple demande non validée.
+  // Idempotence : la route invalide le token après ce premier passage (suppression_token=null),
+  // donc une deuxième visite du même lien retourne 404 avant d'atteindre ce bloc.
+  // Non bloquant — un échec d'insertion ne doit pas faire échouer la confirmation.
+  try {
+    const nomRestaurant = tenant.nom ?? tenant.slug
+    const prevueStr = tenant.suppression_prevue_le
+      ? new Date(tenant.suppression_prevue_le).toLocaleDateString('fr-FR')
+      : 'date inconnue'
+    await adminClient
+      .from('notifications_admin')
+      .insert({
+        type: 'warning',
+        titre: `Suppression de compte confirmée — ${nomRestaurant}`,
+        message: `Le restaurant "${nomRestaurant}" (ID: ${tenant.id}) a confirmé la suppression de son compte via email. Suppression prévue le ${prevueStr}.`,
+        lien: '#suppressions',
+        payload: {
+          tenant_id: tenant.id,
+          tenant_slug: tenant.slug,
+          nom_restaurant: nomRestaurant,
+          suppression_prevue_le: tenant.suppression_prevue_le,
+          confirme_le: new Date().toISOString()
+        }
+      })
+  } catch (notifErr: any) {
+    console.warn('[Suppression/C5] Notification admin échouée (non bloquant):', notifErr?.message ?? notifErr)
   }
 
   return c.html(`
