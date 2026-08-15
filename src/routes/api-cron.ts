@@ -48,6 +48,9 @@ import { capturerScreenshotBoutique } from '../lib/screenshot'
 import { notifierBlocageAutomatique } from '../lib/whatsapp'
 import { SLA_ADMIN_HEURES, FENETRE_ACCES_HEURES } from '../lib/paiement'
 import { envoyerEmailRappelExpiration } from '../lib/brevo'
+// B3 — session-5 : import de la fonction d'email pour l'expiration abonnement actif→inactif
+// (réutilise envoyerEmailRappelExpiration avec jours_restants=0, identique au pattern essai)
+// B6 — session-5 : pas de nouvel import requis (utilise directement env.KV_CACHE)
 
 const MAX_SCREENSHOTS_PAR_EXECUTION = 30
 
@@ -372,7 +375,50 @@ async function verifierAbonnementsExpires(env: Env): Promise<void> {
               ])
             }
           } catch {}
-          console.log(`[CRON:abonnements-expires] Tenant ${tenant.slug} passé actif → inactif.`)
+
+          // B3 — session-5 : Notification in-app + email quand abonnement actif expire
+          // (transition actif → inactif). Identique au pattern verifierEssaisExpires().
+          // Non bloquant : erreur DB ou email n'arrête pas la boucle principale.
+          try {
+            await adminClient
+              .from('notifications_restaurant')
+              .insert({
+                tenant_id: tenant.id,
+                type: 'error',
+                titre: 'Abonnement expiré — Accès suspendu',
+                message: `Votre abonnement est arrivé à expiration. Votre boutique est suspendue. Renouvelez votre abonnement depuis votre tableau de bord pour rétablir l'accès.`,
+                lien: '/dashboard/abonnement',
+                payload: { abonnement_id: ab.id }
+              })
+          } catch (notifErr: any) {
+            console.warn(`[CRON:abonnements-expires/B3] Notification in-app échouée tenant ${tenant.id}:`, notifErr?.message)
+          }
+
+          try {
+            const { data: ut } = await adminClient
+              .from('utilisateurs_tenant')
+              .select('auth_user_id')
+              .eq('tenant_id', tenant.id)
+              .limit(1)
+              .maybeSingle()
+            if (ut?.auth_user_id) {
+              const { data: userAuth } = await adminClient.auth.admin.getUserById(ut.auth_user_id)
+              if (userAuth?.user?.email) {
+                envoyerEmailRappelExpiration(env, {
+                  email: userAuth.user.email,
+                  nom_restaurant: tenant.nom ?? tenant.slug
+                }, {
+                  type: 'abonnement',
+                  jours_restants: 0,
+                  date_expiration_iso: ab.date_fin ?? nowIso
+                }).catch(() => {})
+              }
+            }
+          } catch (emailErr: any) {
+            console.warn(`[CRON:abonnements-expires/B3] Email expiration échoué tenant ${tenant.id}:`, emailErr?.message)
+          }
+
+          console.log(`[CRON:abonnements-expires] Tenant ${tenant.slug} passé actif → inactif. Notif + email envoyés.`)
         }
       }
     } catch (err) {
@@ -650,6 +696,26 @@ async function envoyerRappelsExpiration(env: Env, joursRestants: number): Promis
 
   const traiter = async (tenantId: string, tenantNom: string, type: 'essai' | 'abonnement', dateIso: string, planNom?: string) => {
     try {
+      // B6 — session-5 : Clé KV anti-doublon pour les rappels d'expiration.
+      // Forme : rappel:{tenant_id}:{type}:{jours_restants}
+      // TTL : 26 heures (> 24h de fenêtre de cron quotidien pour absorber
+      // les décalages horaires et relances manuelles).
+      // Si la clé existe, le rappel a déjà été envoyé dans les dernières 26h
+      // → on skip pour éviter le double envoi (cron fusionné J-5 + J-2
+      // tourne une seule fois à 08h00, mais des relances manuelles ou un
+      // redémarrage du Worker pourraient re-déclencher le cron dans la même
+      // fenêtre quotidienne).
+      const kvKey = `rappel:${tenantId}:${type}:${joursRestants}`
+      if (env.KV_CACHE) {
+        try {
+          const dejaEnvoye = await env.KV_CACHE.get(kvKey)
+          if (dejaEnvoye) {
+            console.log(`[CRON:rappels/B6] Rappel J-${joursRestants} ${type} déjà envoyé pour tenant ${tenantId.slice(0, 8)}... — skip.`)
+            return
+          }
+        } catch {}
+      }
+
       const { data: ut } = await adminClient
         .from('utilisateurs_tenant')
         .select('auth_user_id')
@@ -668,6 +734,13 @@ async function envoyerRappelsExpiration(env: Env, joursRestants: number): Promis
         date_expiration_iso: dateIso,
         plan_nom: planNom
       })
+
+      // B6 — Marquer le rappel comme envoyé dans KV (TTL 26h)
+      if (env.KV_CACHE) {
+        try {
+          await env.KV_CACHE.put(kvKey, '1', { expirationTtl: 93600 }) // 26h = 93600s
+        } catch {}
+      }
     } catch (err) {
       console.error(`[CRON:rappels] Erreur tenant ${tenantId}:`, err)
     }
