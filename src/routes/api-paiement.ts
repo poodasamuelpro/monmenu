@@ -620,11 +620,26 @@ paiementRouter.get('/notifications', async (c) => {
     created_at: string
   }> = []
 
-  const { data: tenant } = await adminClient
-    .from('tenants')
-    .select('statut, essai_expire_le, paiement_en_attente_depuis')
-    .eq('id', auth.tenant_id)
-    .single()
+  // B-PAY-02 — session-5 : Remplacement de la double requête séquentielle
+  // (tenant PUIS abonnement conditionnel) par une jointure unique via
+  // Promise.all. Avant ce correctif, la requête abonnement n'était lancée
+  // que si tenant.paiement_en_attente_depuis était non null, ce qui induisait
+  // une latence en cascade inutile. Désormais les deux requêtes partent
+  // simultanément ; le résultat abonnement est simplement ignoré si
+  // paiement_en_attente_depuis est null.
+  const [{ data: tenant }, { data: abonnementAttente }] = await Promise.all([
+    adminClient
+      .from('tenants')
+      .select('statut, essai_expire_le, paiement_en_attente_depuis')
+      .eq('id', auth.tenant_id)
+      .single(),
+    adminClient
+      .from('abonnements')
+      .select('id, delai_confirmation_expire_le')
+      .eq('tenant_id', auth.tenant_id)
+      .eq('statut', 'en_attente_confirmation')
+      .maybeSingle()
+  ])
 
   if (tenant) {
     if (tenant.statut === 'essai' && tenant.essai_expire_le) {
@@ -645,27 +660,18 @@ paiementRouter.get('/notifications', async (c) => {
       }
     }
 
-    if (tenant.paiement_en_attente_depuis) {
-      const { data: abonnementAttente } = await adminClient
-        .from('abonnements')
-        .select('id, delai_confirmation_expire_le')
-        .eq('tenant_id', auth.tenant_id)
-        .eq('statut', 'en_attente_confirmation')
-        .maybeSingle()
-
-      if (abonnementAttente) {
-        const heuresRestantes = abonnementAttente.delai_confirmation_expire_le
-          ? heuresRestantesAvantDeadline(new Date(abonnementAttente.delai_confirmation_expire_le))
-          : null
-        notifications.push({
-          id: 'paiement-attente',
-          type: heuresRestantes !== null && heuresRestantes < 10 ? 'warning' : 'info',
-          titre: 'Paiement en cours de vérification',
-          message: `${messageEnAttenteConfirmation()}${heuresRestantes !== null ? ` (${heuresRestantes}h restantes avant coupure automatique)` : ''}`,
-          action: { label: 'Voir le suivi', href: '/dashboard/abonnement' },
-          created_at: tenant.paiement_en_attente_depuis
-        })
-      }
+    if (tenant.paiement_en_attente_depuis && abonnementAttente) {
+      const heuresRestantes = abonnementAttente.delai_confirmation_expire_le
+        ? heuresRestantesAvantDeadline(new Date(abonnementAttente.delai_confirmation_expire_le))
+        : null
+      notifications.push({
+        id: 'paiement-attente',
+        type: heuresRestantes !== null && heuresRestantes < 10 ? 'warning' : 'info',
+        titre: 'Paiement en cours de vérification',
+        message: `${messageEnAttenteConfirmation()}${heuresRestantes !== null ? ` (${heuresRestantes}h restantes avant coupure automatique)` : ''}`,
+        action: { label: 'Voir le suivi', href: '/dashboard/abonnement' },
+        created_at: tenant.paiement_en_attente_depuis
+      })
     }
   }
 

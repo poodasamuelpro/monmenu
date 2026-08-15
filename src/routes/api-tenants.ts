@@ -211,13 +211,26 @@ tenantsRouter.get('/:slug/menu', async (c) => {
   setSecurityHeaders(c)
   const slug = c.req.param('slug')
 
+  // B7 — session-5 : Pagination par catégorie avec ?page=N&limit=L.
+  // Défaut : page=1, limit=200 (rétro-compatible — les clients sans pagination
+  // reçoivent jusqu'à 200 catégories, identique à l'ancien comportement illimité).
+  // Le cache KV n'est activé que pour la page 1 avec le limit par défaut
+  // afin d'éviter une explosion du cache (N pages × M limits possibles).
+  const pageRaw = parseInt(c.req.query('page') ?? '1', 10)
+  const limitRaw = parseInt(c.req.query('limit') ?? '200', 10)
+  const page = isNaN(pageRaw) || pageRaw < 1 ? 1 : pageRaw
+  const limit = isNaN(limitRaw) || limitRaw < 1 ? 200 : Math.min(limitRaw, 200)
+  const isPremierePage = page === 1 && limit === 200
+
   const cacheKey = `menu:${slug}`
-  try {
-    if (c.env.KV_CACHE) {
-      const cached = await c.env.KV_CACHE.get(cacheKey, 'json')
-      if (cached) { c.header('X-Cache', 'HIT'); return c.json(cached) }
-    }
-  } catch {}
+  if (isPremierePage) {
+    try {
+      if (c.env.KV_CACHE) {
+        const cached = await c.env.KV_CACHE.get(cacheKey, 'json')
+        if (cached) { c.header('X-Cache', 'HIT'); return c.json(cached) }
+      }
+    } catch {}
+  }
 
   const adminClient = createSupabaseAdminClient(c.env)
 
@@ -234,13 +247,17 @@ tenantsRouter.get('/:slug/menu', async (c) => {
     return c.json({ error: 'Restaurant introuvable.' }, 404)
   }
 
+  // B7 — Offset de pagination sur les catégories.
+  const offset = (page - 1) * limit
+
   const [{ data: categories, error: catError }, { data: produits, error: prodError }] = await Promise.all([
     adminClient
       .from('categories_menu')
       .select('id, nom, description, ordre_affichage')
       .eq('tenant_id', tenantRow.id)
       .eq('actif', true)
-      .order('ordre_affichage', { ascending: true }),
+      .order('ordre_affichage', { ascending: true })
+      .range(offset, offset + limit - 1),
 
     adminClient
       .from('produits')
@@ -253,7 +270,9 @@ tenantsRouter.get('/:slug/menu', async (c) => {
   if (catError) return c.json({ error: 'Erreur récupération menu.', detail: catError.message }, 500)
 
   // AJOUT — suppléments actifs, groupés par produit, une seule requête.
-  const produitIds = (produits ?? []).map((p: any) => p.id)
+  const catIds = new Set((categories ?? []).map((cat: any) => cat.id))
+  const produitsFiltres = (produits ?? []).filter((p: any) => catIds.has(p.categorie_id))
+  const produitIds = produitsFiltres.map((p: any) => p.id)
   const supplementsByProduit = new Map<string, Array<{ id: string; nom: string; prix: number }>>()
   if (produitIds.length > 0) {
     const { data: supplementsData } = await adminClient
@@ -272,20 +291,32 @@ tenantsRouter.get('/:slug/menu', async (c) => {
   }
 
   const produitsByCategorie = new Map<string, any[]>()
-  for (const produit of (produits ?? [])) {
+  for (const produit of produitsFiltres) {
     const list = produitsByCategorie.get(produit.categorie_id) ?? []
     list.push({ ...produit, supplements: supplementsByProduit.get(produit.id) ?? [] })
     produitsByCategorie.set(produit.categorie_id, list)
   }
 
-  const menu = (categories ?? []).map((cat) => ({
+  const menu = (categories ?? []).map((cat: any) => ({
     ...cat,
     produits: produitsByCategorie.get(cat.id) ?? []
   }))
 
-  const result = { categories: menu }
+  // B7 — Métadonnées de pagination dans la réponse.
+  const result = {
+    categories: menu,
+    pagination: {
+      page,
+      limit,
+      count: menu.length,
+      has_more: menu.length === limit
+    }
+  }
 
-  try { if (c.env.KV_CACHE) await c.env.KV_CACHE.put(cacheKey, JSON.stringify(result), { expirationTtl: 120 }) } catch {}
+  // Cache KV uniquement pour la page par défaut (rétro-compatible).
+  if (isPremierePage) {
+    try { if (c.env.KV_CACHE) await c.env.KV_CACHE.put(cacheKey, JSON.stringify(result), { expirationTtl: 120 }) } catch {}
+  }
 
   return c.json(result)
 })

@@ -1872,8 +1872,43 @@ dashboardRouter.post('/upload-image', async (c) => {
   const ext = validatedMime.split('/')[1].replace('jpeg', 'jpg')
   const key = `${auth.tenant_id}/${Date.now()}-${crypto.randomUUID().slice(0, 8)}.${ext}`
 
-  // Corr#12 — Clé ancienne (optionnelle, pour suppression post-upload)
+  // Corr#12 — Clé ancienne explicite (optionnelle, fournie par le frontend)
   const ancienneClé = (formData.get('ancienne_cle') as string | null)?.trim() || null
+
+  // B1 — session-5 : Récupération automatique des URLs existantes côté serveur
+  // pour nettoyage R2 même si le frontend ne transmet pas 'ancienne_cle'.
+  // On lit logo_url et banniere_url du tenant ; si l'une d'elles correspond
+  // à l'origine de ce Worker et est stockée dans R2, on extrait la clé R2
+  // pour suppression post-upload. Non bloquant — en cas d'erreur DB, l'upload
+  // réussit quand même (image orpheline tolérée, pire que la suppression ratée).
+  let anciennesClesR2: string[] = []
+  if (c.env.R2_MEDIA) {
+    try {
+      const adminForCleanup = createSupabaseAdminClient(c.env)
+      const { data: tenantMedia } = await adminForCleanup
+        .from('tenants')
+        .select('logo_url, banniere_url')
+        .eq('id', auth.tenant_id)
+        .maybeSingle()
+      const origin = new URL(c.req.url).origin
+      const mediaPrefix = `${origin}/api/v1/dashboard/media/`
+      for (const urlField of [tenantMedia?.logo_url, tenantMedia?.banniere_url]) {
+        if (!urlField) continue
+        if (!urlField.startsWith(mediaPrefix)) continue
+        try {
+          const candidateKey = decodeURIComponent(urlField.slice(mediaPrefix.length))
+          if (candidateKey &&
+              !candidateKey.includes('..') &&
+              !candidateKey.startsWith('/') &&
+              candidateKey.startsWith(`${auth.tenant_id}/`)) {
+            anciennesClesR2.push(candidateKey)
+          }
+        } catch {}
+      }
+    } catch (err: any) {
+      console.warn('[Upload/B1] Récup URLs existantes échouée (non bloquant):', err?.message ?? err)
+    }
+  }
 
   // Corr#12 — try/catch sur R2.put() (erreur R2 non-fatale ignorée auparavant)
   try {
@@ -1886,13 +1921,17 @@ dashboardRouter.post('/upload-image', async (c) => {
     return c.json({ error: 'Erreur lors de l\'enregistrement du fichier. Réessayez.' }, 502)
   }
 
-  // Corr#12 — Supprimer l'ancien fichier R2 (non bloquant, sécurisé)
-  if (ancienneClé &&
-      !ancienneClé.includes('..') &&
-      !ancienneClé.startsWith('/') &&
-      ancienneClé.startsWith(`${auth.tenant_id}/`)) {
+  // Corr#12 + B1 — Supprimer l'ancien fichier R2 (non bloquant, sécurisé).
+  // Priorité à ancienneClé (frontend explicite), sinon les clés détectées
+  // automatiquement. On filtre la nouvelle clé pour éviter l'auto-suppression.
+  const clesASupprimerR2 = [
+    ...(ancienneClé && !ancienneClé.includes('..') && !ancienneClé.startsWith('/') &&
+        ancienneClé.startsWith(`${auth.tenant_id}/`) ? [ancienneClé] : []),
+    ...anciennesClesR2
+  ].filter((k) => k !== key)
+  for (const cle of clesASupprimerR2) {
     try {
-      await c.env.R2_MEDIA.delete(ancienneClé)
+      await c.env.R2_MEDIA.delete(cle)
     } catch {
       /* Suppression ancienne clé non bloquante */
     }
