@@ -351,7 +351,9 @@ adminPaiementsRouter.post('/rejeter', async (c) => {
     return c.json({ error: 'Abonnement introuvable ou déjà traité.' }, 404)
   }
 
-  const { error: abError } = await adminClient
+  // C2 — session-6 : ajout de .select('id') pour détecter 0 lignes affectées,
+  // en cohérence avec le pattern déjà appliqué sur la route /confirmer (session-5).
+  const { data: abRejetRows, error: abError } = await adminClient
     .from('abonnements')
     .update({
       statut: 'annule',
@@ -362,10 +364,15 @@ adminPaiementsRouter.post('/rejeter', async (c) => {
     })
     .eq('id', abonnement_id)
     .eq('statut', 'en_attente_confirmation')
+    .select('id')
 
   if (abError) {
     console.error('[admin-paiements/rejeter] Erreur update abonnement:', abError.message)
     return c.json({ error: 'Erreur lors du rejet.' }, 500)
+  }
+  if (!abRejetRows || abRejetRows.length === 0) {
+    console.error('[admin-paiements/rejeter] Abonnement non mis à jour : 0 ligne affectée pour abonnement_id =', abonnement_id)
+    return c.json({ error: 'Ce paiement a déjà été traité ou est introuvable.' }, 409)
   }
 
   const { data: tenant } = await adminClient
