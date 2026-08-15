@@ -132,6 +132,11 @@ adminPaiementsRouter.post('/confirmer', async (c) => {
   if (!abonnement_id) {
     return c.json({ error: 'abonnement_id requis.' }, 422)
   }
+  // B-ADPAY-05 — fix session-5 : validation format UUID avant tout appel DB
+  const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+  if (!UUID_REGEX.test(abonnement_id)) {
+    return c.json({ error: 'Format abonnement_id invalide (UUID v4 attendu).' }, 422)
+  }
 
   const adminClient = createSupabaseAdminClient(c.env)
   const now = new Date().toISOString()
@@ -148,7 +153,9 @@ adminPaiementsRouter.post('/confirmer', async (c) => {
   }
 
   // 1. Confirmer l'abonnement (audit trail)
-  const { error: abError } = await adminClient
+  // B-ADPAY-03 — fix session-5 : ajout de .select('id') pour détecter 0 lignes affectées
+  // (race condition : un second appel simultané renvoyait 0 ligne sans erreur).
+  const { data: abConfirmedRows, error: abError } = await adminClient
     .from('abonnements')
     .update({
       statut: 'actif',
@@ -158,10 +165,14 @@ adminPaiementsRouter.post('/confirmer', async (c) => {
     })
     .eq('id', abonnement_id)
     .eq('statut', 'en_attente_confirmation')
+    .select('id')
 
   if (abError) {
     console.error('[admin-paiements/confirmer] Erreur update abonnement:', abError.message)
     return c.json({ error: 'Erreur lors de la confirmation.' }, 500)
+  }
+  if (!abConfirmedRows || abConfirmedRows.length === 0) {
+    return c.json({ error: 'Ce paiement a déjà été traité ou est introuvable.' }, 409)
   }
 
   // 2. Récupérer le plan Supabase pour calculer date_fin + nom (notif)
@@ -174,10 +185,20 @@ adminPaiementsRouter.post('/confirmer', async (c) => {
     fin.setMonth(fin.getMonth() + 1)
     dateFin = fin.toISOString()
 
-    await adminClient
+    // B-ADPAY-02 — fix session-5 : ajout de .select('id') pour détecter un UPDATE à 0 ligne.
+    // Non bloquant : l'abonnement est déjà confirmé (étape 1), l'absence de date_fin
+    // est une anomalie loggée mais ne doit pas faire échouer la réponse principale.
+    const { data: dateFinRows, error: dateFinError } = await adminClient
       .from('abonnements')
       .update({ date_fin: dateFin, updated_at: now })
       .eq('id', abonnement_id)
+      .select('id')
+
+    if (dateFinError) {
+      console.error('[admin-paiements/confirmer] Erreur update date_fin abonnement:', dateFinError.message)
+    } else if (!dateFinRows || dateFinRows.length === 0) {
+      console.error('[admin-paiements/confirmer] date_fin non mise à jour : 0 ligne affectée pour abonnement_id =', abonnement_id)
+    }
   }
 
   // MIGRATION — abonnement.plan_id EST déjà l'UUID Supabase natif : plus
@@ -231,17 +252,20 @@ adminPaiementsRouter.post('/confirmer', async (c) => {
   )
 
   // 6. Notification in-app restaurant
-  await adminClient
-    .from('notifications_restaurant')
-    .insert({
-      tenant_id: abonnement.tenant_id,
-      type: 'success',
-      titre: 'Paiement confirmé — Abonnement activé !',
-      message: `Votre paiement pour le plan ${planNom ?? ''} a été confirmé. Votre abonnement est maintenant actif${dateFin ? ` jusqu'au ${formaterDate(dateFin)}` : ''}.`,
-      lien: '/dashboard/abonnement',
-      payload: { abonnement_id, confirme_le: now }
-    })
-    .catch(() => {})
+  // B-ADPAY-01 — fix session-5 : PostgrestFilterBuilder n'a pas de .catch() natif garanti ;
+  // remplacement par try/catch classique autour du await (best-effort, non bloquant).
+  try {
+    await adminClient
+      .from('notifications_restaurant')
+      .insert({
+        tenant_id: abonnement.tenant_id,
+        type: 'success',
+        titre: 'Paiement confirmé — Abonnement activé !',
+        message: `Votre paiement pour le plan ${planNom ?? ''} a été confirmé. Votre abonnement est maintenant actif${dateFin ? ` jusqu'au ${formaterDate(dateFin)}` : ''}.`,
+        lien: '/dashboard/abonnement',
+        payload: { abonnement_id, confirme_le: now }
+      })
+  } catch { /* best-effort, non bloquant */ }
 
   // [session-3] Email paiement confirmé — non-bloquant
   try {
@@ -304,6 +328,11 @@ adminPaiementsRouter.post('/rejeter', async (c) => {
   const { abonnement_id, motif, admin_id } = body
 
   if (!abonnement_id) return c.json({ error: 'abonnement_id requis.' }, 422)
+  // B-ADPAY-05 — fix session-5 : validation format UUID avant tout appel DB
+  const UUID_REGEX_REJ = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+  if (!UUID_REGEX_REJ.test(abonnement_id)) {
+    return c.json({ error: 'Format abonnement_id invalide (UUID v4 attendu).' }, 422)
+  }
   if (!motif || motif.trim().length < 5) {
     return c.json({ error: 'motif requis (5 caractères minimum).' }, 422)
   }
@@ -354,7 +383,8 @@ adminPaiementsRouter.post('/rejeter', async (c) => {
       tenant.statut === 'actif' ? 'actif' :
       essaiEncore ? 'essai' : 'inactif'
 
-    await adminClient
+    // B-ADPAY-04 — fix session-5 : ajout de .select('id') pour détecter un UPDATE à 0 ligne.
+    const { data: tenantRejetRows, error: tenantRejetError } = await adminClient
       .from('tenants')
       .update({
         paiement_en_attente_depuis: null,
@@ -362,6 +392,13 @@ adminPaiementsRouter.post('/rejeter', async (c) => {
         updated_at: now
       })
       .eq('id', tenant.id)
+      .select('id')
+
+    if (tenantRejetError) {
+      console.error('[admin-paiements/rejeter] Erreur update tenant:', tenantRejetError.message)
+    } else if (!tenantRejetRows || tenantRejetRows.length === 0) {
+      console.error('[admin-paiements/rejeter] Tenant non mis à jour : 0 ligne affectée pour tenant.id =', tenant.id)
+    }
 
     if (c.env.KV_CACHE && tenant.slug) {
       try { await c.env.KV_CACHE.delete(`tenant:${tenant.slug}`) } catch {}
@@ -392,17 +429,19 @@ adminPaiementsRouter.post('/rejeter', async (c) => {
       }).catch(() => {})
     )
 
-    await adminClient
-      .from('notifications_restaurant')
-      .insert({
-        tenant_id: abonnement.tenant_id,
-        type: 'error',
-        titre: 'Paiement non confirmé',
-        message: `Votre preuve de paiement n'a pas pu être validée. Motif : ${motif.trim()}. Contactez le support ou soumettez une nouvelle preuve.`,
-        lien: '/dashboard/abonnement',
-        payload: { abonnement_id, rejete_le: now, motif }
-      })
-      .catch(() => {})
+    // B-ADPAY-01 — fix session-5 : try/catch classique, PostgrestFilterBuilder n'a pas .catch() natif.
+    try {
+      await adminClient
+        .from('notifications_restaurant')
+        .insert({
+          tenant_id: abonnement.tenant_id,
+          type: 'error',
+          titre: 'Paiement non confirmé',
+          message: `Votre preuve de paiement n'a pas pu être validée. Motif : ${motif.trim()}. Contactez le support ou soumettez une nouvelle preuve.`,
+          lien: '/dashboard/abonnement',
+          payload: { abonnement_id, rejete_le: now, motif }
+        })
+    } catch { /* best-effort, non bloquant */ }
   }
 
   // [session-3] Email paiement rejeté — non-bloquant
