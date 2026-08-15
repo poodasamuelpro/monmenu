@@ -297,10 +297,14 @@ tenantsRouter.get('/:slug/qrcode', async (c) => {
 
   const adminClient = createSupabaseAdminClient(c.env)
 
+  // B-TEN-01 — fix session-5 : ajout filtre statut pour exclure les tenants suspendus.
+  // Un tenant suspendu ne doit pas pouvoir générer son QR code (clients continueraient
+  // à commander chez un restaurant volontairement mis hors service).
   const { data: tenant, error } = await adminClient
     .from('tenants')
     .select('id, nom, slug, couleur_primaire')
     .eq('slug', slug)
+    .in('statut', ['actif', 'essai', 'en_attente_paiement_initial', 'inactif'])
     .is('deleted_at', null)
     .single()
 
@@ -330,7 +334,9 @@ tenantsRouter.post('/', async (c) => {
 
   const ip = c.req.header('CF-Connecting-IP') ?? 'unknown'
   const { checkRateLimit, TenantSchema } = await import('../lib/security')
-  const rateLimit = await checkRateLimit(`inscription:${ip}`, 5, 3600000)
+  // B-TEN-02 — fix session-5 : passage de c.env.KV_CACHE pour un rate limiting
+  // réellement distribué entre toutes les instances Workers (au lieu du fallback Map mémoire locale).
+  const rateLimit = await checkRateLimit(`inscription:${ip}`, 5, 3600000, c.env.KV_CACHE)
   if (!rateLimit.allowed) {
     return c.json({ error: 'Trop de tentatives. Réessayez dans une heure.' }, 429)
   }

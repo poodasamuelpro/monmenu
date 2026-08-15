@@ -82,6 +82,11 @@ blogRouter.post('/admin', async (c) => {
 // PATCH /api/v1/blog/admin/:id — modifier un article
 blogRouter.patch('/admin/:id', async (c) => {
   const id = c.req.param('id')
+  // B-BLOG-01 — fix session-5 : validation UUID sur l'id avant tout appel DB.
+  const UUID_BLOG_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+  if (!UUID_BLOG_REGEX.test(id)) {
+    return c.json({ error: 'Format id invalide (UUID v4 attendu).' }, 422)
+  }
   const body = await c.req.json().catch(() => ({}))
 
   const updates: Record<string, unknown> = { updated_at: new Date().toISOString() }
@@ -101,8 +106,13 @@ blogRouter.patch('/admin/:id', async (c) => {
     .select()
     .maybeSingle()
 
-  if (error || !data) {
+  // B-BLOG-02 — fix session-5 : maybeSingle() retourne data=null si aucune ligne trouvée
+  // (404) — traité différemment d'une vraie erreur serveur (500).
+  if (error) {
     return c.json({ error: "Impossible de modifier l'article." }, 500)
+  }
+  if (!data) {
+    return c.json({ error: 'Article introuvable.' }, 404)
   }
 
   return c.json({ article: data })

@@ -14,11 +14,14 @@ const livraisonRouter = new Hono<{ Bindings: Env }>()
 livraisonRouter.post('/calcul', async (c) => {
   setSecurityHeaders(c)
 
+  // B-LIV-01 — fix session-5 : try/catch sur c.req.json() — un body invalide
+  // provoquait une exception non catchée → 500 générique. Retour 400 propre.
   const body = await c.req.json<{
     pdv_id: string
     client_lat: number
     client_lon: number
-  }>()
+  }>().catch(() => null)
+  if (!body) return c.json({ error: 'Corps de requête JSON invalide.' }, 400)
 
   // §6.4 — Validation UUID sur pdv_id (Zod z.string().uuid())
   const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
