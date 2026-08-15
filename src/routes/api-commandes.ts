@@ -319,26 +319,42 @@ commandesRouter.post('/', async (c) => {
   }
 
   if (promoId) {
+    // C1 — session-6 : La RPC increment_promo_usage retourne maintenant 1 (succès)
+    // ou 0 (race condition : usage_max déjà atteint par une requête concurrente).
+    // On vérifie ce résultat ; si 0 lignes affectées, la réduction a été appliquée
+    // au montant de cette commande alors que le quota était déjà épuisé — on logge
+    // l'anomalie pour investigation manuelle. La commande est conservée (elle est
+    // déjà insérée) mais l'incident est tracé explicitement.
+    // Le fallback UPDATE non-atomique précédent est supprimé : il ne faisait que
+    // masquer la race condition sans la résoudre.
+    const promoIdCaptured = promoId
     c.executionCtx.waitUntil(
-      adminClient
-        .rpc('increment_promo_usage', { promo_id: promoId })
-        .then(({ error }: { error: any }) => {
-          if (error) {
-            return adminClient
-              .from('codes_promo')
-              .select('usage_actuel')
-              .eq('id', promoId)
-              .single()
-              .then(({ data: promoRow }: { data: any }) => {
-                if (!promoRow) return
-                return adminClient
-                  .from('codes_promo')
-                  .update({ usage_actuel: (promoRow.usage_actuel ?? 0) + 1 })
-                  .eq('id', promoId)
-              })
+      (async () => {
+        try {
+          const { data: rpcResult, error: rpcError } = await adminClient
+            .rpc('increment_promo_usage', { promo_id: promoIdCaptured })
+          if (rpcError) {
+            console.error(
+              `[commandes/promo] Erreur RPC increment_promo_usage pour promo ${promoIdCaptured}:`,
+              rpcError.message
+            )
+            return
           }
-        })
-        .catch(() => {})
+          if (rpcResult === 0) {
+            // Race condition détectée : usage_max déjà atteint entre la vérification JS
+            // et l'appel RPC. La remise a été accordée mais le quota est épuisé.
+            console.error(
+              `[commandes/promo] RACE CONDITION — code promo ${promoIdCaptured} utilisé au-delà ` +
+              `de usage_max sur commande ${commandeId}. Investigation manuelle requise.`
+            )
+          }
+        } catch (err: any) {
+          console.error(
+            `[commandes/promo] Exception increment_promo_usage pour promo ${promoIdCaptured}:`,
+            err?.message ?? err
+          )
+        }
+      })()
     )
   }
 
