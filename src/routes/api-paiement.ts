@@ -256,10 +256,17 @@ paiementRouter.get('/reference', async (c) => {
 
   if (!reference) {
     reference = genererReferencePaiement(auth.tenant_slug)
-    await adminClient
+    // B-PAY-01 — fix session-5 : ajout .select('id') + vérification rows.
+    const { data: refUpdatedRows, error: refError } = await adminClient
       .from('tenants')
       .update({ reference_paiement_active: reference, updated_at: new Date().toISOString() })
       .eq('id', auth.tenant_id)
+      .select('id')
+    if (refError) {
+      console.error('[paiement/reference] Erreur update reference_paiement_active:', refError.message)
+    } else if (!refUpdatedRows || refUpdatedRows.length === 0) {
+      console.error('[paiement/reference] 0 ligne affectée lors de la mise à jour de la référence pour tenant_id =', auth.tenant_id)
+    }
   }
 
   return c.json({
