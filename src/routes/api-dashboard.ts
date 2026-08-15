@@ -2513,6 +2513,31 @@ dashboardRouter.post('/compte/demander-suppression', async (c) => {
     }).catch(() => {})
   } catch {}
 
+  // B4 — session-5 : Notification admin lors de la demande de suppression de compte.
+  // L'admin doit être alerté pour anticiper le nettoyage et éventuellement
+  // contacter le restaurant avant la suppression effective.
+  // Non bloquant — un échec d'insertion ne doit pas faire échouer la demande.
+  try {
+    const adminClientNotif = createSupabaseAdminClient(c.env)
+    await adminClientNotif
+      .from('notifications_admin')
+      .insert({
+        type: 'warning',
+        titre: `Demande de suppression de compte — ${nomRestaurant ?? auth.tenant_slug}`,
+        message: `Le restaurant "${nomRestaurant ?? auth.tenant_slug}" (ID: ${auth.tenant_id}) a demandé la suppression de son compte. Suppression prévue le ${prevue.toLocaleDateString('fr-FR')}. Un email de confirmation a été envoyé à ${userEmail}.`,
+        lien: '#suppressions',
+        payload: {
+          tenant_id: auth.tenant_id,
+          tenant_slug: auth.tenant_slug,
+          nom_restaurant: nomRestaurant ?? auth.tenant_slug,
+          suppression_prevue_le: prevue.toISOString(),
+          demandee_le: now.toISOString()
+        }
+      })
+  } catch (notifErr: any) {
+    console.warn('[Suppression/B4] Notification admin échouée (non bloquant):', notifErr?.message ?? notifErr)
+  }
+
   return c.json({
     success: true,
     message: 'Demande enregistrée. Un email de confirmation a été envoyé.',

@@ -682,12 +682,19 @@ adminPaiementsRouter.post('/suppressions/:tenant_id/executer', async (c) => {
     }, 422)
   }
 
-  // 1. Récupérer l'auth_user_id avant le soft-delete
-  const { data: utRow } = await adminClient
-    .from('utilisateurs_tenant')
-    .select('auth_user_id')
-    .eq('tenant_id', tenantId)
-    .maybeSingle()
+  // 1. Récupérer l'auth_user_id et les URLs médias avant le soft-delete
+  const [{ data: utRow }, { data: tenantMedia }] = await Promise.all([
+    adminClient
+      .from('utilisateurs_tenant')
+      .select('auth_user_id')
+      .eq('tenant_id', tenantId)
+      .maybeSingle(),
+    adminClient
+      .from('tenants')
+      .select('logo_url, banniere_url')
+      .eq('id', tenantId)
+      .maybeSingle()
+  ])
 
   // 2. Soft-delete tenant (deleted_at = now) — les FK CASCADE suppriment
   //    les tables enfants selon la configuration Supabase.
@@ -708,6 +715,53 @@ adminPaiementsRouter.post('/suppressions/:tenant_id/executer', async (c) => {
       await adminClient.auth.admin.deleteUser(utRow.auth_user_id)
     } catch (e: any) {
       console.warn('[Admin/Suppressions] deleteUser Auth échoué (non bloquant):', e?.message ?? e)
+    }
+  }
+
+  // B2 — session-5 : Nettoyage R2 des médias orphelins après suppression compte.
+  // On supprime logo_url et banniere_url stockés dans R2.
+  // Stratégie : on liste les objets du bucket avec le préfixe tenantId/
+  // et on les supprime tous — garantit que TOUS les uploads du tenant sont
+  // effacés, pas seulement logo et bannière.
+  // Non bloquant : un échec R2 ne doit pas invalider la suppression DB.
+  if (c.env.R2_MEDIA) {
+    try {
+      // 3a. Suppression ciblée logo + bannière (URLs connues)
+      const clesMedias: string[] = []
+      const origin = new URL(c.req.url).origin
+      const mediaPrefix = `${origin}/api/v1/dashboard/media/`
+      for (const urlField of [tenantMedia?.logo_url, tenantMedia?.banniere_url]) {
+        if (!urlField) continue
+        if (urlField.startsWith(mediaPrefix)) {
+          try {
+            const cle = decodeURIComponent(urlField.slice(mediaPrefix.length))
+            if (cle && !cle.includes('..') && !cle.startsWith('/')) clesMedias.push(cle)
+          } catch {}
+        }
+      }
+      if (clesMedias.length > 0) {
+        await Promise.allSettled(clesMedias.map((cle) => c.env.R2_MEDIA!.delete(cle)))
+      }
+
+      // 3b. Nettoyage exhaustif : lister et supprimer TOUS les objets du tenant
+      //     (preuves de paiement, images produits, etc.) via list({prefix})
+      const listed = await c.env.R2_MEDIA.list({ prefix: `${tenantId}/`, limit: 1000 })
+      if (listed.objects.length > 0) {
+        await Promise.allSettled(
+          listed.objects.map((obj) => c.env.R2_MEDIA!.delete(obj.key))
+        )
+        console.log(`[Admin/Suppressions] R2 : ${listed.objects.length} objet(s) supprimé(s) pour tenant ${tenantId.slice(0, 8)}...`)
+      }
+      // Nettoyage preuves de paiement (préfixe différent)
+      const listedPaiements = await c.env.R2_MEDIA.list({ prefix: `paiements/${tenantId}/`, limit: 1000 })
+      if (listedPaiements.objects.length > 0) {
+        await Promise.allSettled(
+          listedPaiements.objects.map((obj) => c.env.R2_MEDIA!.delete(obj.key))
+        )
+        console.log(`[Admin/Suppressions] R2 paiements : ${listedPaiements.objects.length} objet(s) supprimé(s) pour tenant ${tenantId.slice(0, 8)}...`)
+      }
+    } catch (r2Err: any) {
+      console.warn('[Admin/Suppressions] Nettoyage R2 échoué (non bloquant):', r2Err?.message ?? r2Err)
     }
   }
 
