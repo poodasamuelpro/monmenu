@@ -450,7 +450,45 @@ export async function envoyerEmailSuppressionDemande(
   )
 }
 
-// 7. Newsletter réelle — envoi en masse (appelé par POST /api/v1/newsletter/envoyer)
+// 7. Email confirmation annulation de suppression de compte
+// B5 — session-5 : Nouvelle fonction envoyée quand le restaurant annule
+// sa demande de suppression depuis le dashboard. Rassure l'utilisateur et
+// lui confirme que son compte est sauvegardé.
+export async function envoyerEmailAnnulationSuppression(
+  env: BrevoEnv,
+  destinataire: { email: string; nom_restaurant: string }
+): Promise<{ success: boolean; error?: string }> {
+  const nomApp = await getNomExpediteur(env)
+  const baseUrl = getBaseUrl(env)
+  const nom = escapeHtml(destinataire.nom_restaurant)
+
+  const htmlContent = `
+    <div style="font-family:sans-serif;max-width:600px;margin:0 auto;padding:24px;">
+      <h2 style="color:#16A34A;">Suppression annulée — Votre compte est conservé ✅</h2>
+      <p>Bonjour <strong>${nom}</strong>,</p>
+      <p>Votre demande de suppression de compte a bien été annulée. Votre compte, vos données et votre boutique en ligne sont intégralement conservés.</p>
+      <p>Vous pouvez continuer à utiliser ${escapeHtml(nomApp)} normalement.</p>
+      <p style="margin-top:24px;">
+        <a href="${baseUrl}/dashboard" style="background:#16A34A;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:bold;">
+          Accéder à mon dashboard
+        </a>
+      </p>
+      <p style="color:#6B7280;font-size:13px;margin-top:32px;">Si vous n'êtes pas à l'origine de cette annulation, contactez immédiatement notre support.</p>
+      <p style="color:#6B7280;font-size:13px;">L'équipe ${escapeHtml(nomApp)}</p>
+    </div>`
+
+  return sendEmail(
+    {
+      to: [{ email: destinataire.email, name: destinataire.nom_restaurant }],
+      subject: `[${nomApp}] ✅ Suppression annulée — Votre compte est conservé`,
+      htmlContent,
+      textContent: `Votre demande de suppression du compte ${destinataire.nom_restaurant} a été annulée. Votre compte est intégralement conservé. Accédez à votre dashboard : ${baseUrl}/dashboard`
+    },
+    env
+  )
+}
+
+// 8. Newsletter réelle — envoi en masse (appelé par POST /api/v1/newsletter/envoyer)
 // Cette fonction est intentionnellement simple : elle envoie à UN destinataire à la fois.
 // L'appelant (api-newsletter.ts) gère le batching par Promise.allSettled().
 export async function envoyerEmailNewsletter(

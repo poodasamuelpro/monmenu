@@ -110,7 +110,7 @@ import { setSecurityHeaders, checkRateLimit } from '../lib/security'
 import { genererMessageLivreur, genererLienWhatsApp, envoyerNotificationWhatsApp } from '../lib/whatsapp'
 import { verifierAccesTenant } from '../lib/acces-tenant'
 import { chargerPlan } from '../lib/plans'
-import { envoyerEmailSuppressionDemande } from '../lib/brevo'
+import { envoyerEmailSuppressionDemande, envoyerEmailAnnulationSuppression } from '../lib/brevo'
 // B8 — session-5 : validerMimeImage migré vers lib/validation.ts (fonction partagée unifiée).
 // La fonction locale (Corr#12) est supprimée ici. Comportement identique : JPEG/PNG/GIF/WebP.
 import { validerMimeImageUnifie as validerMimeImage } from '../lib/validation'
@@ -2609,9 +2609,10 @@ dashboardRouter.post('/compte/annuler-suppression', async (c) => {
 
   const adminClient = createSupabaseAdminClient(c.env)
 
+  // B5 — session-5 : On récupère aussi nom + email pour l'email de confirmation.
   const { data: tenant, error: fetchError } = await adminClient
     .from('tenants')
-    .select('suppression_demandee_le')
+    .select('suppression_demandee_le, nom')
     .eq('id', auth.tenant_id)
     .maybeSingle()
 
@@ -2636,6 +2637,22 @@ dashboardRouter.post('/compte/annuler-suppression', async (c) => {
   if (updateError) {
     console.error('[Suppression] Erreur annulation:', updateError.message)
     return c.json({ error: 'Erreur lors de l\'annulation.' }, 500)
+  }
+
+  // B5 — session-5 : Email de confirmation d'annulation au restaurant.
+  // Rassure l'utilisateur que son compte est bien conservé.
+  // Non bloquant — un échec email ne doit pas faire échouer l'annulation.
+  try {
+    const { data: userAuthData } = await adminClient.auth.admin.getUserById(auth.user_id)
+    const emailUser = userAuthData?.user?.email
+    if (emailUser) {
+      envoyerEmailAnnulationSuppression(c.env, {
+        email: emailUser,
+        nom_restaurant: tenant.nom ?? auth.tenant_slug
+      }).catch(() => {})
+    }
+  } catch (emailErr: any) {
+    console.warn('[Suppression/B5] Email annulation échoué (non bloquant):', emailErr?.message ?? emailErr)
   }
 
   return c.json({ success: true, message: 'Demande de suppression annulée.' })
