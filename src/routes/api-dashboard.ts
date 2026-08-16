@@ -445,7 +445,7 @@ dashboardRouter.get('/commandes/export-csv', async (c) => {
     .gte('created_at', `${dateDebut}T00:00:00Z`)
     .lte('created_at', `${dateFin}T23:59:59Z`)
     .order('created_at', { ascending: false })
-    .limit(5000)
+    .limit(1000) // S9-02 CORRIGÉ — 5000 → 1000 pour éviter timeout Worker 30s CPU
 
   if (error) return c.json({ error: 'Erreur export CSV.', detail: error.message }, 500)
 
