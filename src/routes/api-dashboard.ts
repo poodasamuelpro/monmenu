@@ -453,9 +453,9 @@ dashboardRouter.get('/stats', async (c) => {
 
   const supabase = createSupabaseClientWithToken(c.env, auth.token)
 
-  const today = new Date().toISOString().split('T')[0]
+  const today = new Date().toISOString().split('T')[0]!
   const monthStart = today.substring(0, 7) + '-01'
-  const thirtyDaysAgo = new Date(Date.now() - 29 * 86400000).toISOString().split('T')[0]
+  const thirtyDaysAgo = new Date(Date.now() - 29 * 86400000).toISOString().split('T')[0]!
 
   // Corr#9-fin — allCommandes remplacé par 3 COUNT SQL (plus de fetch mémoire).
   // Les taux livraison/annulation utilisent désormais des requêtes head-only.
@@ -540,7 +540,7 @@ dashboardRouter.get('/stats', async (c) => {
   for (let i = 29; i >= 0; i--) {
     const d = new Date()
     d.setDate(d.getDate() - i)
-    const key = d.toISOString().split('T')[0]
+    const key = d.toISOString().split('T')[0]!
     labels.push(key.slice(5))
     const jour = dayMap.get(key)
     values.push(jour?.cnt ?? 0)
@@ -596,8 +596,7 @@ dashboardRouter.get('/menu', async (c) => {
   const produitsByCategorie = new Map<string, any[]>()
   for (const p of (produits ?? [])) {
     const categorie_nom = (p.categories_menu as any)?.nom ?? ''
-    const produitFormatted = { ...p, categorie_nom }
-    delete produitFormatted.categories_menu
+    const { categories_menu: _cat, ...produitFormatted } = { ...p, categorie_nom }
     const list = produitsByCategorie.get(p.categorie_id) ?? []
     list.push(produitFormatted)
     produitsByCategorie.set(p.categorie_id, list)
@@ -1887,7 +1886,7 @@ dashboardRouter.post('/upload-image', async (c) => {
     return c.json({ error: 'Fichier invalide. Seuls les vrais JPEG, PNG, WebP et GIF sont acceptés.' }, 415)
   }
 
-  const ext = validatedMime.split('/')[1].replace('jpeg', 'jpg')
+  const ext = validatedMime.split('/')[1]!.replace('jpeg', 'jpg')
   const key = `${auth.tenant_id}/${Date.now()}-${crypto.randomUUID().slice(0, 8)}.${ext}`
 
   // Corr#12 — Clé ancienne explicite (optionnelle, fournie par le frontend)
@@ -2396,7 +2395,7 @@ dashboardRouter.patch('/notifications/tout-lire', async (c) => {
     .update({ lue: true })
     .eq('tenant_id', auth.tenant_id)
     .eq('lue', false)
-    .select('id', { count: 'exact' })
+    .select('id')
 
   if (error) return c.json({ error: 'Erreur mise à jour notifications.', ...(c.env.ENVIRONMENT !== 'production' ? { detail: error.message } : {}) }, 500)
 
@@ -2524,10 +2523,12 @@ dashboardRouter.post('/compte/demander-suppression', async (c) => {
 
   // Email non bloquant
   try {
-    envoyerEmailSuppressionDemande(c.env, { email: userEmail }, {
-      nom_restaurant: nomRestaurant ?? auth.tenant_slug,
+    envoyerEmailSuppressionDemande(c.env, {
+      email: userEmail,
+      nom_restaurant: nomRestaurant ?? auth.tenant_slug
+    }, {
       token,
-      suppression_prevue_le: prevue.toISOString()
+      date_suppression_iso: prevue.toISOString()
     }).catch(() => {})
   } catch {}
 

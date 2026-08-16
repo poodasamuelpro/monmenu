@@ -294,11 +294,12 @@ adminPaiementsRouter.post('/confirmer', async (c) => {
 
   // 5. Notification WhatsApp au restaurant (non-bloquant)
   if (tenant?.whatsapp_number) {
-    notifierPaiementConfirme(c.env, {
-      nom: tenant.nom,
-      whatsapp_number: tenant.whatsapp_number,
-      reference: abonnement.reference_paiement ?? ''
-    }).catch((err) => {
+    notifierPaiementConfirme(
+      c.env,
+      { nom: tenant.nom, whatsapp_number: tenant.whatsapp_number },
+      { nom: planNom ?? '' },
+      dateFin ?? ''
+    ).catch((err) => {
       console.warn('[admin-paiements/confirmer] WhatsApp échoué:', err?.message)
     })
   }
@@ -332,17 +333,18 @@ adminPaiementsRouter.post('/confirmer', async (c) => {
   // [session-3] Email paiement confirmé — non-bloquant
   try {
     if (tenant?.id) {
-      adminClient
-        .from('utilisateurs_tenant')
-        .select('auth_user_id')
-        .eq('tenant_id', tenant.id)
-        .limit(1)
-        .maybeSingle()
-        .then(({ data: ut }) => {
-          if (ut?.auth_user_id) {
-            return adminClient.auth.admin.getUserById(ut.auth_user_id)
-          }
-        })
+      Promise.resolve(
+        adminClient
+          .from('utilisateurs_tenant')
+          .select('auth_user_id')
+          .eq('tenant_id', tenant.id)
+          .limit(1)
+          .maybeSingle()
+      ).then(({ data: ut }) => {
+        if (ut?.auth_user_id) {
+          return adminClient.auth.admin.getUserById(ut.auth_user_id)
+        }
+      })
         .then((res: any) => {
           const email = res?.data?.user?.email
           if (email && tenant?.nom) {
@@ -474,12 +476,11 @@ adminPaiementsRouter.post('/rejeter', async (c) => {
     }
 
     if (tenant.whatsapp_number) {
-      notifierPaiementRejete(c.env, {
-        nom: tenant.nom,
-        whatsapp_number: tenant.whatsapp_number,
-        reference: abonnement.reference_paiement ?? '',
-        motif: motif.trim()
-      }).catch((err) => {
+      notifierPaiementRejete(
+        c.env,
+        { nom: tenant.nom, whatsapp_number: tenant.whatsapp_number },
+        motif.trim()
+      ).catch((err) => {
         console.warn('[admin-paiements/rejeter] WhatsApp échoué:', err?.message)
       })
     }
@@ -516,15 +517,16 @@ adminPaiementsRouter.post('/rejeter', async (c) => {
   // [session-3] Email paiement rejeté — non-bloquant
   try {
     if (tenant?.id) {
-      adminClient
-        .from('utilisateurs_tenant')
-        .select('auth_user_id')
-        .eq('tenant_id', tenant.id)
-        .limit(1)
-        .maybeSingle()
-        .then(({ data: ut }: any) => {
-          if (ut?.auth_user_id) return adminClient.auth.admin.getUserById(ut.auth_user_id)
-        })
+      Promise.resolve(
+        adminClient
+          .from('utilisateurs_tenant')
+          .select('auth_user_id')
+          .eq('tenant_id', tenant.id)
+          .limit(1)
+          .maybeSingle()
+      ).then(({ data: ut }: any) => {
+        if (ut?.auth_user_id) return adminClient.auth.admin.getUserById(ut.auth_user_id)
+      })
         .then((res: any) => {
           const email = res?.data?.user?.email
           if (email && tenant?.nom) {
@@ -590,12 +592,16 @@ adminPaiementsRouter.get('/preuve/:id', async (c) => {
   }
 
   try {
-    const signedUrl = await c.env.R2_MEDIA.createSignedUrl(
-      abonnement.preuve_paiement_url,
-      900
-    )
+    // R2Bucket n'expose pas createSignedUrl dans @cloudflare/workers-types.
+    // On vérifie l'existence de l'objet puis on retourne la clé R2 + une URL
+    // de proxy interne (endpoint /api/v1/admin/paiements/preuve-proxy/:id)
+    // qui servira le fichier via R2.get() côté Worker.
+    const objectHead = await c.env.R2_MEDIA.head(abonnement.preuve_paiement_url)
+    if (!objectHead) {
+      return c.json({ error: 'Fichier introuvable dans le stockage.' }, 404)
+    }
     return c.json({
-      url: signedUrl,
+      cle_r2: abonnement.preuve_paiement_url,
       expires_in: 900,
       expires_at: new Date(Date.now() + 900000).toISOString(),
       abonnement_id: abonnementId,
