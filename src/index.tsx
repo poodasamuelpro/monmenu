@@ -143,11 +143,15 @@ app.use('*', logger())
 // À terme, remplacer par un domaine personnalisé et supprimer cette entrée workers.dev.
 const WORKERS_DEV_URL_PROJET = 'monmenu.poodasamuelpro.workers.dev'
 
-function originAutorisee(origin: string): string | null {
+// S5-03 — originAutorisee accepte un booléen `isDev` pour autoriser localhost
+// uniquement en environnement de développement local. En production,
+// localhost n'est jamais une origine légitime (attaque CSRF via app locale).
+function originAutorisee(origin: string, isDev: boolean): string | null {
   const domainesRacines = ['monmenu.app', 'monmenu.com', 'monmenu.bf']
+  // S5-03 — localhost autorisé UNIQUEMENT en développement
   const localhosts = ['http://localhost:5173', 'http://localhost:3000']
 
-  if (localhosts.includes(origin)) return origin
+  if (isDev && localhosts.includes(origin)) return origin
 
   try {
     const hostname = new URL(origin).hostname
@@ -165,13 +169,16 @@ function originAutorisee(origin: string): string | null {
   return null
 }
 
-app.use('/api/*', cors({
-  origin: (origin) => originAutorisee(origin) ?? '',
-  allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowHeaders: ['Content-Type', 'Authorization', 'X-Idempotency-Key', 'X-Requested-With', 'X-Tenant-Slug'],
-  exposeHeaders: ['X-Cache', 'X-RateLimit-Remaining'],
-  credentials: true
-}))
+app.use('/api/*', async (c, next) => {
+  const isDev = c.env.ENVIRONMENT === 'development'
+  return cors({
+    origin: (origin) => originAutorisee(origin, isDev) ?? '',
+    allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowHeaders: ['Content-Type', 'Authorization', 'X-Idempotency-Key', 'X-Requested-With', 'X-Tenant-Slug', 'X-CSRF-Token'],
+    exposeHeaders: ['X-Cache', 'X-RateLimit-Remaining'],
+    credentials: true
+  })(c, next)
+})
 
 // ---- Fichiers statiques ----
 app.use('/static/*', serveStatic({ root: './' }))

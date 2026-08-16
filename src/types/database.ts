@@ -391,6 +391,9 @@ export type Env = {
   FCM_PROJECT_ID?: string
   FCM_CLIENT_EMAIL?: string
   FCM_PRIVATE_KEY?: string
+  // P7/ADMIN_EMAILS — liste d'emails admin séparés par virgule (fallback si table admins absente)
+  // Utilisé dans api-blog.ts (isAdminEmail) et potentiellement d'autres guards admin.
+  ADMIN_EMAILS?: string
 }
 
 export interface CartItem {
