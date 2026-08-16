@@ -215,7 +215,25 @@ app.get('/api/v1/moyens-paiement', async (c) => {
 })
 
 // ---- Sitemap dynamique ----
+// S9-05 — Cache KV TTL 1h : évite une requête Supabase à chaque crawl Google.
+// Clé : `kv:sitemap` (préfixe `kv:` cohérent avec le cache boutique/home).
+const SITEMAP_CACHE_KEY = 'kv:sitemap'
+const SITEMAP_CACHE_TTL = 3600 // 1 heure
+
 app.get('/sitemap.xml', async (c) => {
+  // S9-05 — Lecture cache KV sitemap (TTL 1h)
+  if (c.env.KV_CACHE) {
+    try {
+      const cached = await c.env.KV_CACHE.get(SITEMAP_CACHE_KEY)
+      if (cached) {
+        return c.text(cached, 200, {
+          'Content-Type': 'application/xml; charset=utf-8',
+          'X-Cache': 'HIT'
+        })
+      }
+    } catch { /* KV indisponible — continuer sans cache */ }
+  }
+
   const adminClient = createSupabaseAdminClient(c.env)
   const { data: tenantsData } = await adminClient
     .from('tenants')
@@ -279,7 +297,17 @@ app.get('/sitemap.xml', async (c) => {
 ${restaurantUrls}
 </urlset>`
 
-  return c.text(sitemap, 200, { 'Content-Type': 'application/xml; charset=utf-8' })
+  // S9-05 — Écriture en cache KV TTL 1h (non bloquant)
+  if (c.env.KV_CACHE) {
+    try {
+      await c.env.KV_CACHE.put(SITEMAP_CACHE_KEY, sitemap, { expirationTtl: SITEMAP_CACHE_TTL })
+    } catch { /* KV indisponible — réponse servie quand même */ }
+  }
+
+  return c.text(sitemap, 200, {
+    'Content-Type': 'application/xml; charset=utf-8',
+    'X-Cache': 'MISS'
+  })
 })
 
 // ---- robots.txt ----
