@@ -84,7 +84,7 @@ async function calculerStatsJournalieres(env: Env, scheduledTime: number): Promi
 
   const date = new Date(scheduledTime)
   date.setUTCDate(date.getUTCDate() - 1)
-  const dateStr = date.toISOString().split('T')[0]
+  const dateStr = date.toISOString().split('T')[0]!
   const debutJour = `${dateStr}T00:00:00.000Z`
   const finJour = `${dateStr}T23:59:59.999Z`
 
@@ -160,7 +160,7 @@ async function calculerStatsUnTenant(
       if (!produitsCount[item.produit_id]) {
         produitsCount[item.produit_id] = { nom: item.nom ?? '', quantite: 0 }
       }
-      produitsCount[item.produit_id].quantite += item.quantite ?? 1
+      produitsCount[item.produit_id]!.quantite += item.quantite ?? 1
     }
   }
   const top3Produits = Object.entries(produitsCount)
@@ -557,31 +557,33 @@ async function bloquerPaiementsExpires(env: Env): Promise<void> {
         })
       }
 
-      await adminClient
-        .from('notifications_restaurant')
-        .insert({
-          tenant_id: tenant.id,
-          type: 'error',
-          titre: 'Accès bloqué — délai de vérification dépassé',
-          message: `Votre paiement n'a pas été confirmé dans les ${FENETRE_ACCES_HEURES}h. Votre accès est suspendu. Vous pouvez soumettre une nouvelle preuve à tout moment, ou contacter le support.`,
-          lien: '/dashboard/abonnement',
-          payload: { abonnement_id: abonnement.id }
-        })
-        .catch(() => {})
-
-      await adminClient
-        .from('notifications_admin')
-        .insert({
-          type: 'error',
-          titre: `Paiement bloqué automatiquement — ${tenant.nom}`,
-          message: `Le délai de ${FENETRE_ACCES_HEURES}h est dépassé sans confirmation (SLA annoncé : ${SLA_ADMIN_HEURES}h). Tenant passé en inactif.`,
-          lien: '#paiements',
-          payload: {
+      try {
+        await adminClient
+          .from('notifications_restaurant')
+          .insert({
             tenant_id: tenant.id,
-            abonnement_id: abonnement.id
-          }
-        })
-        .catch(() => {})
+            type: 'error',
+            titre: 'Accès bloqué — délai de vérification dépassé',
+            message: `Votre paiement n'a pas été confirmé dans les ${FENETRE_ACCES_HEURES}h. Votre accès est suspendu. Vous pouvez soumettre une nouvelle preuve à tout moment, ou contacter le support.`,
+            lien: '/dashboard/abonnement',
+            payload: { abonnement_id: abonnement.id }
+          })
+      } catch { /* notification non bloquante */ }
+
+      try {
+        await adminClient
+          .from('notifications_admin')
+          .insert({
+            type: 'error',
+            titre: `Paiement bloqué automatiquement — ${tenant.nom}`,
+            message: `Le délai de ${FENETRE_ACCES_HEURES}h est dépassé sans confirmation (SLA annoncé : ${SLA_ADMIN_HEURES}h). Tenant passé en inactif.`,
+            lien: '#paiements',
+            payload: {
+              tenant_id: tenant.id,
+              abonnement_id: abonnement.id
+            }
+          })
+      } catch { /* notification non bloquante */ }
 
       console.log(`[CRON:paiements] Paiement bloqué — tenant: ${tenant.id.slice(0, 8)}...`)
     } catch (err) {
