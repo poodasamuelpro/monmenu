@@ -90,7 +90,7 @@
 import { Hono } from 'hono'
 import { setCookie, deleteCookie, getCookie } from 'hono/cookie'
 import type { Env } from '../types/database'
-import { checkRateLimit, setSecurityHeaders, sanitizeSlug } from '../lib/security'
+import { checkRateLimit, setSecurityHeaders, sanitizeSlug, hashSessionKey } from '../lib/security'
 import { createSupabaseClient, createSupabaseClientWithToken, createSupabaseAdminClient } from '../lib/supabase'
 import { envoyerEmailBienvenue } from '../lib/brevo'
 
@@ -212,7 +212,8 @@ authRouter.post('/login', async (c) => {
   setAuthCookies(c, data.session.access_token, data.session.refresh_token)
 
   if (c.env.KV_CACHE) {
-    const sessionKey = `session:${data.session.access_token.slice(-20)}`
+    // A-8/FINDING-03 (session-7) : clé KV hashée SHA-256 — remplace slice(-20) prévisible
+    const sessionKey = await hashSessionKey(data.session.access_token)
     try {
       await c.env.KV_CACHE.put(sessionKey, JSON.stringify({
         user_id: data.user.id,
@@ -486,7 +487,8 @@ authRouter.post('/logout', async (c) => {
   const token = cookieToken || headerToken
 
   if (token && c.env.KV_CACHE) {
-    const sessionKey = `session:${token.slice(-20)}`
+    // A-8/FINDING-03 (session-7) : clé KV hashée SHA-256 — cohérence avec /login
+    const sessionKey = await hashSessionKey(token)
     try { await c.env.KV_CACHE.delete(sessionKey) } catch {}
   }
 

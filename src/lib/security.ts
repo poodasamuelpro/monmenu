@@ -208,6 +208,24 @@ export function sanitizeSlug(input: string): string {
     .slice(0, 50)
 }
 
+// ---- Hash SHA-256 de clé de session KV (A-8/FINDING-03, session-7) ----
+// Remplace le suffixe raw `.slice(-20)` du JWT (prévisible) par un digest
+// SHA-256 tronqué à 20 chars hex (40 bits d'entropie minimum).
+// Utilisé partout où la clé KV `session:${...}` est lue ou écrite.
+// Anti-régression : la fonction est pure et asynchrone — aucun changement
+// de comportement external ; les anciennes entrées KV (slice-20) expirent
+// naturellement via leur TTL (≤ 1h) sans nettoyage manuel.
+export async function hashSessionKey(token: string): Promise<string> {
+  const encoder = new TextEncoder()
+  const data = encoder.encode(token)
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data)
+  const hashArray = Array.from(new Uint8Array(hashBuffer))
+  const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('')
+  // 20 premiers caractères hex = 80 bits → entropie largement suffisante pour
+  // une clé KV opaque. Pas besoin du hash complet (64 chars) comme préfixe.
+  return `session:${hashHex.slice(0, 20)}`
+}
+
 // ---- Comparaison timing-safe (A-7/FINDING-23, session-7) ----
 // Remplace l'égalité simple (secret !== envSecret) qui expose une timing attack
 // théorique permettant de deviner le secret caractère par caractère.

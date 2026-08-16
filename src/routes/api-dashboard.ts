@@ -106,7 +106,7 @@ import { getCookie } from 'hono/cookie'
 import { createClient } from '@supabase/supabase-js'
 import type { Env } from '../types/database'
 import { createSupabaseClient, createSupabaseClientWithToken, createSupabaseAdminClient } from '../lib/supabase'
-import { setSecurityHeaders, checkRateLimit } from '../lib/security'
+import { setSecurityHeaders, checkRateLimit, hashSessionKey } from '../lib/security'
 import { genererMessageLivreur, genererLienWhatsApp, envoyerNotificationWhatsApp } from '../lib/whatsapp'
 import { verifierAccesTenant } from '../lib/acces-tenant'
 import { chargerPlan } from '../lib/plans'
@@ -1575,8 +1575,9 @@ dashboardRouter.post('/profil/change-password', async (c) => {
     console.warn('[change-password] Exception signout global (non bloquant):', err?.message ?? err)
   }
   // Supprimer aussi la clé de cache KV de la session courante
+  // A-8/FINDING-03 (session-7) : clé KV hashée SHA-256 — cohérence avec /login
   if (c.env.KV_CACHE) {
-    const sessionKey = `session:${auth.token.slice(-20)}`
+    const sessionKey = await hashSessionKey(auth.token)
     try { await c.env.KV_CACHE.delete(sessionKey) } catch {}
   }
 
