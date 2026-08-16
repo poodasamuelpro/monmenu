@@ -1558,6 +1558,24 @@ dashboardRouter.post('/profil/change-password', async (c) => {
   })
   if (updateError) return c.json({ error: 'Erreur lors du changement de mot de passe.', detail: updateError.message }, 500)
 
+  // A-4 (FINDING-01, session-7) — Révoquer TOUTES les sessions actives après
+  // changement de mot de passe depuis le dashboard, en cohérence avec
+  // /reset-password qui le fait déjà. Un attaquant ayant compromis une session
+  // active ne peut plus y accéder après que la victime a changé son mot de passe.
+  // Non bloquant : si signOutUser échoue, le mot de passe est déjà changé et
+  // l'utilisateur peut se reconnecter avec le nouveau.
+  try {
+    const { error: signOutError } = await adminClient.auth.admin.signOut(auth.token, 'global')
+    if (signOutError) console.warn('[change-password] Erreur signout global (non bloquant):', signOutError.message)
+  } catch (err: any) {
+    console.warn('[change-password] Exception signout global (non bloquant):', err?.message ?? err)
+  }
+  // Supprimer aussi la clé de cache KV de la session courante
+  if (c.env.KV_CACHE) {
+    const sessionKey = `session:${auth.token.slice(-20)}`
+    try { await c.env.KV_CACHE.delete(sessionKey) } catch {}
+  }
+
   // FIX BUG-CATCH-NOTIF — try/catch classique au lieu de .catch() chaîné
   // (le builder Supabase n'expose pas de vraie méthode .catch()). Une
   // erreur ici est volontairement ignorée : elle ne doit jamais faire
