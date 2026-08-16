@@ -132,3 +132,24 @@ blogRouter.delete('/admin/:id', async (c) => {
 })
 
 export default blogRouter
+
+// ── Middleware de vérification de rôle plateforme (A-11/FINDING-06, session-7)
+// authMiddlewarePlatform vérifie le JWT mais pas si l'email est dans ADMIN_EMAILS.
+// Ce middleware secondaire ajoute la vérification de liste blanche d'emails.
+// PRÉREQUIS : la variable d'environnement ADMIN_EMAILS doit être configurée
+// (wrangler secret put ADMIN_EMAILS) sous la forme "email1@ex.com,email2@ex.com".
+// Si ADMIN_EMAILS est vide/absente, TOUTES les routes /admin/* sont bloquées
+// par mesure de sécurité (fail-closed — personne ne peut y accéder).
+blogRouter.use('/admin/*', async (c, next) => {
+  const auth = c.get('auth') as any
+  const adminEmails = (c.env.ADMIN_EMAILS ?? '').split(',').map((e: string) => e.trim()).filter(Boolean)
+  if (adminEmails.length === 0) {
+    return c.json({ error: 'Administration blog non configurée (ADMIN_EMAILS manquant).' }, 503)
+  }
+  const supabase = (await import('../lib/supabase')).createSupabaseClient(c.env)
+  const { data: { user } } = await supabase.auth.getUser(auth.token)
+  if (!user?.email || !adminEmails.includes(user.email)) {
+    return c.json({ error: 'Accès réservé aux administrateurs de la plateforme.' }, 403)
+  }
+  return next()
+})
