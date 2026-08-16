@@ -129,6 +129,12 @@ async function validerCodePromo(
 }
 
 // POST /api/v1/commandes — Créer une commande
+// FINDING-05 (session-7) — le tenant_id n'est PLUS lu depuis le body de la
+// requête. Le tenant est désormais résolu depuis le slug présent dans le header
+// X-Tenant-Slug (envoyé par boutique.js) ou dans le body (champ ignoré pour
+// la résolution, jamais utilisé comme autorité). En l'absence de slug valide,
+// la requête est rejetée. Cette approche évite qu'un attaquant ne cible un
+// autre restaurant en falsifiant tenant_id dans le body.
 commandesRouter.post('/', async (c) => {
   setSecurityHeaders(c)
 
@@ -144,6 +150,14 @@ commandesRouter.post('/', async (c) => {
     body = await c.req.json()
   } catch {
     return c.json({ error: 'Corps de requête JSON invalide.' }, 400)
+  }
+
+  // FINDING-05 — résoudre le tenant depuis le header X-Tenant-Slug ou le body.slug,
+  // jamais depuis body.tenant_id (falsifiable). Le slug identifie le restaurant
+  // côté client de façon non ambiguë (il est dans l'URL de la boutique visitée).
+  const tenantSlug = c.req.header('X-Tenant-Slug') || (body as any)?.slug
+  if (!tenantSlug || typeof tenantSlug !== 'string' || !/^[a-z0-9-]+$/.test(tenantSlug)) {
+    return c.json({ error: 'Identification du restaurant manquante ou invalide (slug requis).' }, 422)
   }
 
   const parseResult = CommandeSchema.safeParse(body)
@@ -166,27 +180,28 @@ commandesRouter.post('/', async (c) => {
 
   const adminClient = createSupabaseAdminClient(env)
 
-  // CORRECTIF BUG-3 — 'en_attente_paiement_initial' ajouté : un tenant
-  // ayant choisi un plan payant à l'inscription doit pouvoir recevoir des
-  // commandes pendant sa fenêtre d'attente de premier paiement, tout comme
-  // un tenant en 'essai'. Sans ce statut, la boutique était visible
-  // (après correctif api-tenants.ts) mais toute tentative de commande
-  // échouait avec "Restaurant introuvable ou inactif".
+  // FINDING-05 — résolution du tenant depuis le slug (non falsifiable), pas depuis
+  // body.tenant_id. Le slug est l'identifiant public du restaurant dans l'URL.
+  // CORRECTIF BUG-3 conservé : 'en_attente_paiement_initial' inclus.
   const { data: tenantRow, error: tenantError } = await adminClient
     .from('tenants')
     .select('id, whatsapp_number, statut')
-    .eq('id', data.tenant_id)
+    .eq('slug', tenantSlug)
     .in('statut', ['actif', 'essai', 'en_attente_paiement_initial'])
     .is('deleted_at', null)
     .single()
 
   if (tenantError || !tenantRow) return c.json({ error: 'Restaurant introuvable ou inactif.' }, 404)
 
+  // Le tenant_id réel est désormais celui résolu depuis le slug côté serveur.
+  // Toute valeur body.tenant_id est ignorée.
+  const resolvedTenantId = tenantRow.id
+
   const { data: pdvRow, error: pdvError } = await adminClient
     .from('points_de_vente')
     .select('id, latitude, longitude')
     .eq('id', data.point_de_vente_id)
-    .eq('tenant_id', data.tenant_id)
+    .eq('tenant_id', resolvedTenantId)
     .eq('actif', true)
     .single()
 
@@ -198,7 +213,7 @@ commandesRouter.post('/', async (c) => {
     .from('produits')
     .select('id, nom, prix, disponible')
     .in('id', produitIds)
-    .eq('tenant_id', data.tenant_id)
+    .eq('tenant_id', resolvedTenantId)
     .eq('disponible', true)
     .is('deleted_at', null)
 
@@ -221,7 +236,7 @@ commandesRouter.post('/', async (c) => {
       .from('supplements')
       .select('id, produit_id, nom, prix')
       .in('id', tousSupplementIds)
-      .eq('tenant_id', data.tenant_id)
+      .eq('tenant_id', resolvedTenantId)
       .eq('actif', true)
       .is('deleted_at', null)
 
@@ -261,7 +276,7 @@ commandesRouter.post('/', async (c) => {
   let remisePromo = 0
   let promoId: string | undefined
   if (data.code_promo) {
-    const promoResult = await validerCodePromo(adminClient, data.tenant_id, data.code_promo, sousTotal)
+    const promoResult = await validerCodePromo(adminClient, resolvedTenantId, data.code_promo, sousTotal)
     if (!promoResult.valide) {
       return c.json({ error: promoResult.message ?? 'Code promo invalide.' }, 422)
     }
@@ -294,7 +309,7 @@ commandesRouter.post('/', async (c) => {
     .from('commandes')
     .insert({
       id: commandeId,
-      tenant_id: data.tenant_id,
+      tenant_id: resolvedTenantId,
       point_de_vente_id: data.point_de_vente_id,
       client_nom: data.client_nom,
       client_telephone: data.client_telephone,
@@ -375,7 +390,7 @@ commandesRouter.post('/', async (c) => {
 
   const commandeComplete = {
     id: commandeId,
-    tenant_id: data.tenant_id,
+    tenant_id: resolvedTenantId,
     client_nom: data.client_nom,
     client_telephone: data.client_telephone,
     client_adresse: data.client_adresse ?? null,
@@ -400,7 +415,7 @@ commandesRouter.post('/', async (c) => {
   )
 
   c.executionCtx.waitUntil(
-    sendFcmToTenant(env, adminClient, data.tenant_id, {
+    sendFcmToTenant(env, adminClient, resolvedTenantId, {
       title: `🛒 Nouvelle commande — ${data.client_nom}`,
       body: `${montantTotal.toLocaleString('fr-FR')} FCFA`,
       data: {
@@ -421,7 +436,7 @@ commandesRouter.post('/', async (c) => {
     adminClient
       .from('notifications_restaurant')
       .insert({
-        tenant_id: data.tenant_id,
+        tenant_id: resolvedTenantId,
         type: 'info',
         titre: 'Nouvelle commande reçue',
         message: `Commande de ${data.client_nom} — ${montantTotal.toLocaleString('fr-FR')} FCFA.`,
@@ -578,6 +593,8 @@ commandesRouter.patch('/:id/statut', async (c) => {
 })
 
 // POST /api/v1/commandes/valider-promo — Vérifier un code promo côté boutique
+// FINDING-05 (session-7) — le tenant est résolu depuis le header X-Tenant-Slug
+// ou le champ body.slug, jamais depuis body.tenant_id (falsifiable).
 commandesRouter.post('/valider-promo', async (c) => {
   setSecurityHeaders(c)
 
@@ -585,18 +602,36 @@ commandesRouter.post('/valider-promo', async (c) => {
   const rateLimit = await checkRateLimit(`promo-check:${ip}`, 20, 60000)
   if (!rateLimit.allowed) return c.json({ error: 'Trop de tentatives. Réessayez dans une minute.' }, 429)
 
-  let body: { tenant_id?: string; code?: string; sous_total?: number }
+  let body: { tenant_id?: string; slug?: string; code?: string; sous_total?: number }
   try { body = await c.req.json() } catch { return c.json({ error: 'JSON invalide.' }, 400) }
 
-  if (!body.tenant_id || !body.code) return c.json({ error: 'tenant_id et code requis.' }, 422)
+  if (!body.code) return c.json({ error: 'code requis.' }, 422)
+
+  // FINDING-05 — résolution du tenant depuis slug (non falsifiable), pas depuis tenant_id
+  const tenantSlugPromo = c.req.header('X-Tenant-Slug') || body.slug
+  if (!tenantSlugPromo || typeof tenantSlugPromo !== 'string' || !/^[a-z0-9-]+$/.test(tenantSlugPromo)) {
+    return c.json({ error: 'Identification du restaurant manquante (slug requis).' }, 422)
+  }
+
   const sousTotal = typeof body.sous_total === 'number' ? body.sous_total : 0
 
   const adminClient = createSupabaseAdminClient(c.env)
 
+  // Résoudre le tenant depuis le slug (non falsifiable)
+  const { data: tenantPromo, error: tenantPromoError } = await adminClient
+    .from('tenants')
+    .select('id')
+    .eq('slug', tenantSlugPromo)
+    .in('statut', ['actif', 'essai', 'en_attente_paiement_initial'])
+    .is('deleted_at', null)
+    .single()
+
+  if (tenantPromoError || !tenantPromo) return c.json({ valide: false, error: 'Restaurant introuvable.' })
+
   const { data: promo, error: promoError } = await adminClient
     .from('codes_promo')
     .select('id, code, type, valeur, date_fin, usage_max, usage_actuel, actif')
-    .eq('tenant_id', body.tenant_id)
+    .eq('tenant_id', tenantPromo.id)
     .eq('code', body.code.toUpperCase())
     .eq('actif', true)
     .maybeSingle()

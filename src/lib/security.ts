@@ -92,7 +92,12 @@ export async function storeIdempotency(
 // ---- Validation Zod ----
 
 export const CommandeSchema = z.object({
-  tenant_id: z.string().uuid(),
+  // FINDING-05 (session-7) — tenant_id n'est plus utilisé par le serveur pour
+  // déterminer le tenant cible (le Worker le dérive du slug dans l'URL).
+  // Le champ est conservé dans le schéma pour la rétrocompatibilité avec les
+  // clients existants qui l'envoient encore, mais il est explicitement ignoré
+  // côté route (voir api-commandes.ts, POST / et POST /valider-promo).
+  tenant_id: z.string().uuid().optional(),
   point_de_vente_id: z.string().uuid(),
   client_nom: z.string().min(2).max(100).trim(),
   client_telephone: z.string().regex(/^\+?[0-9\s\-]{8,20}$/),

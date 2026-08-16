@@ -759,8 +759,8 @@ async function appliquerCodePromo() {
     const sousTotal = getCartTotal();
     const res = await fetch('/api/v1/commandes/valider-promo', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tenant_id: tenantId, code, sous_total: sousTotal })
+      headers: { 'Content-Type': 'application/json', 'X-Tenant-Slug': tenantSlug },
+      body: JSON.stringify({ slug: tenantSlug, code, sous_total: sousTotal })
     });
     const data = await res.json();
 
@@ -942,7 +942,9 @@ async function submitOrder(e) {
   const idempotencyKey = crypto.randomUUID();
 
   const payload = {
-    tenant_id: tenantId,
+    // FINDING-05 (session-7) — tenant_id retiré du payload : le serveur le
+    // dérive désormais du slug (header X-Tenant-Slug + champ slug), non falsifiable.
+    slug: tenantSlug,
     point_de_vente_id: pdvData ? pdvData.id : '',
     client_nom: nom,
     client_telephone: tel,
@@ -964,7 +966,7 @@ async function submitOrder(e) {
   try {
     const res = await fetch('/api/v1/commandes', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Idempotency-Key': idempotencyKey },
+      headers: { 'Content-Type': 'application/json', 'X-Idempotency-Key': idempotencyKey, 'X-Tenant-Slug': tenantSlug },
       body: JSON.stringify(payload)
     });
 

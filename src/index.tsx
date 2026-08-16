@@ -158,7 +158,7 @@ function originAutorisee(origin: string): string | null {
 app.use('/api/*', cors({
   origin: (origin) => originAutorisee(origin) ?? '',
   allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowHeaders: ['Content-Type', 'Authorization', 'X-Idempotency-Key', 'X-Requested-With'],
+  allowHeaders: ['Content-Type', 'Authorization', 'X-Idempotency-Key', 'X-Requested-With', 'X-Tenant-Slug'],
   exposeHeaders: ['X-Cache', 'X-RateLimit-Remaining'],
   credentials: true
 }))
