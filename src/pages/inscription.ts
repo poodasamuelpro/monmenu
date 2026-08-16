@@ -189,7 +189,7 @@ export function renderInscriptionPage(nomProjet: string, nonce: string = ''): st
     </div>
   </section>
 
-  ${renderFooter(nomProjet)}
+  ${renderFooter(nomProjet, nonce)}
   <script src="/static/js/main.js"></script>
   <script nonce="${nonce}">
     // ─── Feat B : Gestion plans ───────────────────────────────────────────────

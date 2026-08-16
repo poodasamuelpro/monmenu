@@ -4,7 +4,7 @@ import { renderHead } from '../components/head'
 import { renderNav } from '../components/nav'
 import { renderFooter } from '../components/footer'
 
-export function renderCompteInactifPage(nomProjet: string): string {
+export function renderCompteInactifPage(nomProjet: string, nonce: string = ''): string {
   return `${renderHead(
     `Compte inactif — ${nomProjet}`,
     `Votre période d'essai est terminée.`,
@@ -44,7 +44,7 @@ export function renderCompteInactifPage(nomProjet: string): string {
       Si vous avez déjà effectué un paiement, déclarez-le ci-dessus. Votre accès sera maintenu pendant 72h le temps de la confirmation par notre équipe (délai engagé : 38h).
     </p>
   </section>
-  ${renderFooter(nomProjet)}
+  ${renderFooter(nomProjet, nonce)}
 </body>
 </html>`
 }

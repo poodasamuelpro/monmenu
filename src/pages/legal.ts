@@ -7,7 +7,7 @@ import { getConfidentialiteContent } from './confidentialite'
 import { getMentionsContent } from './mentions'
 import { getCookiesContent } from './cookies'
 
-export function renderLegalPage(type: 'cgu' | 'confidentialite' | 'mentions' | 'cookies', nomProjet: string): string {
+export function renderLegalPage(type: 'cgu' | 'confidentialite' | 'mentions' | 'cookies', nomProjet: string, nonce: string = ''): string {
   const year = new Date().getFullYear()
 
   const titles: Record<'cgu' | 'confidentialite' | 'mentions' | 'cookies', string> = {
@@ -71,7 +71,7 @@ export function renderLegalPage(type: 'cgu' | 'confidentialite' | 'mentions' | '
       </a>
     </nav>
   </main>
-  ${renderFooter(nomProjet)}
+  ${renderFooter(nomProjet, nonce)}
   <script src="/static/js/main.js"></script>
 </body>
 </html>`

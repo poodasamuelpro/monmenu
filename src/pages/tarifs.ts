@@ -223,7 +223,7 @@ export function renderTarifsPage(nomProjet: string, nonce: string = ''): string 
     </div>
   </section>
 
-  ${renderFooter(nomProjet)}
+  ${renderFooter(nomProjet, nonce)}
   <script src="/static/js/main.js"></script>
   <script nonce="${nonce}">
     let deviseCourante = 'FCFA';

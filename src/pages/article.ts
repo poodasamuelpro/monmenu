@@ -14,7 +14,7 @@ export interface ArticleDetail {
   auteur: string | null
 }
 
-export function renderArticlePage(nomProjet: string, article: ArticleDetail): string {
+export function renderArticlePage(nomProjet: string, article: ArticleDetail, nonce: string = ''): string {
   const formatDate = (iso: string | null) => {
     if (!iso) return ''
     return new Date(iso).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' })
@@ -71,7 +71,7 @@ export function renderArticlePage(nomProjet: string, article: ArticleDetail): st
     </div>
   </article>
 
-  ${renderFooter(nomProjet)}
+  ${renderFooter(nomProjet, nonce)}
   <script src="/static/js/main.js"></script>
 </body>
 </html>`

@@ -134,7 +134,8 @@ export function renderHomePage(nomProjet: string, nonce: string = ''): string {
                 <div class="bg-white rounded-2xl shadow p-2.5 flex items-center gap-2.5">
                   <div class="w-10 h-10 rounded-lg vignette-plat flex-shrink-0 overflow-hidden">
                     <img src="/api/v1/media/demo/plat-riz-gras.jpg" alt="Riz gras poulet" loading="lazy"
-                      class="w-full h-full object-cover" onerror="this.replaceWith(Object.assign(document.createElement('i'),{className:'fa-solid fa-bowl-rice text-red-500 text-sm flex items-center justify-center w-full h-full'}))">
+                      id="demo-img-riz"
+                      class="w-full h-full object-cover">
                   </div>
                   <div>
                     <div class="text-xs font-bold text-gray-900">Riz gras poulet</div>
@@ -144,7 +145,8 @@ export function renderHomePage(nomProjet: string, nonce: string = ''): string {
                 <div class="bg-white rounded-2xl shadow p-2.5 flex items-center gap-2.5">
                   <div class="w-10 h-10 rounded-lg vignette-plat flex-shrink-0 overflow-hidden">
                     <img src="/api/v1/media/demo/plat-poulet-braise.jpg" alt="Poulet braisé" loading="lazy"
-                      class="w-full h-full object-cover" onerror="this.replaceWith(Object.assign(document.createElement('i'),{className:'fa-solid fa-drumstick-bite text-blue-500 text-sm flex items-center justify-center w-full h-full'}))">
+                      id="demo-img-poulet"
+                      class="w-full h-full object-cover">
                   </div>
                   <div>
                     <div class="text-xs font-bold text-gray-900">Poulet braisé</div>
@@ -337,7 +339,7 @@ export function renderHomePage(nomProjet: string, nonce: string = ''): string {
         <h2 class="text-3xl font-extrabold text-gray-900">Questions fréquentes</h2>
       </div>
 
-      <div class="space-y-4">
+      <div class="space-y-4" id="faq-list">
         ${[
           { q: 'Est-ce vraiment 0% de commission ?', a: "Oui. Contrairement aux autres plateformes qui prennent 15% à 30% sur chaque commande, MonMenu ne facture qu'un abonnement fixe mensuel ou annuel. Tout le revenu de vos ventes vous revient directement." },
           { q: "Ai-je besoin d'un ordinateur pour gérer ma boutique ?", a: 'Non. Tout le tableau de bord est "mobile-first". Vous pouvez gérer vos produits, vos prix et vos commandes directement depuis votre smartphone.' },
@@ -350,8 +352,8 @@ export function renderHomePage(nomProjet: string, nonce: string = ''): string {
           { q: 'Est-ce disponible dans mon pays ?', a: "MonMenu est optimisé pour l'Afrique de l'Ouest et Centrale (Sénégal, Côte d'Ivoire, Cameroun, Mali, Burkina Faso, etc.) mais fonctionne partout dans le monde." },
         ].map((item, idx) => `
           <div class="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-            <button class="w-full px-6 py-5 text-left flex items-center justify-between font-bold text-gray-900 hover:bg-gray-50 transition-colors"
-                    onclick="this.nextElementSibling.classList.toggle('hidden'); this.querySelector('i').classList.toggle('rotate-180')">
+            <button class="faq-btn w-full px-6 py-5 text-left flex items-center justify-between font-bold text-gray-900 hover:bg-gray-50 transition-colors"
+                    type="button" aria-expanded="false">
               <span>${item.q}</span>
               <i class="fa-solid fa-chevron-down text-xs transition-transform" aria-hidden="true"></i>
             </button>
@@ -413,7 +415,7 @@ export function renderHomePage(nomProjet: string, nonce: string = ''): string {
     </div>
   </section>
 
-  ${renderFooter(nomProjet)}
+  ${renderFooter(nomProjet, nonce)}
 
   <!-- Script pour charger les plans dynamiquement -->
   <script nonce="${nonce}">
@@ -485,6 +487,37 @@ export function renderHomePage(nomProjet: string, nonce: string = ''): string {
       }
     }
     loadPlans();
+
+    // ---- FAQ accordion — event delegation (remplace onclick inline bloqué par CSP L3) ----
+    document.addEventListener('DOMContentLoaded', function() {
+      var faqList = document.getElementById('faq-list');
+      if (!faqList) return;
+      faqList.addEventListener('click', function(e) {
+        var btn = e.target.closest('.faq-btn');
+        if (!btn) return;
+        var panel = btn.nextElementSibling;
+        if (!panel) return;
+        var isOpen = !panel.classList.contains('hidden');
+        panel.classList.toggle('hidden', isOpen);
+        btn.setAttribute('aria-expanded', String(!isOpen));
+        var icon = btn.querySelector('i');
+        if (icon) icon.classList.toggle('rotate-180', !isOpen);
+      });
+
+      // ---- onerror images demo (remplace onerror inline bloqué par CSP L3) ----
+      var demoRiz = document.getElementById('demo-img-riz');
+      if (demoRiz) demoRiz.onerror = function() {
+        var i = document.createElement('i');
+        i.className = 'fa-solid fa-bowl-rice text-red-500 text-sm flex items-center justify-center w-full h-full';
+        demoRiz.replaceWith(i);
+      };
+      var demoPoulet = document.getElementById('demo-img-poulet');
+      if (demoPoulet) demoPoulet.onerror = function() {
+        var i = document.createElement('i');
+        i.className = 'fa-solid fa-drumstick-bite text-blue-500 text-sm flex items-center justify-center w-full h-full';
+        demoPoulet.replaceWith(i);
+      };
+    });
   </script>
 
   <!-- Script pour charger le carrousel des restaurants partenaires -->

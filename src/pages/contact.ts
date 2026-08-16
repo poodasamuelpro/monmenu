@@ -151,7 +151,7 @@ export function renderContactPage(nomProjet: string, whatsappSupport: string = '
     </div>
   </section>
 
-  ${renderFooter(nomProjet)}
+  ${renderFooter(nomProjet, nonce)}
   <script src="/static/js/main.js"></script>
   <script nonce="${nonce}">
     async function submitContact(e) {

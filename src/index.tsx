@@ -451,7 +451,7 @@ async function getArticlesPublies(env: Env) {
 
 // ---- Page Blog (article individuel) ----
 app.get('/blog/:slug', async (c) => {
-  setSecurityHeaders(c)
+  const nonce = setSecurityHeaders(c)
   const slug = c.req.param('slug')
   const nomProjet = await getNomProjet(c.env)
 
@@ -478,29 +478,29 @@ app.get('/blog/:slug', async (c) => {
     return c.html(render404Page(nomP), 404)
   }
 
-  return c.html(renderArticlePage(nomProjet, article))
+  return c.html(renderArticlePage(nomProjet, article, nonce))
 })
 
 // ---- Pages légales ----
 app.get('/legal/cgu', async (c) => {
-  setSecurityHeaders(c)
+  const nonce = setSecurityHeaders(c)
   const nomProjet = await getNomProjet(c.env)
-  return c.html(renderLegalPage('cgu', nomProjet))
+  return c.html(renderLegalPage('cgu', nomProjet, nonce))
 })
 app.get('/legal/confidentialite', async (c) => {
-  setSecurityHeaders(c)
+  const nonce = setSecurityHeaders(c)
   const nomProjet = await getNomProjet(c.env)
-  return c.html(renderLegalPage('confidentialite', nomProjet))
+  return c.html(renderLegalPage('confidentialite', nomProjet, nonce))
 })
 app.get('/legal/mentions', async (c) => {
-  setSecurityHeaders(c)
+  const nonce = setSecurityHeaders(c)
   const nomProjet = await getNomProjet(c.env)
-  return c.html(renderLegalPage('mentions', nomProjet))
+  return c.html(renderLegalPage('mentions', nomProjet, nonce))
 })
 app.get('/legal/cookies', async (c) => {
-  setSecurityHeaders(c)
+  const nonce = setSecurityHeaders(c)
   const nomProjet = await getNomProjet(c.env)
-  return c.html(renderLegalPage('cookies', nomProjet))
+  return c.html(renderLegalPage('cookies', nomProjet, nonce))
 })
 
 // ---- Connexion & Création de compte ----
@@ -528,9 +528,9 @@ app.get('/dashboard', async (c) => {
 })
 
 app.get('/dashboard/compte-inactif', async (c) => {
-  setSecurityHeaders(c)  // pas de scripts inline dans renderCompteInactifPage
+  const nonce = setSecurityHeaders(c)
   const nomProjet = await getNomProjet(c.env)
-  return c.html(renderCompteInactifPage(nomProjet))
+  return c.html(renderCompteInactifPage(nomProjet, nonce))
 })
 
 // CYCLE-4 — FIX : le middleware utilisait tenants.statut === 'en_attente_confirmation',

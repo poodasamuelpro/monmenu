@@ -32,7 +32,7 @@ export function renderConnexionPage(nomProjet: string, nonce: string = ''): stri
       <h1 class="text-xl font-bold text-gray-900 mb-2">Connexion</h1>
       <p class="text-sm text-gray-500 mb-6">Accédez à votre tableau de bord.</p>
 
-      <form id="login-form" class="space-y-4" onsubmit="handleLogin(event)">
+      <form id="login-form" class="space-y-4">
         <div>
           <label class="block text-sm font-semibold text-gray-700 mb-1.5">Email</label>
           <input id="login-email" type="email" required autocomplete="email"
@@ -45,7 +45,7 @@ export function renderConnexionPage(nomProjet: string, nonce: string = ''): stri
             <input id="login-password" type="password" required autocomplete="current-password"
               class="w-full border border-gray-200 rounded-xl px-4 py-3 pr-10 text-sm focus:outline-none focus:ring-2 focus:ring-red-200 focus:border-red-400 transition-colors"
               placeholder="••••••••">
-            <button type="button" onclick="togglePassword()" class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+            <button type="button" id="toggle-pwd-btn" class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
               <i id="pwd-icon" class="fa-regular fa-eye text-sm"></i>
             </button>
           </div>
@@ -79,12 +79,17 @@ export function renderConnexionPage(nomProjet: string, nonce: string = ''): stri
   </div>
 
   <script nonce="${nonce}">
-    function togglePassword() {
-      const input = document.getElementById('login-password');
-      const icon = document.getElementById('pwd-icon');
-      input.type = input.type === 'password' ? 'text' : 'password';
-      icon.className = input.type === 'password' ? 'fa-regular fa-eye text-sm' : 'fa-regular fa-eye-slash text-sm';
-    }
+    document.addEventListener('DOMContentLoaded', function() {
+      var toggleBtn = document.getElementById('toggle-pwd-btn');
+      if (toggleBtn) toggleBtn.addEventListener('click', function() {
+        var input = document.getElementById('login-password');
+        var icon = document.getElementById('pwd-icon');
+        input.type = input.type === 'password' ? 'text' : 'password';
+        icon.className = input.type === 'password' ? 'fa-regular fa-eye text-sm' : 'fa-regular fa-eye-slash text-sm';
+      });
+      var loginForm = document.getElementById('login-form');
+      if (loginForm) loginForm.addEventListener('submit', handleLogin);
+    });
 
     async function handleLogin(e) {
       e.preventDefault();
@@ -170,7 +175,7 @@ export function renderCreerComptePage(nomProjet: string, nonce: string = ''): st
     <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-8">
       <h1 class="text-xl font-bold text-gray-900 mb-6">Créer mon compte</h1>
 
-      <form id="register-form" class="space-y-4" onsubmit="handleRegister(event)">
+      <form id="register-form" class="space-y-4">
         <div class="grid grid-cols-2 gap-3">
           <div>
             <label class="block text-sm font-semibold text-gray-700 mb-1.5">Prénom <span class="text-red-500">*</span></label>
@@ -192,8 +197,7 @@ export function renderCreerComptePage(nomProjet: string, nonce: string = ''): st
           </label>
           <input id="reg-restaurant" type="text" required minlength="2" maxlength="100"
             class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200 focus:border-red-400 transition-colors"
-            placeholder="Chez Fatou, La Bonne Table..."
-            oninput="updateSlug()">
+            placeholder="Chez Fatou, La Bonne Table...">
           <div class="mt-1.5 text-xs text-gray-400">
             URL : monmenu.com/<span id="slug-display" class="text-red-600 font-semibold">votre-restaurant</span>
           </div>
@@ -225,7 +229,7 @@ export function renderCreerComptePage(nomProjet: string, nonce: string = ''): st
             <input id="reg-password" type="password" required minlength="8" autocomplete="new-password"
               class="w-full border border-gray-200 rounded-xl px-4 py-3 pr-10 text-sm focus:outline-none focus:ring-2 focus:ring-red-200 focus:border-red-400 transition-colors"
               placeholder="8 caractères minimum">
-            <button type="button" onclick="togglePwd()" class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+            <button type="button" id="reg-toggle-pwd" class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
               <i id="reg-eye" class="fa-regular fa-eye text-sm"></i>
             </button>
           </div>
@@ -263,6 +267,15 @@ export function renderCreerComptePage(nomProjet: string, nonce: string = ''): st
   </div>
 
   <script nonce="${nonce}">
+    document.addEventListener('DOMContentLoaded', function() {
+      var regRestaurant = document.getElementById('reg-restaurant');
+      if (regRestaurant) regRestaurant.addEventListener('input', updateSlug);
+      var regTogglePwd = document.getElementById('reg-toggle-pwd');
+      if (regTogglePwd) regTogglePwd.addEventListener('click', togglePwd);
+      var registerForm = document.getElementById('register-form');
+      if (registerForm) registerForm.addEventListener('submit', handleRegister);
+    });
+
     function updateSlug() {
       const nom = document.getElementById('reg-restaurant').value;
       const slug = nom
@@ -277,7 +290,6 @@ export function renderCreerComptePage(nomProjet: string, nonce: string = ''): st
     }
 
     function togglePwd() {
-      const input = document.getElementById('reg-password');
       const icon = document.getElementById('reg-eye');
       input.type = input.type === 'password' ? 'text' : 'password';
       icon.className = input.type === 'password' ? 'fa-regular fa-eye text-sm' : 'fa-regular fa-eye-slash text-sm';

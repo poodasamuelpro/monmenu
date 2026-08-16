@@ -103,7 +103,7 @@ export function renderBlogPage(nomProjet: string, articles: ArticleBlog[] = [], 
     </div>
   </main>
 
-  ${renderFooter(nomProjet)}
+  ${renderFooter(nomProjet, nonce)}
   <script src="/static/js/main.js"></script>
   <script nonce="${nonce}">
     function filtrerArticles(cat) {
