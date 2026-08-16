@@ -472,7 +472,13 @@ dashboardRouter.get('/commandes/export-csv', async (c) => {
       produits,
       cmd.notes ?? '',
       cmd.token_suivi
-    ].map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')
+    // S3-03 — neutralisation injection CSV : préfixer apostrophe si la valeur
+    // commence par =, +, -, @ (formule tableur Excel/LibreOffice).
+    ].map(v => {
+      const s = String(v ?? '').replace(/"/g, '""')
+      const safe = /^[=+\-@]/.test(s) ? `'${s}` : s
+      return `"${safe}"`
+    }).join(',')
   })
 
   const csv = [headers.join(','), ...rows].join('\n')
@@ -1681,7 +1687,13 @@ dashboardRouter.get('/codes-promo/export-csv', async (c) => {
       p.usage_actuel ?? 0,
       p.actif ? 'Oui' : 'Non',
       p.created_at ?? ''
-    ].map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')
+    // S3-03 — neutralisation injection CSV : préfixer apostrophe si la valeur
+    // commence par =, +, -, @ (formule tableur Excel/LibreOffice).
+    ].map(v => {
+      const s = String(v ?? '').replace(/"/g, '""')
+      const safe = /^[=+\-@]/.test(s) ? `'${s}` : s
+      return `"${safe}"`
+    }).join(',')
   })
 
   const csv = [headers.join(','), ...rows].join('\n')
