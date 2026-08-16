@@ -13,7 +13,7 @@
 import { Hono } from 'hono'
 import type { Env } from '../types/database'
 import { createSupabaseAdminClient } from '../lib/supabase'
-import { checkRateLimit, setSecurityHeaders } from '../lib/security'
+import { checkRateLimit, setSecurityHeaders, timingSafeEqual } from '../lib/security'
 import { sendEmail } from '../lib/brevo'
 
 export const newsletterRouter = new Hono<{ Bindings: Env }>()
@@ -68,8 +68,10 @@ newsletterRouter.post('/envoyer', async (c) => {
   setSecurityHeaders(c)
 
   // ── Authentification admin
+  // BUG-03 CORRIGÉ — remplace !== par timingSafeEqual() évitant la timing attack
+  // (comparaison caractère-à-caractère court-circuitée avec !==)
   const secret = c.req.header('X-Admin-Secret')
-  if (!c.env.ADMIN_WEBHOOK_SECRET || !secret || secret !== c.env.ADMIN_WEBHOOK_SECRET) {
+  if (!c.env.ADMIN_WEBHOOK_SECRET || !secret || !timingSafeEqual(secret, c.env.ADMIN_WEBHOOK_SECRET)) {
     return c.json({ error: 'Non autorisé.' }, 401)
   }
 

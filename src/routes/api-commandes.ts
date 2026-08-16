@@ -154,7 +154,9 @@ commandesRouter.post('/', async (c) => {
 
   const ip = c.req.header('CF-Connecting-IP') ?? 'unknown'
 
-  const rateLimit = await checkRateLimit(`commande:${ip}`, 10, 60000)
+  // BUG-08/S4-01 CORRIGÉ — passage de c.env.KV_CACHE pour rate limiting KV distribué
+  // (sans ce 3e arg, le rate limit est en Map mémoire locale par isolate → non distribué)
+  const rateLimit = await checkRateLimit(`commande:${ip}`, 10, 60000, c.env.KV_CACHE)
   if (!rateLimit.allowed) {
     return c.json({ error: 'Trop de requêtes. Veuillez patienter avant de réessayer.' }, 429)
   }
@@ -624,7 +626,8 @@ commandesRouter.post('/valider-promo', async (c) => {
   setSecurityHeaders(c)
 
   const ip = c.req.header('CF-Connecting-IP') ?? 'unknown'
-  const rateLimit = await checkRateLimit(`promo-check:${ip}`, 20, 60000)
+  // BUG-08/S4-01 CORRIGÉ — passage de c.env.KV_CACHE pour rate limiting KV distribué
+  const rateLimit = await checkRateLimit(`promo-check:${ip}`, 20, 60000, c.env.KV_CACHE)
   if (!rateLimit.allowed) return c.json({ error: 'Trop de tentatives. Réessayez dans une minute.' }, 429)
 
   let body: { tenant_id?: string; slug?: string; code?: string; sous_total?: number }

@@ -35,7 +35,7 @@
 import { Hono } from 'hono'
 import type { Env } from '../types/database'
 import { createSupabaseAdminClient } from '../lib/supabase'
-import { setSecurityHeaders, timingSafeEqual } from '../lib/security'
+import { setSecurityHeaders, timingSafeEqual, checkRateLimit } from '../lib/security'
 import { formaterDate, SLA_ADMIN_HEURES, FENETRE_ACCES_HEURES } from '../lib/paiement'
 import { chargerPlan } from '../lib/plans'
 import { notifierPaiementConfirme, notifierPaiementRejete } from '../lib/whatsapp'
@@ -695,6 +695,16 @@ adminPaiementsRouter.get('/suppressions', async (c) => {
 // Exécute la suppression définitive : soft-delete tenants + deleteUser Auth.
 // Conditions : suppression_prevue_le doit être passée (sinon 422).
 adminPaiementsRouter.post('/suppressions/:tenant_id/executer', async (c) => {
+  // A-07 CORRIGÉ — Rate limiting : max 10 suppressions/heure par tenant_id admin.
+  // La route est déjà protégée par X-Admin-Secret (middleware global du router),
+  // mais une boucle d'appels accidentels ou malveillants pourrait provoquer des
+  // suppressions irréversibles répétées. On limite à 10/h pour la route entière.
+  const ip = c.req.header('CF-Connecting-IP') ?? 'unknown'
+  const rlSuppress = await checkRateLimit(`admin-suppress:${ip}`, 10, 3600000, c.env.KV_CACHE)
+  if (!rlSuppress.allowed) {
+    return c.json({ error: 'Trop de suppressions en peu de temps. Réessayez dans une heure.' }, 429)
+  }
+
   const tenantId = c.req.param('tenant_id')
   if (!tenantId) return c.json({ error: 'tenant_id requis.' }, 422)
 
