@@ -102,11 +102,11 @@
 // sur ce type de builder.
 
 import { Hono } from 'hono'
-import { getCookie } from 'hono/cookie'
+import { getCookie, setCookie } from 'hono/cookie'
 import { createClient } from '@supabase/supabase-js'
 import type { Env } from '../types/database'
 import { createSupabaseClient, createSupabaseClientWithToken, createSupabaseAdminClient } from '../lib/supabase'
-import { setSecurityHeaders, checkRateLimit, hashSessionKey } from '../lib/security'
+import { setSecurityHeaders, checkRateLimit, hashSessionKey, timingSafeEqual, generateCspNonce } from '../lib/security'
 import { genererMessageLivreur, genererLienWhatsApp, envoyerNotificationWhatsApp } from '../lib/whatsapp'
 import { verifierAccesTenant } from '../lib/acces-tenant'
 import { chargerPlan } from '../lib/plans'
@@ -119,14 +119,46 @@ const dashboardRouter = new Hono<{ Bindings: Env }>()
 
 const ACCESS_TOKEN_COOKIE = 'sb-access-token'
 
+// ── Nom du cookie CSRF (non-httpOnly, lisible par JS) ──────────────────────
+const CSRF_COOKIE = 'csrf-token'
+
+// ── Middleware CSRF double-submit cookie (S1-04) ────────────────────────────
+// Pattern : un cookie non-httpOnly `csrf-token` est émis automatiquement sur
+// toute requête GET (lu par le JS frontend). Sur les opérations d'écriture
+// (POST/PATCH/PUT/DELETE), le header `X-CSRF-Token` doit correspondre au
+// cookie via comparaison timing-safe (timingSafeEqual). Les requêtes Bearer
+// (API mobile/clients API) sont exemptées — elles n'ont pas de cookie.
+//
+// Niveau de protection :
+//   1. X-Requested-With: XMLHttpRequest (couche existante — conservée)
+//   2. Double-submit cookie csrf-token (S1-04 — couche ajoutée)
+// Un attaquant CSRF ne peut pas lire le cookie csrf-token (cross-origin) ni
+// le poser dans le header X-CSRF-Token sans accès JS à la page.
 dashboardRouter.use('*', async (c, next) => {
   const method = c.req.method.toUpperCase()
+
+  // GET / HEAD / OPTIONS : émettre ou renouveler le cookie CSRF si absent
   if (!['POST', 'PATCH', 'PUT', 'DELETE'].includes(method)) {
+    const existingCsrf = getCookie(c, CSRF_COOKIE)
+    if (!existingCsrf) {
+      // Générer un token CSRF aléatoire (16 octets = 128 bits d'entropie)
+      const csrfToken = generateCspNonce()
+      setCookie(c, CSRF_COOKIE, csrfToken, {
+        httpOnly: false,      // intentionnellement lisible par JS (double-submit pattern)
+        secure: true,
+        sameSite: 'Strict',
+        path: '/',
+        maxAge: 86400         // 24h — même durée que la session dashboard
+      })
+    }
     return next()
   }
+
+  // Requêtes Bearer (API mobile/clients API) — exemptées du CSRF cookie
   const hasBearerToken = c.req.header('Authorization')?.startsWith('Bearer ')
   if (hasBearerToken) return next()
 
+  // Couche 1 : X-Requested-With (protection de base existante)
   const xRequestedWith = c.req.header('X-Requested-With')
   if (xRequestedWith !== 'XMLHttpRequest') {
     return c.json({
@@ -134,6 +166,18 @@ dashboardRouter.use('*', async (c, next) => {
       code: 'CSRF_PROTECTION'
     }, 403)
   }
+
+  // Couche 2 : double-submit cookie CSRF (S1-04)
+  const cookieCsrf = getCookie(c, CSRF_COOKIE)
+  const headerCsrf = c.req.header('X-CSRF-Token')
+
+  if (!cookieCsrf || !headerCsrf || !timingSafeEqual(cookieCsrf, headerCsrf)) {
+    return c.json({
+      error: 'Requête refusée. Token CSRF invalide ou manquant (X-CSRF-Token).',
+      code: 'CSRF_TOKEN_MISMATCH'
+    }, 403)
+  }
+
   return next()
 })
 

@@ -66,12 +66,23 @@ function heuresRestantes(isoFin) {
   return Math.ceil((new Date(isoFin).getTime() - Date.now()) / 3600000);
 }
 
+// S1-04 — Lecture cookie CSRF (non-httpOnly) pour double-submit pattern
+function getCsrfTokenPaiement() {
+  const match = document.cookie.match(/(?:^|;)\s*csrf-token=([^;]+)/);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
 function apiCallPaiement(path, opts = {}) {
   const fetchFn = window.fetchAvecSession || fetch;
+  const method = (opts.method || 'GET').toUpperCase();
+  const isMutating = ['POST', 'PATCH', 'PUT', 'DELETE'].includes(method);
+  const csrfToken = isMutating ? getCsrfTokenPaiement() : null;
+
   return fetchFn(PAIEMENT_API + path, {
     credentials: 'include',
     headers: {
       'X-Requested-With': 'XMLHttpRequest',
+      ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {}),
       ...((opts.body && !(opts.body instanceof FormData))
         ? { 'Content-Type': 'application/json' }
         : {}),

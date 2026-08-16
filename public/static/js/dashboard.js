@@ -49,8 +49,34 @@ const JOURS_LABELS = {
 // ==============================
 // WRAPPER FETCH AVEC SESSION AUTO-RAFRAÎCHIE
 // ==============================
+
+// S1-04 — Lit le cookie CSRF (non-httpOnly) pour le double-submit pattern.
+// Le cookie `csrf-token` est posé par le middleware serveur sur chaque GET.
+function getCsrfToken() {
+  const match = document.cookie.match(/(?:^|;)\s*csrf-token=([^;]+)/);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
+// dashFetch injecte automatiquement X-CSRF-Token sur les méthodes mutantes
+// (POST, PATCH, PUT, DELETE) via le cookie csrf-token (double-submit CSRF).
 function dashFetch(url, opts = {}) {
   const fetchFn = window.fetchAvecSession || fetch;
+  const method = (opts.method || 'GET').toUpperCase();
+  const isMutating = ['POST', 'PATCH', 'PUT', 'DELETE'].includes(method);
+
+  if (isMutating) {
+    const csrfToken = getCsrfToken();
+    if (csrfToken) {
+      opts = {
+        ...opts,
+        headers: {
+          'X-CSRF-Token': csrfToken,
+          ...(opts.headers || {})
+        }
+      };
+    }
+  }
+
   return fetchFn(url, { credentials: 'include', ...opts });
 }
 
