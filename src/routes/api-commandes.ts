@@ -57,6 +57,8 @@ import { createSupabaseClient, createSupabaseClientWithToken, createSupabaseAdmi
 import { sendFcmToTenant } from '../lib/fcm'
 // R3 — verifyRestaurantAuth centralisée dans lib/auth.ts
 import { verifyRestaurantAuth } from '../lib/auth'
+// A-08 — helper partagé pour UPDATE statut + historique
+import { mettreAJourStatutCommande, STATUTS_COMMANDE_VALIDES } from '../lib/commandes'
 
 const commandesRouter = new Hono<{ Bindings: Env }>()
 
@@ -522,13 +524,13 @@ commandesRouter.patch('/:id/statut', async (c) => {
   let body: { statut?: string; livreur_id?: string; note?: string }
   try { body = await c.req.json() } catch { return c.json({ error: 'JSON invalide.' }, 400) }
 
-  const statutsValides = ['confirmee', 'en_preparation', 'en_livraison', 'livree', 'annulee']
-  if (!body.statut || !statutsValides.includes(body.statut)) {
+  if (!body.statut || !(STATUTS_COMMANDE_VALIDES as readonly string[]).includes(body.statut)) {
     return c.json({ error: 'Statut invalide.' }, 422)
   }
 
   const adminClient = createSupabaseAdminClient(c.env)
 
+  // Lecture initiale : seuls id et statut requis (ancien statut pour historique)
   const { data: commande, error: fetchError } = await adminClient
     .from('commandes')
     .select('id, statut')
@@ -539,37 +541,19 @@ commandesRouter.patch('/:id/statut', async (c) => {
 
   if (fetchError || !commande) return c.json({ error: 'Commande introuvable.' }, 404)
 
-  const now = new Date().toISOString()
+  // A-08 — logique UPDATE + historique centralisée dans lib/commandes.ts
+  const result = await mettreAJourStatutCommande(adminClient, {
+    commandeId,
+    tenantId: auth.tenant_id,
+    statut: body.statut as any,
+    ancienStatut: commande.statut,
+    livreurId: body.livreur_id ?? null,
+    note: body.note ?? null
+  })
 
-  const updateData: any = { statut: body.statut, updated_at: now }
-  if (body.livreur_id) updateData.livreur_id = body.livreur_id
-
-  // B-CMD-02 — alignement sur api-dashboard.ts (même correction que B-DASH-04) :
-  // .is('deleted_at', null) + .select('id') + vérification rows.
-  const { data: cmdUpdatedRows, error: updateError } = await adminClient
-    .from('commandes')
-    .update(updateData)
-    .eq('id', commandeId)
-    .eq('tenant_id', auth.tenant_id)
-    .is('deleted_at', null)
-    .select('id')
-
-  if (updateError) return c.json({ error: 'Erreur mise à jour statut.', detail: updateError.message }, 500)
-  if (!cmdUpdatedRows || cmdUpdatedRows.length === 0) {
-    return c.json({ error: 'Commande introuvable ou non modifiable.' }, 404)
+  if (!result.success) {
+    return c.json({ error: result.error }, result.status as any ?? 500)
   }
-
-  await adminClient
-    .from('commandes_historique')
-    .insert({
-      id: crypto.randomUUID(),
-      commande_id: commandeId,
-      ancien_statut: commande.statut,
-      nouveau_statut: body.statut,
-      timestamp: now,
-      source: 'restaurant',
-      note: body.note ?? null
-    })
 
   return c.json({ success: true, statut: body.statut })
 })

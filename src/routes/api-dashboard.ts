@@ -116,6 +116,8 @@ import { envoyerEmailSuppressionDemande, envoyerEmailAnnulationSuppression, esca
 import { validerMimeImageUnifie as validerMimeImage } from '../lib/validation'
 // R3 — centralisation des helpers d'auth dans lib/auth.ts
 import { extractToken, verifyAuth, verifyAuthOnboarding } from '../lib/auth'
+// A-08 — helper partagé pour UPDATE statut + historique
+import { mettreAJourStatutCommande, STATUTS_COMMANDE_VALIDES } from '../lib/commandes'
 
 const dashboardRouter = new Hono<{ Bindings: Env }>()
 
@@ -300,13 +302,12 @@ dashboardRouter.patch('/commandes/:id/statut', async (c) => {
   let body: { statut?: string; livreur_id?: string; note?: string }
   try { body = await c.req.json() } catch { return c.json({ error: 'JSON invalide.' }, 400) }
 
-  const statutsValides = ['confirmee', 'en_preparation', 'en_livraison', 'livree', 'annulee']
-  if (!body.statut || !statutsValides.includes(body.statut)) {
+  if (!body.statut || !(STATUTS_COMMANDE_VALIDES as readonly string[]).includes(body.statut)) {
     return c.json({ error: 'Statut invalide.' }, 422)
   }
 
+  // SELECT enrichi (dashboard) : champs nécessaires pour le message WhatsApp livreur
   const supabase = createSupabaseClientWithToken(c.env, auth.token)
-
   const { data: commande, error: fetchError } = await supabase
     .from('commandes')
     .select('id, statut, client_nom, client_telephone, client_adresse, client_latitude, client_longitude, items_json, montant_total, frais_livraison, token_suivi, livreur_id')
@@ -317,38 +318,21 @@ dashboardRouter.patch('/commandes/:id/statut', async (c) => {
 
   if (fetchError || !commande) return c.json({ error: 'Commande introuvable.' }, 404)
 
-  const now = new Date().toISOString()
-
-  const updateData: any = { statut: body.statut, updated_at: now }
-  if (body.livreur_id) updateData.livreur_id = body.livreur_id
-
-  // B-DASH-04 — fix session-5 : ajout de .is('deleted_at', null) (cohérence avec le SELECT
-  // de vérification juste au-dessus) + .select('id') + vérification rows affectées.
-  const { data: commandeUpdatedRows, error: updateError } = await supabase
-    .from('commandes')
-    .update(updateData)
-    .eq('id', commandeId)
-    .eq('tenant_id', auth.tenant_id)
-    .is('deleted_at', null)
-    .select('id')
-
-  if (updateError) return c.json({ error: 'Erreur mise à jour statut.', detail: updateError.message }, 500)
-  if (!commandeUpdatedRows || commandeUpdatedRows.length === 0) {
-    return c.json({ error: 'Commande introuvable ou non modifiable.' }, 404)
-  }
-
   const adminClient = createSupabaseAdminClient(c.env)
-  await adminClient
-    .from('commandes_historique')
-    .insert({
-      id: crypto.randomUUID(),
-      commande_id: commandeId,
-      ancien_statut: commande.statut,
-      nouveau_statut: body.statut,
-      timestamp: now,
-      source: 'restaurant',
-      note: body.note ?? null
-    })
+
+  // A-08 — logique UPDATE + historique centralisée dans lib/commandes.ts
+  const result = await mettreAJourStatutCommande(adminClient, {
+    commandeId,
+    tenantId: auth.tenant_id,
+    statut: body.statut as any,
+    ancienStatut: commande.statut,
+    livreurId: body.livreur_id ?? null,
+    note: body.note ?? null
+  })
+
+  if (!result.success) {
+    return c.json({ error: result.error }, result.status as any ?? 500)
+  }
 
   let lienWhatsappLivreur: string | null = null
   const livreurIdCible = body.livreur_id ?? null
