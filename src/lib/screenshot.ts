@@ -51,8 +51,11 @@ export async function capturerScreenshotBoutique(
   const thumioUrl = `https://image.thum.io/${segments.join('/')}/${cible}`
 
   try {
+    // S9-03 — Timeout explicite 15s sur thum.io (service tiers externe).
+    // Sans timeout, un service lent ou indisponible bloque le cron entier.
     const res = await fetch(thumioUrl, {
-      headers: { 'User-Agent': 'MonMenu-ScreenshotBot/1.0' }
+      headers: { 'User-Agent': 'MonMenu-ScreenshotBot/1.0' },
+      signal: AbortSignal.timeout(15000)
     })
 
     if (!res.ok) {
