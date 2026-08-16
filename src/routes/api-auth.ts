@@ -147,7 +147,7 @@ authRouter.post('/login', async (c) => {
   setSecurityHeaders(c)
   const ip = c.req.header('CF-Connecting-IP') ?? 'unknown'
 
-  const rateLimit = await checkRateLimit(`auth_login:${ip}`, 5, 900000)
+  const rateLimit = await checkRateLimit(`auth_login:${ip}`, 5, 900000, c.env.KV_CACHE)
   if (!rateLimit.allowed) {
     return c.json({ error: 'Trop de tentatives de connexion. Réessayez dans 15 minutes.' }, 429)
   }
@@ -263,7 +263,7 @@ authRouter.post('/register', async (c) => {
   setSecurityHeaders(c)
   const ip = c.req.header('CF-Connecting-IP') ?? 'unknown'
 
-  const rateLimit = await checkRateLimit(`auth_register:${ip}`, 15, 3600000)
+  const rateLimit = await checkRateLimit(`auth_register:${ip}`, 15, 3600000, c.env.KV_CACHE)
   if (!rateLimit.allowed) {
     return c.json({ error: 'Trop de tentatives. Réessayez dans une heure.' }, 429)
   }
@@ -537,7 +537,7 @@ authRouter.post('/forgot-password', async (c) => {
   setSecurityHeaders(c)
   const ip = c.req.header('CF-Connecting-IP') ?? 'unknown'
 
-  const rateLimit = await checkRateLimit(`auth_forgot-pwd:${ip}`, 5, 3600000)
+  const rateLimit = await checkRateLimit(`auth_forgot-pwd:${ip}`, 5, 3600000, c.env.KV_CACHE)
   if (!rateLimit.allowed) {
     return c.json({ error: 'Trop de tentatives. Réessayez plus tard.' }, 429)
   }
@@ -554,7 +554,7 @@ authRouter.post('/forgot-password', async (c) => {
 
   // Rate limit secondaire PAR EMAIL, en plus de celui par IP ci-dessus —
   // empêche un attaquant de cibler un compte précis en changeant d'IP.
-  const rateLimitEmail = await checkRateLimit(`auth_forgot-pwd-email:${emailNormalise}`, 5, 3600000)
+  const rateLimitEmail = await checkRateLimit(`auth_forgot-pwd-email:${emailNormalise}`, 5, 3600000, c.env.KV_CACHE)
   if (!rateLimitEmail.allowed) {
     return c.json({ message: "Si ce compte existe, un code de récupération a été envoyé." })
   }
@@ -580,7 +580,7 @@ authRouter.post('/forgot-password', async (c) => {
 authRouter.post('/verify-otp', async (c) => {
   setSecurityHeaders(c)
   const ip = c.req.header('CF-Connecting-IP') ?? 'unknown'
-  const rateLimit = await checkRateLimit(`verify-otp:${ip}`, 10, 900000)
+  const rateLimit = await checkRateLimit(`verify-otp:${ip}`, 10, 900000, c.env.KV_CACHE)
   if (!rateLimit.allowed) return c.json({ error: 'Trop de tentatives. Réessayez dans 15 minutes.' }, 429)
 
   let body: { email?: string; token?: string }
@@ -598,7 +598,7 @@ authRouter.post('/verify-otp', async (c) => {
   // plus résistant au brute force qu'un code à 6 (10^8 vs 10^6
   // combinaisons), mais on limite aussi les tentatives par compte ciblé,
   // pas seulement par IP (qui peut être contournée).
-  const rateLimitEmail = await checkRateLimit(`verify-otp-email:${emailNormalise}`, 10, 900000)
+  const rateLimitEmail = await checkRateLimit(`verify-otp-email:${emailNormalise}`, 10, 900000, c.env.KV_CACHE)
   if (!rateLimitEmail.allowed) {
     return c.json({ error: 'Trop de tentatives pour ce compte. Réessayez dans 15 minutes.' }, 429)
   }
