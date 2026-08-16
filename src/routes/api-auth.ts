@@ -676,6 +676,24 @@ authRouter.post('/reset-password', async (c) => {
   // admin.updateUserById(), qui modifie directement l'utilisateur ciblé
   // via son ID (déjà vérifié juste au-dessus par getUser(token)), sans
   // dépendre d'un état de session côté client.
+  // S1-03 — Vérification que le nouveau mot de passe est différent de l'ancien.
+  // Technique : tentative de signInWithPassword(email, nouveauMdp) AVANT l'update.
+  // Si la connexion réussit → le nouveau mot de passe est identique à l'actuel → refus 422.
+  // Si elle échoue (Invalid credentials) → mots de passe différents → on continue.
+  // L'email est garanti non-null ici car getUser(token) vient de retourner cet utilisateur.
+  if (userData.user.email) {
+    const supabaseFrais = createSupabaseClient(c.env)
+    const { error: samePasswordCheckError } = await supabaseFrais.auth.signInWithPassword({
+      email: userData.user.email,
+      password: body.password
+    })
+    if (!samePasswordCheckError) {
+      // Connexion réussie avec le "nouveau" mot de passe → il est identique à l'actuel
+      return c.json({ error: 'Le nouveau mot de passe doit être différent du mot de passe actuel.' }, 422)
+    }
+    // Erreur auth attendue (Invalid credentials) → mots de passe différents, on continue
+  }
+
   const adminClient = createSupabaseAdminClient(c.env)
   const { error: updateError } = await adminClient.auth.admin.updateUserById(
     userData.user.id,
