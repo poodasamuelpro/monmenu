@@ -411,10 +411,15 @@ authRouter.post('/register', async (c) => {
 
   if (pdvInsertError) {
     console.error('Erreur création PDV (register):', pdvInsertError.message)
-    // Rollback soft : marquer le tenant comme supprimé pour éviter un fantôme
+    // BUG-11 CORRIGÉ — Rollback complet : soft-delete tenant + deleteUser Auth
+    // (sans deleteUser, un user orphelin reste dans auth.users — non facturable
+    // mais gên exploitable pour un re-register de cet email)
     try {
       await adminClient.from('tenants').update({ deleted_at: new Date().toISOString() }).eq('id', newTenant.id)
     } catch (e) { console.error('Rollback tenant échoué:', e) }
+    try {
+      await adminClient.auth.admin.deleteUser(authData.user.id)
+    } catch (e) { console.error('Rollback deleteUser Auth échoué (PDV):', e) }
     return c.json({ error: 'Erreur lors de la création du point de vente. Veuillez réessayer.' }, 500)
   }
 
@@ -429,10 +434,13 @@ authRouter.post('/register', async (c) => {
 
   if (utInsertError) {
     console.error('Erreur création utilisateurs_tenant (register):', utInsertError.message)
-    // Rollback soft du tenant
+    // BUG-11 CORRIGÉ — Rollback complet : soft-delete tenant + deleteUser Auth
     try {
       await adminClient.from('tenants').update({ deleted_at: new Date().toISOString() }).eq('id', newTenant.id)
     } catch (e) { console.error('Rollback tenant échoué:', e) }
+    try {
+      await adminClient.auth.admin.deleteUser(authData.user.id)
+    } catch (e) { console.error('Rollback deleteUser Auth échoué (utilisateurs_tenant):', e) }
     return c.json({ error: 'Erreur lors de l\'association du compte au restaurant. Veuillez réessayer.' }, 500)
   }
 

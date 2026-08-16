@@ -584,15 +584,29 @@ paiementRouter.get('/historique', async (c) => {
     return c.json({ error: 'Erreur lors de la récupération de l\'historique.' }, 500)
   }
 
-  // MIGRATION — abonnements.plan_id est désormais l'UUID Supabase natif,
-  // résolu directement via chargerPlan() (plus de résolution D1).
-  const abonnementsAvecNomPlan = await Promise.all(
-    (abonnements ?? []).map(async (ab: any) => {
-      if (!ab.plan_id) return { ...ab, plan_nom: null }
-      const plan = await chargerPlan(c.env, ab.plan_id)
-      return { ...ab, plan_nom: plan?.nom ?? null, plan_prix_mensuel: plan?.prix_mensuel ?? null }
-    })
-  )
+  // BUG-12 CORRIGÉ — N+1 : chargerPlan() appelé une fois par abonnement.
+  // Remplacé par une requête batch .in(planIds) pour récupérer tous les plans
+  // en un seul aller-retour DB (quelle que soit la taille de la page).
+  const planIds = [...new Set((abonnements ?? []).map((ab: any) => ab.plan_id).filter(Boolean))]
+  let planMap = new Map<string, { nom: string; prix_mensuel: number | null }>()
+  if (planIds.length > 0) {
+    try {
+      const { data: plans } = await createSupabaseAdminClient(c.env)
+        .from('plans')
+        .select('id, nom, prix_mensuel')
+        .in('id', planIds)
+      if (plans) {
+        for (const p of plans) planMap.set(p.id, { nom: p.nom, prix_mensuel: p.prix_mensuel })
+      }
+    } catch (planErr) {
+      console.warn('[PAIEMENT/historique] Erreur chargement plans batch:', planErr)
+    }
+  }
+
+  const abonnementsAvecNomPlan = (abonnements ?? []).map((ab: any) => {
+    const plan = ab.plan_id ? planMap.get(ab.plan_id) : null
+    return { ...ab, plan_nom: plan?.nom ?? null, plan_prix_mensuel: plan?.prix_mensuel ?? null }
+  })
 
   return c.json({
     abonnements: abonnementsAvecNomPlan,

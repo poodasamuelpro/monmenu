@@ -1885,6 +1885,16 @@ dashboardRouter.post('/upload-image', async (c) => {
     }, 429)
   }
 
+  // S9-01 CORRIGÉ — Vérification Content-Length avant lecture du body multipart.
+  // Évite de lire un body géant en mémoire si le client annonce > limite.
+  // La vérification file.size reste le contrôle définitif (Content-Length peut être absent/falsifié).
+  const MAX_SIZE = 5 * 1024 * 1024
+  const contentLengthHdr = parseInt(c.req.header('Content-Length') ?? '0', 10)
+  if (contentLengthHdr > MAX_SIZE * 1.1) {
+    // 10% de marge pour les en-têtes multipart — refus immédiat
+    return c.json({ error: 'Fichier trop volumineux (max 5 MB).' }, 413)
+  }
+
   let formData: FormData
   try {
     formData = await c.req.formData()
@@ -1900,7 +1910,6 @@ dashboardRouter.post('/upload-image', async (c) => {
     return c.json({ error: 'Format non supporté. Utilisez JPEG, PNG, WebP ou GIF.' }, 415)
   }
 
-  const MAX_SIZE = 5 * 1024 * 1024
   if (file.size > MAX_SIZE) {
     return c.json({ error: 'Fichier trop volumineux (max 5 MB).' }, 413)
   }
