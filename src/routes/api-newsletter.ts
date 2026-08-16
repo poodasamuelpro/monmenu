@@ -12,7 +12,7 @@
 
 import { Hono } from 'hono'
 import type { Env } from '../types/database'
-import { createSupabaseAdminClient } from '../lib/supabase'
+import { createSupabaseAdminClient, createSupabaseClient } from '../lib/supabase'
 import { checkRateLimit, setSecurityHeaders, timingSafeEqual } from '../lib/security'
 import { sendEmail } from '../lib/brevo'
 
@@ -67,11 +67,38 @@ newsletterRouter.post('/', async (c) => {
 newsletterRouter.post('/envoyer', async (c) => {
   setSecurityHeaders(c)
 
-  // ── Authentification admin
-  // BUG-03 CORRIGÉ — remplace !== par timingSafeEqual() évitant la timing attack
-  // (comparaison caractère-à-caractère court-circuitée avec !==)
+  // ── Authentification admin (S2-03) — deux voies (OR logique) :
+  //   Voie 1 : X-Admin-Secret valide (webhook/cron/script automatisé)
+  //   Voie 2 : Bearer JWT Supabase + email dans table `public.admins`
   const secret = c.req.header('X-Admin-Secret')
-  if (!c.env.ADMIN_WEBHOOK_SECRET || !secret || !timingSafeEqual(secret, c.env.ADMIN_WEBHOOK_SECRET)) {
+  const authHeader = c.req.header('Authorization') ?? ''
+  const bearerToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
+
+  let adminAuthentifie = false
+
+  // Voie 1 : secret
+  if (secret && c.env.ADMIN_WEBHOOK_SECRET && timingSafeEqual(secret, c.env.ADMIN_WEBHOOK_SECRET)) {
+    adminAuthentifie = true
+  }
+
+  // Voie 2 : JWT + table admins
+  if (!adminAuthentifie && bearerToken) {
+    try {
+      const supabase = createSupabaseClient(c.env)
+      const { data: userData } = await supabase.auth.getUser(bearerToken)
+      if (userData?.user?.email) {
+        const adminClient = createSupabaseAdminClient(c.env)
+        const { data: adminRow } = await adminClient
+          .from('admins')
+          .select('id')
+          .eq('email', userData.user.email)
+          .maybeSingle()
+        if (adminRow) adminAuthentifie = true
+      }
+    } catch { /* fail-closed */ }
+  }
+
+  if (!adminAuthentifie) {
     return c.json({ error: 'Non autorisé.' }, 401)
   }
 

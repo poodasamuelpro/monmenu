@@ -34,7 +34,7 @@
 
 import { Hono } from 'hono'
 import type { Env } from '../types/database'
-import { createSupabaseAdminClient } from '../lib/supabase'
+import { createSupabaseAdminClient, createSupabaseClient } from '../lib/supabase'
 import { setSecurityHeaders, timingSafeEqual, checkRateLimit } from '../lib/security'
 import { formaterDate, SLA_ADMIN_HEURES, FENETRE_ACCES_HEURES } from '../lib/paiement'
 import { chargerPlan } from '../lib/plans'
@@ -44,22 +44,51 @@ import { envoyerEmailPaiementConfirme, envoyerEmailPaiementRejete } from '../lib
 
 const adminPaiementsRouter = new Hono<{ Bindings: Env }>()
 
-// ── Middleware d'authentification admin ─────────────────────────────────────
+// ── Helper S2-03 : vérifier qu'un utilisateur Supabase est admin ──────────
+// Source de vérité : table `public.admins` (email). Fail-closed si table absente.
+async function isSupabaseAdmin(env: Env, token: string): Promise<boolean> {
+  try {
+    const supabase = createSupabaseClient(env)
+    const { data: userData, error: userError } = await supabase.auth.getUser(token)
+    if (userError || !userData.user?.email) return false
+
+    const adminClient = createSupabaseAdminClient(env)
+    const { data, error } = await adminClient
+      .from('admins')
+      .select('id')
+      .eq('email', userData.user.email)
+      .maybeSingle()
+    return !error && !!data
+  } catch {
+    return false
+  }
+}
+
+// ── Middleware d'authentification admin (S2-03) ─────────────────────────────
+// Deux voies d'accès (OR logique) :
+//   Voie 1 : X-Admin-Secret valide (webhooks, cron, scripts automatisés)
+//   Voie 2 : Bearer JWT Supabase + email présent dans table `public.admins`
+// Les deux voies nécessitent ADMIN_WEBHOOK_SECRET configuré (voie 1) ou
+// une table `admins` peuplée (voie 2). Fail-closed si rien n'est configuré.
 adminPaiementsRouter.use('*', async (c, next) => {
   setSecurityHeaders(c)
 
+  // Voie 1 : X-Admin-Secret (webhook/cron — pas de JWT navigateur)
   const secret = c.req.header('X-Admin-Secret')
-
-  if (!c.env.ADMIN_WEBHOOK_SECRET) {
-    return c.json({ error: 'Administration non configurée.' }, 503)
+  if (secret && c.env.ADMIN_WEBHOOK_SECRET && timingSafeEqual(secret, c.env.ADMIN_WEBHOOK_SECRET)) {
+    return next()
   }
 
-  // A-7 (FINDING-23, session-7) — comparaison timing-safe (remplace !==)
-  if (!secret || !timingSafeEqual(secret, c.env.ADMIN_WEBHOOK_SECRET)) {
-    return c.json({ error: 'Non autorisé.' }, 401)
+  // Voie 2 : JWT Supabase + table admins (admin humain via interface)
+  const authHeader = c.req.header('Authorization') ?? ''
+  const bearerToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
+  if (bearerToken) {
+    const adminOk = await isSupabaseAdmin(c.env, bearerToken)
+    if (adminOk) return next()
   }
 
-  return next()
+  // Aucune voie valide
+  return c.json({ error: 'Non autorisé.' }, 401)
 })
 
 // ── GET /api/v1/admin/paiements ─────────────────────────────────────────────
