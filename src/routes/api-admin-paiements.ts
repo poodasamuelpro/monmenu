@@ -35,7 +35,7 @@
 import { Hono } from 'hono'
 import type { Env } from '../types/database'
 import { createSupabaseAdminClient } from '../lib/supabase'
-import { setSecurityHeaders } from '../lib/security'
+import { setSecurityHeaders, timingSafeEqual } from '../lib/security'
 import { formaterDate, SLA_ADMIN_HEURES, FENETRE_ACCES_HEURES } from '../lib/paiement'
 import { chargerPlan } from '../lib/plans'
 import { notifierPaiementConfirme, notifierPaiementRejete } from '../lib/whatsapp'
@@ -54,7 +54,8 @@ adminPaiementsRouter.use('*', async (c, next) => {
     return c.json({ error: 'Administration non configurée.' }, 503)
   }
 
-  if (!secret || secret !== c.env.ADMIN_WEBHOOK_SECRET) {
+  // A-7 (FINDING-23, session-7) — comparaison timing-safe (remplace !==)
+  if (!secret || !timingSafeEqual(secret, c.env.ADMIN_WEBHOOK_SECRET)) {
     return c.json({ error: 'Non autorisé.' }, 401)
   }
 

@@ -207,3 +207,15 @@ export function sanitizeSlug(input: string): string {
     .replace(/^-+|-+$/g, '')
     .slice(0, 50)
 }
+
+// ---- Comparaison timing-safe (A-7/FINDING-23, session-7) ----
+// Remplace l'égalité simple (secret !== envSecret) qui expose une timing attack
+// théorique permettant de deviner le secret caractère par caractère.
+export function timingSafeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false
+  const aBytes = new TextEncoder().encode(a)
+  const bBytes = new TextEncoder().encode(b)
+  let result = 0
+  for (let i = 0; i < aBytes.length; i++) result |= aBytes[i] ^ bBytes[i]
+  return result === 0
+}

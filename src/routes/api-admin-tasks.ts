@@ -19,7 +19,7 @@
 
 import { Hono } from 'hono'
 import type { Env } from '../types/database'
-import { setSecurityHeaders } from '../lib/security'
+import { setSecurityHeaders, timingSafeEqual } from '../lib/security'
 import { capturerScreenshotsQuotidiens } from './api-cron'
 
 const adminTasksRouter = new Hono<{ Bindings: Env }>()
@@ -35,7 +35,8 @@ adminTasksRouter.get('/screenshots', async (c) => {
     return c.json({ error: 'Tâche non configurée côté serveur.' }, 503)
   }
 
-  if (!secret || secret !== c.env.ADMIN_TASK_SECRET) {
+  // A-7 (FINDING-23, session-7) — comparaison timing-safe
+  if (!secret || !timingSafeEqual(secret, c.env.ADMIN_TASK_SECRET)) {
     return c.json({ error: 'Non autorisé.' }, 401)
   }
 
