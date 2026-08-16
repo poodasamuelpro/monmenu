@@ -8,9 +8,16 @@
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 
-// Cache module-level (Workers isolate — réinitialisé à chaque cold start)
-let _client: SupabaseClient | null = null
-let _adminClient: SupabaseClient | null = null
+// BUG-14 CORRIGÉ — Le cache singleton module-level (_client, _adminClient) est
+// supprimé. Dans Cloudflare Workers, une même isolate peut traiter plusieurs
+// requêtes concurrentes pendant sa durée de vie (warm start). Un singleton
+// partagé entre requêtes rend l'application vulnérable si setSession() est
+// appelé (risque de fuite de session entre requêtes). Par ailleurs, le singleton
+// est la cause probable du bug de login observé en production : après un cold
+// start, si la première requête initialise le client avec un état invalide
+// (ex: SUPABASE_URL/KEY non encore injectées), toutes les requêtes suivantes
+// héritent de ce client cassé jusqu'au prochain cold start.
+// Impact performance : négligeable — createClient() est léger (< 1ms).
 
 export type SupabaseEnv = {
   SUPABASE_URL: string
@@ -20,28 +27,26 @@ export type SupabaseEnv = {
 
 /**
  * Client Supabase ANON (utilisé pour les opérations publiques + JWT verification).
- * Supabase Auth + toutes les données applicatives via .from()
+ * Crée un nouveau client par requête — safe pour les Workers concurrents.
  */
 export function createSupabaseClient(env: SupabaseEnv): SupabaseClient {
-  if (!_client) {
-    _client = createClient(env.SUPABASE_URL, env.SUPABASE_ANON_KEY, {
-      auth: {
-        autoRefreshToken: false,
-        persistSession: false // Workers sont stateless
-      },
-      db: { schema: 'public' }
-    })
-  }
-  return _client
+  return createClient(env.SUPABASE_URL, env.SUPABASE_ANON_KEY, {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false // Workers sont stateless
+    },
+    db: { schema: 'public' }
+  })
 }
 
 /**
  * Client Supabase SERVICE ROLE (opérations privilegiées côté serveur uniquement).
  * JAMAIS exposé côté client.
+ * Crée un nouveau client par requête — safe pour les Workers concurrents.
  */
 export function createSupabaseAdminClient(env: SupabaseEnv): SupabaseClient {
-  if (!_adminClient && env.SUPABASE_SERVICE_ROLE_KEY) {
-    _adminClient = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
+  if (env.SUPABASE_SERVICE_ROLE_KEY) {
+    return createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
       auth: {
         autoRefreshToken: false,
         persistSession: false
@@ -49,8 +54,8 @@ export function createSupabaseAdminClient(env: SupabaseEnv): SupabaseClient {
       db: { schema: 'public' }
     })
   }
-  // Fallback sur anon si pas de service role key (dev local)
-  return _adminClient ?? createSupabaseClient(env)
+  // Fallback sur anon si pas de service role key (dev local sans secrets)
+  return createSupabaseClient(env)
 }
 
 /**
