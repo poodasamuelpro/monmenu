@@ -110,7 +110,7 @@ import { setSecurityHeaders, checkRateLimit, hashSessionKey } from '../lib/secur
 import { genererMessageLivreur, genererLienWhatsApp, envoyerNotificationWhatsApp } from '../lib/whatsapp'
 import { verifierAccesTenant } from '../lib/acces-tenant'
 import { chargerPlan } from '../lib/plans'
-import { envoyerEmailSuppressionDemande, envoyerEmailAnnulationSuppression } from '../lib/brevo'
+import { envoyerEmailSuppressionDemande, envoyerEmailAnnulationSuppression, escapeHtml } from '../lib/brevo'
 // B8 — session-5 : validerMimeImage migré vers lib/validation.ts (fonction partagée unifiée).
 // La fonction locale (Corr#12) est supprimée ici. Comportement identique : JPEG/PNG/GIF/WebP.
 import { validerMimeImageUnifie as validerMimeImage } from '../lib/validation'
@@ -2583,7 +2583,7 @@ dashboardRouter.post('/compte/demander-suppression', async (c) => {
 // Vérifie le token, confirme la suppression programmée.
 // NOTE : route GET volontaire (lien cliquable depuis l'email).
 dashboardRouter.get('/compte/confirmer-suppression', async (c) => {
-  setSecurityHeaders(c)
+  const nonce = setSecurityHeaders(c)
 
   const token = c.req.query('token')
   if (!token || token.length < 10) {
@@ -2652,13 +2652,24 @@ dashboardRouter.get('/compte/confirmer-suppression', async (c) => {
     console.warn('[Suppression/C5] Notification admin échouée (non bloquant):', notifErr?.message ?? notifErr)
   }
 
+  // BUG-10 CORRIGÉ — tenant.nom échappé via escapeHtml() pour prévenir XSS
+  // (un nom de restaurant contenant <script>...</script> aurait été interprété
+  // tel quel par le navigateur dans ce template HTML SSR).
+  // Le nonce CSP est injecté dans les éventuelles balises <script> (bonne pratique
+  // S3-02 en cours de migration — ce template n'en a pas, mais le pattern est posé).
+  const nomEchappeConf = escapeHtml(tenant.nom ?? tenant.slug)
+  const datePreviewStr = new Date(tenant.suppression_prevue_le!).toLocaleDateString('fr-FR')
+
   return c.html(`
     <!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8">
-    <title>Suppression confirmée — MonMenu</title></head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Suppression confirmée — MonMenu</title>
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'unsafe-inline';">
+    </head>
     <body style="font-family:sans-serif;max-width:480px;margin:40px auto;padding:20px">
       <h2>Suppression confirmée</h2>
-      <p>La suppression de votre compte <strong>${tenant.nom}</strong> est programmée pour le
-         <strong>${new Date(tenant.suppression_prevue_le!).toLocaleDateString('fr-FR')}</strong>.</p>
+      <p>La suppression de votre compte <strong>${nomEchappeConf}</strong> est programmée pour le
+         <strong>${escapeHtml(datePreviewStr)}</strong>.</p>
       <p>Vous pouvez annuler cette demande depuis votre tableau de bord avant cette date.</p>
     </body></html>
   `)
