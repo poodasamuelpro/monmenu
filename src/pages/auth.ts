@@ -10,7 +10,7 @@ import { renderHead } from '../components/head'
 // ==============================
 // PAGE CONNEXION
 // ==============================
-export function renderConnexionPage(nomProjet: string): string {
+export function renderConnexionPage(nomProjet: string, nonce: string = ''): string {
   return `${renderHead(
     `Connexion — ${nomProjet}`,
     `Accédez à votre tableau de bord restaurant ${nomProjet}.`,
@@ -78,7 +78,7 @@ export function renderConnexionPage(nomProjet: string): string {
     </p>
   </div>
 
-  <script>
+  <script nonce="${nonce}">
     function togglePassword() {
       const input = document.getElementById('login-password');
       const icon = document.getElementById('pwd-icon');
@@ -133,7 +133,7 @@ export function renderConnexionPage(nomProjet: string): string {
 // ==============================
 // PAGE CRÉATION DE COMPTE
 // ==============================
-export function renderCreerComptePage(nomProjet: string): string {
+export function renderCreerComptePage(nomProjet: string, nonce: string = ''): string {
   return `${renderHead(
     `Créer un compte — ${nomProjet}`,
     `Créez votre compte restaurant sur ${nomProjet} et commencez à recevoir des commandes en ligne.`,
@@ -262,7 +262,7 @@ export function renderCreerComptePage(nomProjet: string): string {
     </p>
   </div>
 
-  <script>
+  <script nonce="${nonce}">
     function updateSlug() {
       const nom = document.getElementById('reg-restaurant').value;
       const slug = nom

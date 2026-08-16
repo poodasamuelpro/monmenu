@@ -5,7 +5,7 @@ import { renderHead } from '../components/head'
 import { renderNav } from '../components/nav'
 import { renderFooter } from '../components/footer'
 
-export function renderTarifsPage(nomProjet: string): string {
+export function renderTarifsPage(nomProjet: string, nonce: string = ''): string {
   return `${renderHead(
     `Tarifs — ${nomProjet}`,
     'Tarifs transparents sans commission pour votre restaurant. Forfait mensuel ou annuel. Gratuit pour commencer.',
@@ -225,7 +225,7 @@ export function renderTarifsPage(nomProjet: string): string {
 
   ${renderFooter(nomProjet)}
   <script src="/static/js/main.js"></script>
-  <script>
+  <script nonce="${nonce}">
     let deviseCourante = 'FCFA';
     let periodeCourante = 'mensuel';
 

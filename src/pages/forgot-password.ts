@@ -16,7 +16,7 @@
 //     restent lisibles et ne débordent pas sur petit écran mobile.
 import { renderHead } from '../components/head'
 
-export function renderForgotPasswordPage(nomProjet: string): string {
+export function renderForgotPasswordPage(nomProjet: string, nonce: string = ''): string {
   return `${renderHead(
     `Mot de passe oublié — ${nomProjet}`,
     `Récupérez l'accès à votre tableau de bord ${nomProjet} via un code OTP envoyé par email.`,
@@ -136,7 +136,7 @@ export function renderForgotPasswordPage(nomProjet: string): string {
   </div>
 
   <script src="/static/js/main.js"></script>
-  <script>
+  <script nonce="${nonce}">
     let otpEmail = ''
     let otpAccessToken = ''
 

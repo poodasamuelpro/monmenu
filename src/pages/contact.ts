@@ -12,7 +12,7 @@ import { renderHead } from '../components/head'
 import { renderNav } from '../components/nav'
 import { renderFooter } from '../components/footer'
 
-export function renderContactPage(nomProjet: string, whatsappSupport: string = ''): string {
+export function renderContactPage(nomProjet: string, whatsappSupport: string = '', nonce: string = ''): string {
   const waNumber = whatsappSupport.replace(/[^0-9]/g, '')
   const waLink = waNumber
     ? `https://wa.me/${waNumber}?text=Bonjour%20${encodeURIComponent(nomProjet)}%2C%20j%27ai%20une%20question%20:`
@@ -153,7 +153,7 @@ export function renderContactPage(nomProjet: string, whatsappSupport: string = '
 
   ${renderFooter(nomProjet)}
   <script src="/static/js/main.js"></script>
-  <script>
+  <script nonce="${nonce}">
     async function submitContact(e) {
       e.preventDefault();
       const btn = document.getElementById('contact-btn');

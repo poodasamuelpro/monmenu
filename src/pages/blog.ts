@@ -13,7 +13,7 @@ export interface ArticleBlog {
   date_publication: string | null
 }
 
-export function renderBlogPage(nomProjet: string, articles: ArticleBlog[] = []): string {
+export function renderBlogPage(nomProjet: string, articles: ArticleBlog[] = [], nonce: string = ''): string {
   const categories = Array.from(new Set(articles.map(a => a.categorie))).sort()
 
   const formatDate = (iso: string | null) => {
@@ -105,7 +105,7 @@ export function renderBlogPage(nomProjet: string, articles: ArticleBlog[] = []):
 
   ${renderFooter(nomProjet)}
   <script src="/static/js/main.js"></script>
-  <script>
+  <script nonce="${nonce}">
     function filtrerArticles(cat) {
       document.querySelectorAll('#articles-grid article').forEach(a => {
         a.style.display = (cat === 'tous' || a.dataset.cat === cat) ? '' : 'none';

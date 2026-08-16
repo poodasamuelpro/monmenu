@@ -7,7 +7,7 @@
 // loadBoutiquesShowcase() construisaient leur HTML avec des
 // onerror="..." contenant des apostrophes mal échappées (\' au
 // lieu de \\'), ce qui cassait la syntaxe JS générée dans le
-// <script> final et empêchait TOUT le script de s'exécuter
+// <script nonce="${nonce}"> final et empêchait TOUT le script de s'exécuter
 // (erreur silencieuse en console) — donc les sections logos et
 // screenshots ne s'affichaient jamais, quel que soit le contenu
 // renvoyé par l'API. Corrigé en construisant les éléments via
@@ -19,7 +19,7 @@ import { renderHead, jsonLdOrganization, jsonLdWebSite } from '../components/hea
 import { renderNav } from '../components/nav'
 import { renderFooter } from '../components/footer'
 
-export function renderHomePage(nomProjet: string): string {
+export function renderHomePage(nomProjet: string, nonce: string = ''): string {
   const description = `${nomProjet} est la plateforme de commande en ligne pour les restaurants d'Afrique de l'Ouest et Centrale. Créez votre boutique en quelques minutes. Sans commission.`
 
   return `${renderHead(
@@ -416,7 +416,7 @@ export function renderHomePage(nomProjet: string): string {
   ${renderFooter(nomProjet)}
 
   <!-- Script pour charger les plans dynamiquement -->
-  <script>
+  <script nonce="${nonce}">
     async function loadPlans() {
       const container = document.getElementById('plans-container');
       try {
@@ -492,7 +492,7 @@ export function renderHomePage(nomProjet: string): string {
   <!-- + assignation directe de .onerror en JS (plus de HTML concaténé -->
   <!-- avec attribut onerror="..." qui nécessitait 3 niveaux -->
   <!-- d'échappement de guillemets et cassait tout le script). -->
-  <script>
+  <script nonce="${nonce}">
     async function loadPartenaires() {
       const container = document.getElementById('partenaires-container');
       const track = document.getElementById('partenaires-track');
@@ -569,7 +569,7 @@ export function renderHomePage(nomProjet: string): string {
   <!-- Script pour charger le carrousel des captures d'écran boutique -->
   <!-- CORRIGÉ — même approche : construction via document.createElement -->
   <!-- pour éliminer le HTML concaténé fragile. -->
-  <script>
+  <script nonce="${nonce}">
     async function loadBoutiquesShowcase() {
       const container = document.getElementById('boutiques-showcase-container');
       const track = document.getElementById('boutiques-showcase-track');

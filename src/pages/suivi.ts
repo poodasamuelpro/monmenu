@@ -1,7 +1,7 @@
 // src/pages/suivi.ts — FR uniquement, sans dark mode
 import { renderHead } from '../components/head'
 
-export function renderSuiviPage(token: string, nomProjet: string, tenantSlug?: string): string {
+export function renderSuiviPage(token: string, nomProjet: string, tenantSlug?: string, nonce: string = ''): string {
 
   return `${renderHead(
     `Suivi de commande — ${nomProjet}`,
@@ -58,7 +58,7 @@ export function renderSuiviPage(token: string, nomProjet: string, tenantSlug?: s
     </div>
   </main>
 
-  <script>
+  <script nonce="${nonce}">
     const TRACKING_TOKEN = '${token}';
     const TENANT_SLUG_INITIAL = ${tenantSlug ? `'${tenantSlug}'` : 'null'};
     const STATUTS = {

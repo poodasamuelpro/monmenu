@@ -7,10 +7,11 @@ import { renderHead } from '../components/head'
 export function renderDashboardPage(
   nomProjet: string,
   supabaseUrl: string = '',
-  supabaseAnonKey: string = ''
+  supabaseAnonKey: string = '',
+  nonce: string = ''
 ): string {
   const supabaseConfig = supabaseUrl
-    ? `<script>window.__SUPABASE_URL__=${JSON.stringify(supabaseUrl)};window.__SUPABASE_ANON_KEY__=${JSON.stringify(supabaseAnonKey)};</script>`
+    ? `<script nonce="${nonce}">window.__SUPABASE_URL__=${JSON.stringify(supabaseUrl)};window.__SUPABASE_ANON_KEY__=${JSON.stringify(supabaseAnonKey)};</script>`
     : ''
 
   return `${renderHead(
@@ -195,7 +196,7 @@ export function renderDashboardPage(
   <script src="/static/js/dashboard.js"></script>
   <script src="/static/js/dashboard-paiement.js"></script>
   <script src="/static/js/notifications.js"></script>
-  <script>
+  <script nonce="${nonce}">
     try {
       const tenant = JSON.parse(localStorage.getItem('monmenu_tenant') || '{}');
       if (tenant.nom) {

@@ -382,46 +382,46 @@ via cookie httpOnly (session navigateur).
 
 // ---- Page de suivi commande ----
 app.get('/suivi/:token', async (c) => {
-  setSecurityHeaders(c)
+  const nonce = setSecurityHeaders(c)
   const token = c.req.param('token')
   const nomProjet = await getNomProjet(c.env)
-  return c.html(renderSuiviPage(token, nomProjet))
+  return c.html(renderSuiviPage(token, nomProjet, undefined, nonce))
 })
 
 // ---- Page d'accueil ----
 app.get('/', async (c) => {
-  setSecurityHeaders(c)
+  const nonce = setSecurityHeaders(c)
   const nomProjet = await getNomProjet(c.env)
-  return c.html(renderHomePage(nomProjet))
+  return c.html(renderHomePage(nomProjet, nonce))
 })
 
 // ---- Pages institutionnelles ----
 app.get('/contact', async (c) => {
-  setSecurityHeaders(c)
+  const nonce = setSecurityHeaders(c)
   const [nomProjet, whatsappSupport] = await Promise.all([
     getNomProjet(c.env),
     getWhatsAppSupport(c.env)
   ])
-  return c.html(renderContactPage(nomProjet, whatsappSupport))
+  return c.html(renderContactPage(nomProjet, whatsappSupport, nonce))
 })
 
 // ---- Page inscription restaurant ----
 app.get('/inscription', async (c) => {
-  setSecurityHeaders(c)
+  const nonce = setSecurityHeaders(c)
   const nomProjet = await getNomProjet(c.env)
-  return c.html(renderInscriptionPage(nomProjet))
+  return c.html(renderInscriptionPage(nomProjet, nonce))
 })
 
 // ---- Page Tarifs ----
 app.get('/tarifs', async (c) => {
-  setSecurityHeaders(c)
+  const nonce = setSecurityHeaders(c)
   const nomProjet = await getNomProjet(c.env)
-  return c.html(renderTarifsPage(nomProjet))
+  return c.html(renderTarifsPage(nomProjet, nonce))
 })
 
 // ---- Page Blog (liste) ----
 app.get('/blog', async (c) => {
-  setSecurityHeaders(c)
+  const nonce = setSecurityHeaders(c)
   const nomProjet = await getNomProjet(c.env)
 
   let articles: Awaited<ReturnType<typeof getArticlesPublies>> = []
@@ -431,7 +431,7 @@ app.get('/blog', async (c) => {
     console.error('[Blog] Erreur récupération articles:', err instanceof Error ? err.message : err)
   }
 
-  return c.html(renderBlogPage(nomProjet, articles))
+  return c.html(renderBlogPage(nomProjet, articles, nonce))
 })
 
 async function getArticlesPublies(env: Env) {
@@ -505,15 +505,15 @@ app.get('/legal/cookies', async (c) => {
 
 // ---- Connexion & Création de compte ----
 app.get('/mot-de-passe-oublie', async (c) => {
-  setSecurityHeaders(c)
+  const nonce = setSecurityHeaders(c)
   const nomProjet = await getNomProjet(c.env)
-  return c.html(renderForgotPasswordPage(nomProjet))
+  return c.html(renderForgotPasswordPage(nomProjet, nonce))
 })
 
 app.get('/connexion', async (c) => {
-  setSecurityHeaders(c)
+  const nonce = setSecurityHeaders(c)
   const nomProjet = await getNomProjet(c.env)
-  return c.html(renderConnexionPage(nomProjet))
+  return c.html(renderConnexionPage(nomProjet, nonce))
 })
 
 app.get('/creer-compte', async (c) => {
@@ -522,13 +522,13 @@ app.get('/creer-compte', async (c) => {
 
 // ---- Dashboard ----
 app.get('/dashboard', async (c) => {
-  setSecurityHeaders(c)
+  const nonce = setSecurityHeaders(c)
   const nomProjet = await getNomProjet(c.env)
-  return c.html(renderConnexionPage(nomProjet))
+  return c.html(renderConnexionPage(nomProjet, nonce))
 })
 
 app.get('/dashboard/compte-inactif', async (c) => {
-  setSecurityHeaders(c)
+  setSecurityHeaders(c)  // pas de scripts inline dans renderCompteInactifPage
   const nomProjet = await getNomProjet(c.env)
   return c.html(renderCompteInactifPage(nomProjet))
 })
@@ -541,7 +541,7 @@ app.get('/dashboard/compte-inactif', async (c) => {
 // Remplacé par verifierAccesTenant(), LOGIQUE UNIQUE partagée avec
 // api-dashboard.ts et api-paiement.ts.
 app.get('/dashboard/*', async (c) => {
-  setSecurityHeaders(c)
+  const nonce = setSecurityHeaders(c)
 
   const token = getCookie(c, ACCESS_TOKEN_COOKIE)
   if (!token) {
@@ -588,12 +588,12 @@ app.get('/dashboard/*', async (c) => {
   }
 
   const nomProjet = await getNomProjet(c.env)
-  return c.html(renderDashboardPage(nomProjet, c.env.SUPABASE_URL, c.env.SUPABASE_ANON_KEY))
+  return c.html(renderDashboardPage(nomProjet, c.env.SUPABASE_URL, c.env.SUPABASE_ANON_KEY, nonce))
 })
 
 // ---- Page Bienvenue — onboarding post-inscription (page PRIVÉE, auth requise) ----
 app.get('/bienvenue', async (c) => {
-  setSecurityHeaders(c)
+  const nonce = setSecurityHeaders(c)
 
   const token = getCookie(c, ACCESS_TOKEN_COOKIE)
   if (!token) {
@@ -611,12 +611,12 @@ app.get('/bienvenue', async (c) => {
   }
 
   const nomProjet = await getNomProjet(c.env)
-  return c.html(renderBienvenuePage(nomProjet))
+  return c.html(renderBienvenuePage(nomProjet, nonce))
 })
 
 // ---- Page boutique restaurant (DOIT être EN DERNIER — route générique) ----
 app.get('/:slug', async (c) => {
-  setSecurityHeaders(c)
+  const nonce = setSecurityHeaders(c)
   const slug = c.req.param('slug')
 
   const tenant = await fetchTenantAvecPdv(c.env, slug)
@@ -627,7 +627,7 @@ app.get('/:slug', async (c) => {
   }
 
   const nomProjet = await getNomProjet(c.env)
-  return c.html(renderBoutiquePage(tenant, nomProjet))
+  return c.html(renderBoutiquePage(tenant, nomProjet, nonce))
 })
 
 // ---- 404 ----

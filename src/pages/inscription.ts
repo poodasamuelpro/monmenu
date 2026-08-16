@@ -7,7 +7,7 @@ import { renderHead } from '../components/head'
 import { renderNav } from '../components/nav'
 import { renderFooter } from '../components/footer'
 
-export function renderInscriptionPage(nomProjet: string): string {
+export function renderInscriptionPage(nomProjet: string, nonce: string = ''): string {
   return `${renderHead(
     `Créer ma boutique gratuite — ${nomProjet}`,
     `Inscrivez votre restaurant sur ${nomProjet} et commencez à recevoir des commandes en ligne. Gratuit, sans engagement, prêt en 5 minutes.`,
@@ -191,7 +191,7 @@ export function renderInscriptionPage(nomProjet: string): string {
 
   ${renderFooter(nomProjet)}
   <script src="/static/js/main.js"></script>
-  <script>
+  <script nonce="${nonce}">
     // ─── Feat B : Gestion plans ───────────────────────────────────────────────
     // Cache plans chargés depuis l'API
     var _inscriptionPlans = []

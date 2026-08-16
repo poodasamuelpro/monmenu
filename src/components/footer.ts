@@ -1,6 +1,6 @@
 // src/components/footer.ts — Pied de page principal (FR uniquement, sans dark mode)
 
-export function renderFooter(nomProjet: string): string {
+export function renderFooter(nomProjet: string, nonce: string = ''): string {
   const year = new Date().getFullYear()
 
   return `
@@ -128,7 +128,7 @@ export function renderFooter(nomProjet: string): string {
   </div>
 </div>
 
-<script>
+<script nonce="${nonce}">
   async function submitNewsletterFooter(e) {
     e.preventDefault();
     const btn = document.getElementById('newsletter-btn');

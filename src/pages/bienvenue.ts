@@ -22,7 +22,7 @@
 // directement dans la fonction goStep d'origine.
 import { renderHead } from '../components/head'
 
-export function renderBienvenuePage(nomProjet: string): string {
+export function renderBienvenuePage(nomProjet: string, nonce: string = ''): string {
   return `${renderHead(
     `Bienvenue sur ${nomProjet} — Configurez votre restaurant`,
     `Configurez votre restaurant en quelques minutes sur ${nomProjet}.`,
@@ -372,7 +372,7 @@ export function renderBienvenuePage(nomProjet: string): string {
     </p>
   </main>
 
-  <script>
+  <script nonce="${nonce}">
     // ═══════════════════════════════════════════
     // Données du formulaire (state global)
     // ═══════════════════════════════════════════

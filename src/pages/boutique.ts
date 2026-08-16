@@ -161,7 +161,7 @@ function renderHorairesTable(horaireRaw: string | null | undefined): string {
   return `<table class="w-full table-fixed"><colgroup><col style="width:40%"><col style="width:60%"></colgroup>${lignes.join('')}</table>`
 }
 
-export function renderBoutiquePage(tenant: TenantBoutique, nomProjet: string): string {
+export function renderBoutiquePage(tenant: TenantBoutique, nomProjet: string, nonce: string = ''): string {
   const primaryColor = tenant.couleur_primaire || '#DC2626'
   const secondaryColor = tenant.couleur_secondaire || '#1D4ED8'
   const currentYear = new Date().getFullYear()
@@ -601,7 +601,7 @@ export function renderBoutiquePage(tenant: TenantBoutique, nomProjet: string): s
           crossorigin="anonymous"></script>
   <script src="/static/js/main.js"></script>
   <script src="/static/js/boutique.js"></script>
-  <script>
+  <script nonce="${nonce}">
     const TENANT_SLUG = '${tenant.slug}';
     const WHATSAPP_NUMBER = '${tenant.whatsapp_number}';
     const PRIMARY_COLOR = '${primaryColor}';
