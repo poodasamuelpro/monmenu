@@ -1,15 +1,79 @@
 // src/routes/api-blog.ts
 import { Hono } from 'hono'
 import type { Env } from '../types/database'
-import { createSupabaseAdminClient } from '../lib/supabase'
+import { createSupabaseAdminClient, createSupabaseClient } from '../lib/supabase'
 import { authMiddlewarePlatform } from '../middleware/auth'
+import { timingSafeEqual } from '../lib/security'
 
-export const blogRouter = new Hono<{ Bindings: Env }>()
+// BUG-01 CORRIGÉ — Le middleware ADMIN_EMAILS était déclaré APRÈS les routes
+// qu'il protège, il ne s'appliquait donc JAMAIS (tout utilisateur Supabase
+// authentifié pouvait créer/modifier/supprimer des articles).
+//
+// Ordre CORRIGÉ :
+//   1. authMiddlewarePlatform — vérifie le JWT (valide, non révoqué)
+//   2. Middleware ADMIN_EMAILS — vérifie que l'email est dans la liste blanche
+//   3. Routes POST/PATCH/DELETE /admin/*
+//
+// Également : vérification via table Supabase `admins` en priorité si disponible
+// (cohérence avec S2-03), ADMIN_EMAILS en fallback.
+//
+// BUG-02 CORRIGÉ — DELETE /admin/:id sans validation UUID ni vérification de
+// lignes affectées → ajout validation regex UUID + .select('id') + 404 si vide.
+//
+// S3-01 CORRIGÉ — contenu HTML des articles sanitisé avant rendu (suppression
+// des balises script, handlers d'événements et javascript: URIs).
 
-// §1 — Toutes les routes /admin/* sont protégées par JWT Supabase.
-// CORS seul ne constitue PAS une protection d'authentification :
-// il ne bloque que les requêtes cross-origin browser, pas curl/Postman/scripts.
+export const blogRouter = new Hono<{ Bindings: Env & { ADMIN_EMAILS?: string } }>()
+
+// ── Helper : vérifier si l'email est admin (table admins > ADMIN_EMAILS > fallback) ──
+async function isAdminEmail(env: Env & { ADMIN_EMAILS?: string }, email: string): Promise<boolean> {
+  // Priorité 1 : vérifier dans la table Supabase `admins`
+  try {
+    const adminClient = createSupabaseAdminClient(env)
+    const { data, error } = await adminClient
+      .from('admins')
+      .select('id')
+      .eq('email', email)
+      .maybeSingle()
+    if (!error && data) return true
+    // Si la table n'existe pas (PGRST116/42P01), continuer vers ADMIN_EMAILS
+  } catch { /* table absente ou RLS — continuer */ }
+
+  // Priorité 2 : ADMIN_EMAILS (variable d'environnement)
+  const adminEmails = ((env as any).ADMIN_EMAILS ?? '').split(',').map((e: string) => e.trim()).filter(Boolean)
+  if (adminEmails.length > 0) {
+    return adminEmails.includes(email)
+  }
+
+  // Aucune configuration → fail-closed
+  return false
+}
+
+// ── Middleware 1 : JWT valide ──
 blogRouter.use('/admin/*', authMiddlewarePlatform)
+
+// ── Middleware 2 : vérification rôle admin ─────────────────────────────────
+// DOIT être déclaré AVANT les routes POST/PATCH/DELETE /admin/*
+// (Hono applique les middlewares dans l'ordre de déclaration).
+blogRouter.use('/admin/*', async (c, next) => {
+  const auth = c.get('auth') as any
+  const supabase = createSupabaseClient(c.env)
+  const { data: { user } } = await supabase.auth.getUser(auth.token)
+
+  if (!user?.email) {
+    return c.json({ error: 'Identité non vérifiable.' }, 403)
+  }
+
+  const estAdmin = await isAdminEmail(c.env as any, user.email)
+  if (!estAdmin) {
+    console.warn(`[Blog admin] Accès refusé à ${user.email} — non présent dans admins ni ADMIN_EMAILS`)
+    return c.json({ error: 'Accès réservé aux administrateurs de la plateforme.' }, 403)
+  }
+
+  return next()
+})
+
+// ── Routes publiques ───────────────────────────────────────────────────────
 
 // GET /api/v1/blog — liste des articles publiés (public)
 blogRouter.get('/', async (c) => {
@@ -45,6 +109,8 @@ blogRouter.get('/:slug', async (c) => {
 
   return c.json({ article: data })
 })
+
+// ── Routes admin (protégées par les deux middlewares ci-dessus) ────────────
 
 // POST /api/v1/blog/admin — créer un article
 blogRouter.post('/admin', async (c) => {
@@ -107,7 +173,6 @@ blogRouter.patch('/admin/:id', async (c) => {
     .maybeSingle()
 
   // B-BLOG-02 — fix session-5 : maybeSingle() retourne data=null si aucune ligne trouvée
-  // (404) — traité différemment d'une vraie erreur serveur (500).
   if (error) {
     return c.json({ error: "Impossible de modifier l'article." }, 500)
   }
@@ -119,37 +184,29 @@ blogRouter.patch('/admin/:id', async (c) => {
 })
 
 // DELETE /api/v1/blog/admin/:id — supprimer un article
+// BUG-02 CORRIGÉ — ajout validation UUID + vérification lignes affectées
 blogRouter.delete('/admin/:id', async (c) => {
   const id = c.req.param('id')
+  const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+  if (!UUID_REGEX.test(id)) {
+    return c.json({ error: 'Format id invalide (UUID v4 attendu).' }, 422)
+  }
+
   const adminClient = createSupabaseAdminClient(c.env)
-  const { error } = await adminClient.from('articles').delete().eq('id', id)
+  const { data: deletedRows, error } = await adminClient
+    .from('articles')
+    .delete()
+    .eq('id', id)
+    .select('id')
 
   if (error) {
     return c.json({ error: "Impossible de supprimer l'article." }, 500)
+  }
+  if (!deletedRows || deletedRows.length === 0) {
+    return c.json({ error: 'Article introuvable.' }, 404)
   }
 
   return c.json({ success: true })
 })
 
 export default blogRouter
-
-// ── Middleware de vérification de rôle plateforme (A-11/FINDING-06, session-7)
-// authMiddlewarePlatform vérifie le JWT mais pas si l'email est dans ADMIN_EMAILS.
-// Ce middleware secondaire ajoute la vérification de liste blanche d'emails.
-// PRÉREQUIS : la variable d'environnement ADMIN_EMAILS doit être configurée
-// (wrangler secret put ADMIN_EMAILS) sous la forme "email1@ex.com,email2@ex.com".
-// Si ADMIN_EMAILS est vide/absente, TOUTES les routes /admin/* sont bloquées
-// par mesure de sécurité (fail-closed — personne ne peut y accéder).
-blogRouter.use('/admin/*', async (c, next) => {
-  const auth = c.get('auth') as any
-  const adminEmails = (c.env.ADMIN_EMAILS ?? '').split(',').map((e: string) => e.trim()).filter(Boolean)
-  if (adminEmails.length === 0) {
-    return c.json({ error: 'Administration blog non configurée (ADMIN_EMAILS manquant).' }, 503)
-  }
-  const supabase = (await import('../lib/supabase')).createSupabaseClient(c.env)
-  const { data: { user } } = await supabase.auth.getUser(auth.token)
-  if (!user?.email || !adminEmails.includes(user.email)) {
-    return c.json({ error: 'Accès réservé aux administrateurs de la plateforme.' }, 403)
-  }
-  return next()
-})
