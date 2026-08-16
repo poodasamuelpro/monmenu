@@ -267,7 +267,7 @@ tenantsRouter.get('/:slug/menu', async (c) => {
       .order('ordre_affichage', { ascending: true })
   ])
 
-  if (catError) return c.json({ error: 'Erreur récupération menu.', detail: catError.message }, 500)
+  if (catError) return c.json({ error: 'Erreur récupération menu.', ...(c.env.ENVIRONMENT !== 'production' ? { detail: catError.message } : {}) }, 500)
 
   // AJOUT — suppléments actifs, groupés par produit, une seule requête.
   const catIds = new Set((categories ?? []).map((cat: any) => cat.id))
@@ -432,7 +432,7 @@ tenantsRouter.post('/', async (c) => {
     })
 
   if (insertError) {
-    return c.json({ error: 'Erreur création restaurant.', detail: insertError.message }, 500)
+    return c.json({ error: 'Erreur création restaurant.', ...(c.env.ENVIRONMENT !== 'production' ? { detail: insertError.message } : {}) }, 500)
   }
 
   try { if (c.env.KV_CACHE) await c.env.KV_CACHE.delete(`tenant:${data.slug}`) } catch {}

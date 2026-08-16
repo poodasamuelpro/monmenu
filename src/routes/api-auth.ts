@@ -700,7 +700,7 @@ authRouter.post('/reset-password', async (c) => {
     { password: body.password }
   )
   if (updateError) {
-    return c.json({ error: 'Erreur changement mot de passe.', detail: updateError.message }, 500)
+    return c.json({ error: 'Erreur changement mot de passe.', ...(c.env.ENVIRONMENT !== 'production' ? { detail: updateError.message } : {}) }, 500)
   }
 
   // AJOUT — déconnexion globale après reset : révoque TOUTES les sessions

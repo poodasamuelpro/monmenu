@@ -84,3 +84,7 @@ export const CACHE_TTL = {
   BOUTIQUE_SECONDES: 300,      // 5 min
   HOME_SECONDES: 300           // 5 min
 } as const
+
+// ── Durées métier ─────────────────────────────────────────────────────────────
+/** Durée de la période d'essai gratuit, en jours (cohérent avec migration SQL 006). */
+export const ESSAI_DUREE_JOURS = 14

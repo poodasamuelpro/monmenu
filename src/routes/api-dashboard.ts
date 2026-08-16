@@ -277,7 +277,7 @@ dashboardRouter.get('/commandes', async (c) => {
 
   const { data: commandes, count, error } = await query
 
-  if (error) return c.json({ error: 'Erreur récupération commandes.', detail: error.message }, 500)
+  if (error) return c.json({ error: 'Erreur récupération commandes.', ...(c.env.ENVIRONMENT !== 'production' ? { detail: error.message } : {}) }, 500)
 
   return c.json({
     commandes: commandes ?? [],
@@ -399,7 +399,7 @@ dashboardRouter.get('/commandes/export-csv', async (c) => {
     .order('created_at', { ascending: false })
     .limit(1000) // S9-02 CORRIGÉ — 5000 → 1000 pour éviter timeout Worker 30s CPU
 
-  if (error) return c.json({ error: 'Erreur export CSV.', detail: error.message }, 500)
+  if (error) return c.json({ error: 'Erreur export CSV.', ...(c.env.ENVIRONMENT !== 'production' ? { detail: error.message } : {}) }, 500)
 
   const headers = ['ID', 'Date', 'Client', 'Téléphone', 'Adresse', 'Montant (FCFA)', 'Frais livraison', 'Paiement', 'Statut', 'Produits', 'Notes', 'Token suivi']
   const rows = (commandes ?? []).map(cmd => {
@@ -591,7 +591,7 @@ dashboardRouter.get('/menu', async (c) => {
       .range(offset, offset + limit - 1)
   ])
 
-  if (catError) return c.json({ error: 'Erreur récupération menu.', detail: catError.message }, 500)
+  if (catError) return c.json({ error: 'Erreur récupération menu.', ...(c.env.ENVIRONMENT !== 'production' ? { detail: catError.message } : {}) }, 500)
 
   const produitsByCategorie = new Map<string, any[]>()
   for (const p of (produits ?? [])) {
@@ -654,7 +654,7 @@ dashboardRouter.post('/categories', async (c) => {
       updated_at: now
     })
 
-  if (error) return c.json({ error: 'Erreur création catégorie.', detail: error.message }, 500)
+  if (error) return c.json({ error: 'Erreur création catégorie.', ...(c.env.ENVIRONMENT !== 'production' ? { detail: error.message } : {}) }, 500)
 
   try { if (c.env.KV_CACHE) await c.env.KV_CACHE.delete(`menu:${auth.tenant_slug}`) } catch {}
 
@@ -697,7 +697,7 @@ dashboardRouter.patch('/categories/:id', async (c) => {
     .eq('tenant_id', auth.tenant_id)
     .select('id')
 
-  if (error) return c.json({ error: 'Erreur mise à jour catégorie.', detail: error.message }, 500)
+  if (error) return c.json({ error: 'Erreur mise à jour catégorie.', ...(c.env.ENVIRONMENT !== 'production' ? { detail: error.message } : {}) }, 500)
 
   if (!updatedCat || updatedCat.length === 0) {
     console.warn('[Dashboard/PATCH categories] 0 lignes affectées — tenant_id:', auth.tenant_id, 'cat_id:', catId)
@@ -735,7 +735,7 @@ dashboardRouter.delete('/categories/:id', async (c) => {
     .eq('id', catId)
     .eq('tenant_id', auth.tenant_id)
 
-  if (error) return c.json({ error: 'Erreur suppression catégorie.', detail: error.message }, 500)
+  if (error) return c.json({ error: 'Erreur suppression catégorie.', ...(c.env.ENVIRONMENT !== 'production' ? { detail: error.message } : {}) }, 500)
 
   try { if (c.env.KV_CACHE) await c.env.KV_CACHE.delete(`menu:${auth.tenant_slug}`) } catch {}
 
@@ -794,7 +794,7 @@ dashboardRouter.post('/produits', async (c) => {
       updated_at: now
     })
 
-  if (error) return c.json({ error: 'Erreur création produit.', detail: error.message }, 500)
+  if (error) return c.json({ error: 'Erreur création produit.', ...(c.env.ENVIRONMENT !== 'production' ? { detail: error.message } : {}) }, 500)
 
   try { if (c.env.KV_CACHE) await c.env.KV_CACHE.delete(`menu:${auth.tenant_slug}`) } catch {}
 
@@ -844,7 +844,7 @@ dashboardRouter.patch('/produits/:id', async (c) => {
     .eq('tenant_id', auth.tenant_id)
     .select('id')
 
-  if (error) return c.json({ error: 'Erreur mise à jour produit.', detail: error.message }, 500)
+  if (error) return c.json({ error: 'Erreur mise à jour produit.', ...(c.env.ENVIRONMENT !== 'production' ? { detail: error.message } : {}) }, 500)
 
   if (!updatedProd || updatedProd.length === 0) {
     console.warn('[Dashboard/PATCH produits] 0 lignes affectées — tenant_id:', auth.tenant_id, 'prod_id:', prodId)
@@ -873,7 +873,7 @@ dashboardRouter.delete('/produits/:id', async (c) => {
     .is('deleted_at', null)
     .select('id')
 
-  if (error) return c.json({ error: 'Erreur suppression produit.', detail: error.message }, 500)
+  if (error) return c.json({ error: 'Erreur suppression produit.', ...(c.env.ENVIRONMENT !== 'production' ? { detail: error.message } : {}) }, 500)
   if (!data || data.length === 0) return c.json({ error: 'Produit introuvable.' }, 404)
 
   try { if (c.env.KV_CACHE) await c.env.KV_CACHE.delete(`menu:${auth.tenant_slug}`) } catch {}
@@ -911,7 +911,7 @@ dashboardRouter.get('/produits/:id/supplements', async (c) => {
     .is('deleted_at', null)
     .order('ordre_affichage', { ascending: true })
 
-  if (error) return c.json({ error: 'Erreur récupération suppléments.', detail: error.message }, 500)
+  if (error) return c.json({ error: 'Erreur récupération suppléments.', ...(c.env.ENVIRONMENT !== 'production' ? { detail: error.message } : {}) }, 500)
   return c.json({ supplements: supplements ?? [] })
 })
 
@@ -966,7 +966,7 @@ dashboardRouter.post('/produits/:id/supplements', async (c) => {
       updated_at: now
     })
 
-  if (error) return c.json({ error: 'Erreur création supplément.', detail: error.message }, 500)
+  if (error) return c.json({ error: 'Erreur création supplément.', ...(c.env.ENVIRONMENT !== 'production' ? { detail: error.message } : {}) }, 500)
 
   try { if (c.env.KV_CACHE) await c.env.KV_CACHE.delete(`menu:${auth.tenant_slug}`) } catch {}
   return c.json({ success: true, id: supId }, 201)
@@ -1014,7 +1014,7 @@ dashboardRouter.patch('/supplements/:id', async (c) => {
     .eq('tenant_id', auth.tenant_id)
     .select('id')
 
-  if (error) return c.json({ error: 'Erreur mise à jour supplément.', detail: error.message }, 500)
+  if (error) return c.json({ error: 'Erreur mise à jour supplément.', ...(c.env.ENVIRONMENT !== 'production' ? { detail: error.message } : {}) }, 500)
 
   if (!updatedSup || updatedSup.length === 0) {
     console.warn('[Dashboard/PATCH supplements] 0 lignes affectées — tenant_id:', auth.tenant_id, 'sup_id:', supId)
@@ -1042,7 +1042,7 @@ dashboardRouter.delete('/supplements/:id', async (c) => {
     .is('deleted_at', null)
     .select('id')
 
-  if (error) return c.json({ error: 'Erreur suppression supplément.', detail: error.message }, 500)
+  if (error) return c.json({ error: 'Erreur suppression supplément.', ...(c.env.ENVIRONMENT !== 'production' ? { detail: error.message } : {}) }, 500)
   if (!data || data.length === 0) return c.json({ error: 'Supplément introuvable.' }, 404)
 
   try { if (c.env.KV_CACHE) await c.env.KV_CACHE.delete(`menu:${auth.tenant_slug}`) } catch {}
@@ -1069,7 +1069,7 @@ dashboardRouter.get('/livreurs', async (c) => {
     .order('nom', { ascending: true })
     .range(offset, offset + limit - 1)
 
-  if (error) return c.json({ error: 'Erreur récupération livreurs.', detail: error.message }, 500)
+  if (error) return c.json({ error: 'Erreur récupération livreurs.', ...(c.env.ENVIRONMENT !== 'production' ? { detail: error.message } : {}) }, 500)
 
   return c.json({
     livreurs: livreurs ?? [],
@@ -1107,7 +1107,7 @@ dashboardRouter.post('/livreurs', async (c) => {
       updated_at: now
     })
 
-  if (error) return c.json({ error: 'Erreur création livreur.', detail: error.message }, 500)
+  if (error) return c.json({ error: 'Erreur création livreur.', ...(c.env.ENVIRONMENT !== 'production' ? { detail: error.message } : {}) }, 500)
 
   return c.json({ success: true, id: livId }, 201)
 })
@@ -1130,7 +1130,7 @@ dashboardRouter.delete('/livreurs/:id', async (c) => {
     .eq('tenant_id', auth.tenant_id)
     .select('id')
 
-  if (error) return c.json({ error: 'Erreur suppression livreur.', detail: error.message }, 500)
+  if (error) return c.json({ error: 'Erreur suppression livreur.', ...(c.env.ENVIRONMENT !== 'production' ? { detail: error.message } : {}) }, 500)
   if (!livDeletedRows || livDeletedRows.length === 0) {
     return c.json({ error: 'Livreur introuvable.' }, 404)
   }
@@ -1182,7 +1182,7 @@ dashboardRouter.patch('/livreurs/:id', async (c) => {
     .eq('id', livId)
     .eq('tenant_id', auth.tenant_id)
 
-  if (error) return c.json({ error: 'Erreur mise à jour livreur.', detail: error.message }, 500)
+  if (error) return c.json({ error: 'Erreur mise à jour livreur.', ...(c.env.ENVIRONMENT !== 'production' ? { detail: error.message } : {}) }, 500)
 
   return c.json({
     success: true,
@@ -1209,7 +1209,7 @@ dashboardRouter.get('/pdv', async (c) => {
     .limit(1)
     .maybeSingle()
 
-  if (error) return c.json({ error: 'Erreur récupération PDV.', detail: error.message }, 500)
+  if (error) return c.json({ error: 'Erreur récupération PDV.', ...(c.env.ENVIRONMENT !== 'production' ? { detail: error.message } : {}) }, 500)
 
   return c.json({ pdv: pdv ?? null })
 })
@@ -1268,7 +1268,7 @@ dashboardRouter.patch('/pdv', async (c) => {
         updated_at: now
       })
 
-    if (error) return c.json({ error: 'Erreur création PDV.', detail: error.message }, 500)
+    if (error) return c.json({ error: 'Erreur création PDV.', ...(c.env.ENVIRONMENT !== 'production' ? { detail: error.message } : {}) }, 500)
     try { if (c.env.KV_CACHE) await c.env.KV_CACHE.delete(`tenant:${auth.tenant_slug}`) } catch {}
     return c.json({ success: true, pdv_id: pdvId, created: true })
   }
@@ -1289,7 +1289,7 @@ dashboardRouter.patch('/pdv', async (c) => {
     .eq('tenant_id', auth.tenant_id)
     .select('id')
 
-  if (error) return c.json({ error: 'Erreur mise à jour PDV.', detail: error.message }, 500)
+  if (error) return c.json({ error: 'Erreur mise à jour PDV.', ...(c.env.ENVIRONMENT !== 'production' ? { detail: error.message } : {}) }, 500)
   if (!pdvUpdatedRows || pdvUpdatedRows.length === 0) {
     return c.json({ error: 'Point de vente introuvable ou non modifiable.' }, 404)
   }
@@ -1334,7 +1334,7 @@ dashboardRouter.patch('/apparence', async (c) => {
     .is('deleted_at', null)
     .select('id')
 
-  if (error) return c.json({ error: 'Erreur mise à jour apparence.', detail: error.message }, 500)
+  if (error) return c.json({ error: 'Erreur mise à jour apparence.', ...(c.env.ENVIRONMENT !== 'production' ? { detail: error.message } : {}) }, 500)
   if (!updated || updated.length === 0) return c.json({ error: 'Restaurant introuvable ou accès refusé.' }, 404)
 
   try { if (c.env.KV_CACHE) await c.env.KV_CACHE.delete(`tenant:${auth.tenant_slug}`) } catch {}
@@ -1372,7 +1372,7 @@ dashboardRouter.patch('/parametres', async (c) => {
     .eq('id', auth.tenant_id)
     .select('id')
 
-  if (error) return c.json({ error: 'Erreur mise à jour paramètres.', detail: error.message }, 500)
+  if (error) return c.json({ error: 'Erreur mise à jour paramètres.', ...(c.env.ENVIRONMENT !== 'production' ? { detail: error.message } : {}) }, 500)
   if (!parametresUpdatedRows || parametresUpdatedRows.length === 0) {
     return c.json({ error: 'Restaurant introuvable ou non modifiable.' }, 404)
   }
@@ -1540,7 +1540,7 @@ dashboardRouter.post('/profil/change-password', async (c) => {
   const { error: updateError } = await adminClient.auth.admin.updateUserById(auth.user_id, {
     password: body.new_password
   })
-  if (updateError) return c.json({ error: 'Erreur lors du changement de mot de passe.', detail: updateError.message }, 500)
+  if (updateError) return c.json({ error: 'Erreur lors du changement de mot de passe.', ...(c.env.ENVIRONMENT !== 'production' ? { detail: updateError.message } : {}) }, 500)
 
   // A-4 (FINDING-01, session-7) — Révoquer TOUTES les sessions actives après
   // changement de mot de passe depuis le dashboard, en cohérence avec
@@ -1602,7 +1602,7 @@ dashboardRouter.get('/codes-promo', async (c) => {
     .order('created_at', { ascending: false })
     .range(offset, offset + limit - 1)
 
-  if (error) return c.json({ error: 'Erreur récupération codes promo.', detail: error.message }, 500)
+  if (error) return c.json({ error: 'Erreur récupération codes promo.', ...(c.env.ENVIRONMENT !== 'production' ? { detail: error.message } : {}) }, 500)
 
   return c.json({
     codes: codes ?? [],
@@ -1624,7 +1624,7 @@ dashboardRouter.get('/codes-promo/export-csv', async (c) => {
     .eq('tenant_id', auth.tenant_id)
     .order('created_at', { ascending: false })
 
-  if (error) return c.json({ error: 'Erreur export codes promo.', detail: error.message }, 500)
+  if (error) return c.json({ error: 'Erreur export codes promo.', ...(c.env.ENVIRONMENT !== 'production' ? { detail: error.message } : {}) }, 500)
 
   const headers = ['Code', 'Type', 'Valeur', 'Date début', 'Date fin', 'Usage max', 'Usage actuel', 'Actif', 'Créé le']
   const rows = (codes ?? []).map(p => {
@@ -1712,7 +1712,7 @@ dashboardRouter.post('/codes-promo', async (c) => {
       created_at: now
     })
 
-  if (error) return c.json({ error: 'Erreur création code promo.', detail: error.message }, 500)
+  if (error) return c.json({ error: 'Erreur création code promo.', ...(c.env.ENVIRONMENT !== 'production' ? { detail: error.message } : {}) }, 500)
 
   return c.json({ success: true, id: promoId, code: body.code.toUpperCase() }, 201)
 })
@@ -1756,7 +1756,7 @@ dashboardRouter.post('/codes-promo/generate', async (c) => {
     created_at: now
   })
 
-  if (error) return c.json({ error: 'Erreur génération code promo.', detail: error.message }, 500)
+  if (error) return c.json({ error: 'Erreur génération code promo.', ...(c.env.ENVIRONMENT !== 'production' ? { detail: error.message } : {}) }, 500)
   return c.json({ success: true, id: promoId, code }, 201)
 })
 
@@ -1795,7 +1795,7 @@ dashboardRouter.patch('/codes-promo/:id', async (c) => {
     .eq('tenant_id', auth.tenant_id)
     .select('id')
 
-  if (error) return c.json({ error: 'Erreur mise à jour code promo.', detail: error.message }, 500)
+  if (error) return c.json({ error: 'Erreur mise à jour code promo.', ...(c.env.ENVIRONMENT !== 'production' ? { detail: error.message } : {}) }, 500)
   if (!promoUpdatedRows || promoUpdatedRows.length === 0) {
     return c.json({ error: 'Code promo introuvable ou non modifiable.' }, 404)
   }
@@ -1820,7 +1820,7 @@ dashboardRouter.delete('/codes-promo/:id', async (c) => {
     .eq('tenant_id', auth.tenant_id)
     .select('id')
 
-  if (error) return c.json({ error: 'Erreur suppression code promo.', detail: error.message }, 500)
+  if (error) return c.json({ error: 'Erreur suppression code promo.', ...(c.env.ENVIRONMENT !== 'production' ? { detail: error.message } : {}) }, 500)
   if (!promoDeletedRows || promoDeletedRows.length === 0) {
     return c.json({ error: 'Code promo introuvable.' }, 404)
   }
@@ -2052,7 +2052,7 @@ dashboardRouter.get('/stats-journalieres', async (c) => {
     .order('date', { ascending: false })
     .limit(jours)
 
-  if (error) return c.json({ error: 'Erreur récupération stats.', detail: error.message }, 500)
+  if (error) return c.json({ error: 'Erreur récupération stats.', ...(c.env.ENVIRONMENT !== 'production' ? { detail: error.message } : {}) }, 500)
 
   const liste = stats ?? []
 
@@ -2204,7 +2204,7 @@ dashboardRouter.post('/setup-restaurant', async (c) => {
     .select('id')
 
   if (errTenant) {
-    return c.json({ error: 'Erreur mise à jour tenant.', detail: errTenant.message }, 500)
+    return c.json({ error: 'Erreur mise à jour tenant.', ...(c.env.ENVIRONMENT !== 'production' ? { detail: errTenant.message } : {}) }, 500)
   }
   if (!tenantUpdatedRows || tenantUpdatedRows.length === 0) {
     return c.json({ error: 'Restaurant introuvable — mise à jour impossible.' }, 404)
@@ -2321,7 +2321,7 @@ dashboardRouter.get('/notifications/liste', async (c) => {
 
   const { data: notifications, count, error } = await query
 
-  if (error) return c.json({ error: 'Erreur récupération notifications.', detail: error.message }, 500)
+  if (error) return c.json({ error: 'Erreur récupération notifications.', ...(c.env.ENVIRONMENT !== 'production' ? { detail: error.message } : {}) }, 500)
 
   const nbNonLues = nonLuesSeulement
     ? (count ?? 0)
@@ -2375,7 +2375,7 @@ dashboardRouter.patch('/notifications/:id', async (c) => {
     .eq('tenant_id', auth.tenant_id)
     .select('id')
 
-  if (error) return c.json({ error: 'Erreur mise à jour notification.', detail: error.message }, 500)
+  if (error) return c.json({ error: 'Erreur mise à jour notification.', ...(c.env.ENVIRONMENT !== 'production' ? { detail: error.message } : {}) }, 500)
   if (!notifUpdatedRows || notifUpdatedRows.length === 0) {
     return c.json({ error: 'Notification introuvable ou non modifiable.' }, 404)
   }
@@ -2398,7 +2398,7 @@ dashboardRouter.patch('/notifications/tout-lire', async (c) => {
     .eq('lue', false)
     .select('id', { count: 'exact' })
 
-  if (error) return c.json({ error: 'Erreur mise à jour notifications.', detail: error.message }, 500)
+  if (error) return c.json({ error: 'Erreur mise à jour notifications.', ...(c.env.ENVIRONMENT !== 'production' ? { detail: error.message } : {}) }, 500)
 
   return c.json({ success: true, nb_mises_a_jour: count ?? 0 })
 })

@@ -303,7 +303,7 @@ commandesRouter.post('/', async (c) => {
     })
 
   if (insertError) {
-    return c.json({ error: 'Erreur création commande.', detail: insertError.message }, 500)
+    return c.json({ error: 'Erreur création commande.', ...(c.env.ENVIRONMENT !== 'production' ? { detail: insertError.message } : {}) }, 500)
   }
 
   if (promoId) {
