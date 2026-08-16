@@ -148,29 +148,35 @@ export function generateCspNonce(): string {
 // A-5 (FINDING-18, session-7) : si un nonce est fourni par l'appelant, il est
 // utilisé dans la CSP (mode strict, sans unsafe-inline) ; sinon la fonction
 // génère automatiquement un nonce et le retourne avec 'unsafe-inline' en
-// fallback de migration (les navigateurs CSP Level 3 ignorent unsafe-inline si
-// un nonce est présent et que les scripts portent le bon nonce — mais pour les
-// navigateurs plus anciens ou les templates pas encore migrés, unsafe-inline
-// garantit la non-régression pendant la migration progressive).
-// Migration : une fois tous les templates mis à jour avec nonce="...", supprimer
-// 'unsafe-inline' de cette directive.
+// fallback de migration.
+//
+// NOTE CSP Level 3 : les navigateurs modernes ignorent 'unsafe-inline' dès lors
+// qu'un 'nonce-*' valide est présent et que les scripts portent le bon nonce.
+// On conserve donc 'unsafe-inline' dans TOUS les cas pour :
+//   1. Rétrocompatibilité navigateurs anciens sans support nonce
+//   2. Tailwind Play CDN : injecte des <style> via JS dynamique — nécessite
+//      'unsafe-inline' dans script-src pour son propre fonctionnement interne
+//
+// NOTE COEP : Cross-Origin-Embedder-Policy: require-corp est retiré car il
+// bloque le chargement de ressources CDN externes (FontAwesome, Leaflet,
+// Chart.js…) qui ne renvoient pas le header CORP requis. Ce header est
+// pertinent uniquement pour des pages isolant des workers avec SharedArrayBuffer
+// — inutile et nocif pour des pages publiques avec ressources CDN tierces.
 export function setSecurityHeaders(c: Context, nonce?: string): string {
   const usedNonce = nonce ?? generateCspNonce()
-  // Inclure 'unsafe-inline' uniquement si aucun nonce explicite n'est fourni
-  // par l'appelant (migration progressive — les templates non encore mis à jour
-  // continuent de fonctionner). Quand un nonce est explicitement fourni ET injecté
-  // dans les templates, supprimer 'unsafe-inline' de cette ligne.
-  const scriptSrcDirective = nonce
-    ? `'nonce-${usedNonce}' cdn.tailwindcss.com cdn.jsdelivr.net api.mapbox.com`
-    : `'unsafe-inline' 'nonce-${usedNonce}' cdn.tailwindcss.com cdn.jsdelivr.net api.mapbox.com`
+  // 'unsafe-inline' conservé dans tous les cas (voir notes ci-dessus).
+  // Sur les navigateurs CSP Level 3, le nonce prend la priorité et
+  // 'unsafe-inline' est ignoré pour les scripts qui portent bien le nonce.
+  const scriptSrcDirective = `'unsafe-inline' 'nonce-${usedNonce}' cdn.tailwindcss.com cdn.jsdelivr.net api.mapbox.com`
 
   c.header('Strict-Transport-Security', 'max-age=31536000; includeSubDomains; preload')
   c.header('X-Content-Type-Options', 'nosniff')
   c.header('X-Frame-Options', 'DENY')
   // S5-01 — X-XSS-Protection retiré (déprécié, interférence avec les navigateurs modernes)
-  // Remplacé par Cross-Origin-Opener-Policy + Cross-Origin-Embedder-Policy
   c.header('Cross-Origin-Opener-Policy', 'same-origin')
-  c.header('Cross-Origin-Embedder-Policy', 'require-corp')
+  // Cross-Origin-Embedder-Policy retiré : require-corp bloque les CDN publics
+  // (FontAwesome, Leaflet, Chart.js) qui ne renvoient pas Cross-Origin-Resource-Policy.
+  // À réactiver uniquement si SharedArrayBuffer est requis sur des routes isolées.
   c.header('Referrer-Policy', 'strict-origin-when-cross-origin')
   c.header('Permissions-Policy', 'geolocation=(self), microphone=()')
   c.header(
@@ -179,7 +185,7 @@ export function setSecurityHeaders(c: Context, nonce?: string): string {
     `script-src 'self' ${scriptSrcDirective}; ` +
     `style-src 'self' 'unsafe-inline' cdn.tailwindcss.com cdn.jsdelivr.net api.mapbox.com fonts.googleapis.com; ` +
     `img-src 'self' data: blob: *.mapbox.com *.openstreetmap.org *.supabase.co *.tile.openstreetmap.org api.qrserver.com image.thum.io; ` +
-    // S5-02 — graph.facebook.com retiré de connect-src (pixel FB non utilisé, surface d'attaque inutile)
+    // S5-02 — graph.facebook.com retiré de connect-src
     `connect-src 'self' https://*.supabase.co wss://*.supabase.co api.mapbox.com events.mapbox.com api.openweathermap.org nominatim.openstreetmap.org api.qrserver.com; ` +
     `font-src 'self' fonts.gstatic.com cdn.jsdelivr.net; ` +
     `frame-ancestors 'none';`
