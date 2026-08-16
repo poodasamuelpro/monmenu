@@ -27,6 +27,19 @@
     }
   ],
 
+  // A-03 (BUG-08/S4-01/S9-04) — KV_CACHE : rate limiting distribué + cache boutique + sitemap.
+  // Binding absent → rate limiting en Map mémoire locale par isolate (non distribué),
+  // cache boutique/home désactivé (plans/screenshots/logos ne se chargent pas).
+  // IMPORTANT : lier ce namespace dans le dashboard Cloudflare Workers > KV après création :
+  //   npx wrangler kv namespace create monmenu-cache
+  // Puis remplacer "REMPLACER_PAR_ID_REEL" par l'id retourné.
+  "kv_namespaces": [
+    {
+      "binding": "KV_CACHE",
+      "id": "REMPLACER_PAR_ID_REEL"
+    }
+  ],
+
   // §1.8 CYCLE-6 — Passage de 7 à 5 cron triggers (limite plan Free
   // Cloudflare : 5 max par compte). Détail des fusions dans api-cron.ts.
   "triggers": {
