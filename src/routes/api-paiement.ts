@@ -76,7 +76,6 @@ import {
   genererReferencePaiement,
   calculerDeadlineConfirmation,
   heuresRestantesAvantDeadline,
-  validerMimeImage,
   validerExtensionImage,
   validerContentTypeImage,
   construireCleR2Preuve,
@@ -86,6 +85,9 @@ import {
   messagePreuveRecue,
   messageEnAttenteConfirmation
 } from '../lib/paiement'
+// A-04 — Migration vers la fonction unifiée (sync, lib/validation.ts).
+// validerMimeImage (async, deprecated @B8-session-5) retirée de lib/paiement.
+import { validerMimeImageUnifie } from '../lib/validation'
 
 const paiementRouter = new Hono<{ Bindings: Env }>()
 const ACCESS_TOKEN_COOKIE = 'sb-access-token'
@@ -355,8 +357,9 @@ paiementRouter.post('/soumettre', async (c) => {
   }
 
   const buffer = await preuveFile.arrayBuffer()
-  const mimeResult = await validerMimeImage(buffer)
-  if (!mimeResult.valide) {
+  // A-04 — validerMimeImageUnifie (sync) remplace validerMimeImage (async, deprecated)
+  const mimeType = validerMimeImageUnifie(buffer)
+  if (!mimeType) {
     return c.json({ error: 'Fichier non reconnu comme image valide (vérification octets).' }, 400)
   }
 
