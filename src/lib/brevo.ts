@@ -65,6 +65,7 @@ async function sendWithKey(
 ): Promise<boolean> {
   try {
     const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+      signal: AbortSignal.timeout(8000),
       method: 'POST',
       headers: {
         'api-key': state.key,
