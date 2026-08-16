@@ -176,15 +176,47 @@ adminPaiementsRouter.post('/confirmer', async (c) => {
     return c.json({ error: 'Ce paiement a déjà été traité ou est introuvable.' }, 409)
   }
 
-  // 2. Récupérer le plan Supabase pour calculer date_fin + nom (notif)
+  // 2. Récupérer le plan Supabase + abonnement actif existant pour calculer date_fin
   let dateFin: string | null = null
   let planNom: string | null = null
   const planRow = await chargerPlan(c.env, abonnement.plan_id)
   if (planRow) {
     planNom = planRow.nom
-    const fin = new Date()
-    fin.setMonth(fin.getMonth() + 1)
-    dateFin = fin.toISOString()
+
+    // BUG-13 CORRIGÉ — setMonth() déborde en fin de mois (ex: 31 jan + 1 mois = 3 mars).
+    // Méthode sûre : aller au 1er du mois suivant, puis reposer au bon jour
+    // (min entre le jour original et le dernier jour du mois cible).
+    //
+    // RÉABONNEMENT ANTICIPÉ — si le tenant a déjà un abonnement actif avec une
+    // date_fin future, on calcule la nouvelle date_fin à partir de cette date
+    // existante (pas depuis now()), pour ne pas faire perdre de jours payés.
+    let baseDate = new Date()
+
+    // Chercher l'abonnement actif existant avec date_fin future
+    const { data: abActif } = await adminClient
+      .from('abonnements')
+      .select('date_fin')
+      .eq('tenant_id', abonnement.tenant_id)
+      .eq('statut', 'actif')
+      .gt('date_fin', now)
+      .order('date_fin', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    if (abActif?.date_fin) {
+      // Réabonnement anticipé : partir de l'ancienne date_fin pour ne pas perdre de jours
+      baseDate = new Date(abActif.date_fin)
+      console.log(`[admin-paiements/confirmer] Réabonnement anticipé — base = ${abActif.date_fin}`)
+    }
+
+    const jourDuMois = baseDate.getDate()
+    const finCalc = new Date(baseDate)
+    finCalc.setDate(1)              // Aller au 1er du mois courant (base)
+    finCalc.setMonth(finCalc.getMonth() + 1) // Passer au 1er du mois suivant
+    // Reposer sur le bon jour (min entre le jour original et le dernier jour du mois cible)
+    const dernierJourMoisSuivant = new Date(finCalc.getFullYear(), finCalc.getMonth() + 1, 0).getDate()
+    finCalc.setDate(Math.min(jourDuMois, dernierJourMoisSuivant))
+    dateFin = finCalc.toISOString()
 
     // B-ADPAY-02 — fix session-5 : ajout de .select('id') pour détecter un UPDATE à 0 ligne.
     // Non bloquant : l'abonnement est déjà confirmé (étape 1), l'absence de date_fin
