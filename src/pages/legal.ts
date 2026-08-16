@@ -10,20 +10,20 @@ import { getCookiesContent } from './cookies'
 export function renderLegalPage(type: 'cgu' | 'confidentialite' | 'mentions' | 'cookies', nomProjet: string): string {
   const year = new Date().getFullYear()
 
-  const titles: Record<string, string> = {
+  const titles: Record<'cgu' | 'confidentialite' | 'mentions' | 'cookies', string> = {
     cgu: 'Conditions Générales d\'Utilisation',
     confidentialite: 'Politique de Confidentialité',
     mentions: 'Mentions Légales',
     cookies: 'Politique des Cookies'
   }
-  const navLabels: Record<string, string> = {
+  const navLabels: Record<'cgu' | 'confidentialite' | 'mentions' | 'cookies', string> = {
     cgu: 'Conditions',
     confidentialite: 'Protection',
     mentions: 'Information',
     cookies: 'Traceurs'
   }
 
-  const contents: Record<string, { title: string; body: string }> = {
+  const contents: Record<'cgu' | 'confidentialite' | 'mentions' | 'cookies', { title: string; body: string }> = {
     cgu: { title: titles.cgu, body: getCGUContent(nomProjet, year) },
     confidentialite: { title: titles.confidentialite, body: getConfidentialiteContent(nomProjet, year) },
     mentions: { title: titles.mentions, body: getMentionsContent(nomProjet, year) },

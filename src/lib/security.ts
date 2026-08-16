@@ -238,6 +238,6 @@ export function timingSafeEqual(a: string, b: string): boolean {
   const aBytes = new TextEncoder().encode(a)
   const bBytes = new TextEncoder().encode(b)
   let result = 0
-  for (let i = 0; i < aBytes.length; i++) result |= aBytes[i] ^ bBytes[i]
+  for (let i = 0; i < aBytes.length; i++) result |= (aBytes[i] as number) ^ (bBytes[i] as number)
   return result === 0
 }

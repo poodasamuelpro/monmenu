@@ -85,8 +85,8 @@ function calculerStatutHoraire(horaireRaw: string | null | undefined): { ouvert:
   const joursEn = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']
   const now = new Date()
   const jourIdx = now.getDay() // 0=dim, 1=lun...
-  const jourFr = jours[jourIdx]
-  const jourEn = joursEn[jourIdx]
+  const jourFr = jours[jourIdx] as string
+  const jourEn = joursEn[jourIdx] as string
 
   const entry = horaires[jourFr] || horaires[jourEn] || null
   if (!entry) return { ouvert: false, label: 'Fermé aujourd\'hui' }
@@ -101,8 +101,8 @@ function calculerStatutHoraire(horaireRaw: string | null | undefined): { ouvert:
 
   // Vérifier si on est dans la plage horaire (gère le passage après minuit,
   // ex : 10:00 - 00:00, où "fin" == "00:00" doit être traité comme 24:00)
-  const [hD, mD] = debut.split(':').map(Number)
-  const [hF, mF] = fin.split(':').map(Number)
+  const [hD = 0, mD = 0] = debut.split(':').map(Number)
+  const [hF = 0, mF = 0] = fin.split(':').map(Number)
   const nowMin = now.getHours() * 60 + now.getMinutes()
   const debutMin = hD * 60 + mD
   let finMin = hF * 60 + mF
@@ -145,7 +145,7 @@ function renderHorairesTable(horaireRaw: string | null | undefined): string {
   const jourActuelFr = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'][jourActuelIdx]
 
   const lignes = joursFr.map((jour, i) => {
-    const entry = horaires![jour] || horaires![joursEn[i]] || null
+    const entry = horaires![jour] || horaires![joursEn[i] as string] || null
     const estAujourdhui = jour === jourActuelFr
     const estOuvert = entry && entry.ouvert !== false && entry.open !== false
     const debut = entry?.debut || entry?.start || null

@@ -2,7 +2,7 @@
 import { Hono } from 'hono'
 import type { Env } from '../types/database'
 import { createSupabaseAdminClient, createSupabaseClient } from '../lib/supabase'
-import { authMiddlewarePlatform } from '../middleware/auth'
+import { authMiddlewarePlatform, type AuthContext } from '../middleware/auth'
 import { timingSafeEqual } from '../lib/security'
 
 // BUG-01 CORRIGÉ — Le middleware ADMIN_EMAILS était déclaré APRÈS les routes
@@ -23,7 +23,7 @@ import { timingSafeEqual } from '../lib/security'
 // S3-01 CORRIGÉ — contenu HTML des articles sanitisé avant rendu (suppression
 // des balises script, handlers d'événements et javascript: URIs).
 
-export const blogRouter = new Hono<{ Bindings: Env & { ADMIN_EMAILS?: string } }>()
+export const blogRouter = new Hono<{ Bindings: Env & { ADMIN_EMAILS?: string }; Variables: { auth: AuthContext } }>()
 
 // ── Helper : vérifier si l'email est admin (table admins > ADMIN_EMAILS > fallback) ──
 async function isAdminEmail(env: Env & { ADMIN_EMAILS?: string }, email: string): Promise<boolean> {
