@@ -114,10 +114,10 @@ import { envoyerEmailSuppressionDemande, envoyerEmailAnnulationSuppression, esca
 // B8 — session-5 : validerMimeImage migré vers lib/validation.ts (fonction partagée unifiée).
 // La fonction locale (Corr#12) est supprimée ici. Comportement identique : JPEG/PNG/GIF/WebP.
 import { validerMimeImageUnifie as validerMimeImage } from '../lib/validation'
+// R3 — centralisation des helpers d'auth dans lib/auth.ts
+import { extractToken, verifyAuth, verifyAuthOnboarding } from '../lib/auth'
 
 const dashboardRouter = new Hono<{ Bindings: Env }>()
-
-const ACCESS_TOKEN_COOKIE = 'sb-access-token'
 
 // ── Nom du cookie CSRF (non-httpOnly, lisible par JS) ──────────────────────
 const CSRF_COOKIE = 'csrf-token'
@@ -181,84 +181,8 @@ dashboardRouter.use('*', async (c, next) => {
   return next()
 })
 
-function extractToken(c: any): string | null {
-  const cookieToken = getCookie(c, ACCESS_TOKEN_COOKIE)
-  if (cookieToken && cookieToken.length >= 20) return cookieToken.trim()
-
-  const authHeader = c.req.header('Authorization')
-  if (authHeader?.startsWith('Bearer ')) {
-    const headerToken = authHeader.replace('Bearer ', '').trim()
-    if (headerToken.length >= 20) return headerToken
-  }
-
-  return null
-}
-
-// ---- Middleware d'authentification (STRICT — accès complet requis) ----
-async function verifyAuth(c: any): Promise<{ user_id: string; tenant_id: string; tenant_slug: string; token: string } | null> {
-  const token = extractToken(c)
-  if (!token) return null
-
-  try {
-    const supabase = createSupabaseClient(c.env)
-    const { data: { user }, error } = await supabase.auth.getUser(token)
-    if (error || !user) return null
-
-    const adminClient = createSupabaseAdminClient(c.env)
-    const { data: utData, error: utError } = await adminClient
-      .from('utilisateurs_tenant')
-      .select('tenant_id, tenants!inner(id, slug, deleted_at)')
-      .eq('auth_user_id', user.id)
-      .is('tenants.deleted_at', null)
-      .single()
-
-    if (utError || !utData) return null
-
-    const tenant = utData.tenants as any
-
-    const resultat = await verifierAccesTenant(c.env, utData.tenant_id)
-    if (!resultat.accesComplet) return null
-
-    return { user_id: user.id, tenant_id: utData.tenant_id, tenant_slug: tenant.slug, token }
-  } catch { return null }
-}
-
-// ---- Middleware d'authentification ONBOARDING (PERMISSIF) ----
-// Accepte accesComplet OU accesAbonnementSeul. Réservé aux routes
-// nécessaires AVANT le premier paiement d'un compte ayant choisi un plan
-// payant : configuration initiale du restaurant (setup-restaurant) et
-// affichage des rappels/notifications (essai qui expire, paiement en
-// attente, etc.), qui doivent rester visibles/utilisables pendant toute
-// la phase 'en_attente_paiement_initial' ou 'bloque'.
-// NE JAMAIS utiliser cette variante pour les routes opérationnelles
-// (commandes, menu, stats, livreurs...) — celles-ci doivent rester
-// strictement verifyAuth() / accesComplet.
-async function verifyAuthOnboarding(c: any): Promise<{ user_id: string; tenant_id: string; tenant_slug: string; token: string } | null> {
-  const token = extractToken(c)
-  if (!token) return null
-
-  try {
-    const supabase = createSupabaseClient(c.env)
-    const { data: { user }, error } = await supabase.auth.getUser(token)
-    if (error || !user) return null
-
-    const adminClient = createSupabaseAdminClient(c.env)
-    const { data: utData, error: utError } = await adminClient
-      .from('utilisateurs_tenant')
-      .select('tenant_id, tenants!inner(id, slug, deleted_at)')
-      .eq('auth_user_id', user.id)
-      .is('tenants.deleted_at', null)
-      .single()
-
-    if (utError || !utData) return null
-    const tenant = utData.tenants as any
-
-    const resultat = await verifierAccesTenant(c.env, utData.tenant_id)
-    if (!resultat.accesComplet && !resultat.accesAbonnementSeul) return null
-
-    return { user_id: user.id, tenant_id: utData.tenant_id, tenant_slug: tenant.slug, token }
-  } catch { return null }
-}
+// R3 — extractToken, verifyAuth, verifyAuthOnboarding déplacés dans src/lib/auth.ts
+// Les appels dans ce fichier restent inchangés (même signature).
 
 // ---- GET /api/v1/dashboard/notifications ----
 dashboardRouter.get('/notifications', async (c) => {

@@ -69,7 +69,6 @@ import { getCookie } from 'hono/cookie'
 import type { Env } from '../types/database'
 import { createSupabaseClient, createSupabaseAdminClient } from '../lib/supabase'
 import { setSecurityHeaders, checkRateLimit } from '../lib/security'
-import { verifierAccesTenant } from '../lib/acces-tenant'
 import { chargerPlan } from '../lib/plans'
 import { envoyerEmailPaiementSoumis } from '../lib/brevo'
 import {
@@ -88,80 +87,15 @@ import {
 // A-04 — Migration vers la fonction unifiée (sync, lib/validation.ts).
 // validerMimeImage (async, deprecated @B8-session-5) retirée de lib/paiement.
 import { validerMimeImageUnifie } from '../lib/validation'
+// R3 — verifyAuthPaiement centralisée dans lib/auth.ts
+import { verifyAuthPaiement } from '../lib/auth'
 
 const paiementRouter = new Hono<{ Bindings: Env }>()
-const ACCESS_TOKEN_COOKIE = 'sb-access-token'
 const MAX_PREUVE_SIZE = 5 * 1024 * 1024
 const RATE_LIMIT_UPLOAD = 3
 const RATE_LIMIT_WINDOW = 3600000
 
-// -----------------------------------------------------------------------
-// Helper : Extraction et vérification du token JWT
-// -----------------------------------------------------------------------
-
-/**
- * Extrait et vérifie le token JWT (cookie httpOnly ou header Authorization),
- * puis délègue la décision d'accès à verifierAccesTenant().
- *
- * Les routes /api/v1/paiement/* acceptent TOUT tenant authentifié dont
- * l'accès n'est pas explicitement 'suspendu' ou 'introuvable' — y compris
- * le mode 'bloque' (inactif, sans abonnement en attente), car ces routes
- * sont précisément le moyen de sortir de cet état en soumettant un
- * nouveau paiement.
- */
-async function verifyAuthPaiement(c: any): Promise<{
-  user_id: string
-  tenant_id: string
-  tenant_slug: string
-  tenant_nom: string
-  tenant_statut: string
-  mode_acces: string
-  token: string
-} | null> {
-  const cookieToken = getCookie(c, ACCESS_TOKEN_COOKIE)
-  const headerToken = c.req.header('Authorization')?.replace('Bearer ', '').trim()
-  const token = (cookieToken && cookieToken.length >= 20) ? cookieToken.trim() : (headerToken ?? null)
-  if (!token) return null
-
-  try {
-    const supabase = createSupabaseClient(c.env)
-    const { data: { user }, error } = await supabase.auth.getUser(token)
-    if (error || !user) return null
-
-    const adminClient = createSupabaseAdminClient(c.env)
-    const { data: lien } = await adminClient
-      .from('utilisateurs_tenant')
-      .select('tenant_id')
-      .eq('auth_user_id', user.id)
-      .maybeSingle()
-
-    if (!lien?.tenant_id) return null
-
-    const { data: tenant } = await adminClient
-      .from('tenants')
-      .select('id, slug, nom, statut')
-      .eq('id', lien.tenant_id)
-      .is('deleted_at', null)
-      .single()
-
-    if (!tenant) return null
-
-    const resultat = await verifierAccesTenant(c.env, tenant.id)
-    if (!resultat.accesComplet && !resultat.accesAbonnementSeul) return null
-
-    return {
-      user_id: user.id,
-      tenant_id: tenant.id,
-      tenant_slug: tenant.slug,
-      tenant_nom: tenant.nom,
-      tenant_statut: tenant.statut,
-      mode_acces: resultat.mode,
-      token
-    }
-  } catch {
-    return null
-  }
-}
+// R3 — verifyAuthPaiement déplacé dans src/lib/auth.ts (comportement identique).
 
 // -----------------------------------------------------------------------
 // GET /api/v1/paiement/statut
@@ -399,12 +333,15 @@ paiementRouter.post('/soumettre', async (c) => {
 
   const reference = tenantData?.reference_paiement_active ?? genererReferencePaiement(auth.tenant_slug)
 
-  const cleR2 = construireCleR2Preuve(auth.tenant_id, mimeResult.type!)
+  // Convertir le MIME retourné par validerMimeImageUnifie ('image/jpeg'|'image/png')
+  // vers le suffixe attendu par construireCleR2Preuve ('jpeg'|'png').
+  const imageType: 'jpeg' | 'png' = mimeType === 'image/png' ? 'png' : 'jpeg'
+  const cleR2 = construireCleR2Preuve(auth.tenant_id, imageType)
 
   try {
     await c.env.R2_MEDIA.put(cleR2, buffer, {
       httpMetadata: {
-        contentType: mimeResult.type === 'png' ? 'image/png' : 'image/jpeg',
+        contentType: mimeType,
         contentDisposition: 'inline'
       },
       customMetadata: {

@@ -55,58 +55,13 @@ import {
 import { calculerFraisLivraison } from '../lib/delivery'
 import { createSupabaseClient, createSupabaseClientWithToken, createSupabaseAdminClient } from '../lib/supabase'
 import { sendFcmToTenant } from '../lib/fcm'
+// R3 — verifyRestaurantAuth centralisée dans lib/auth.ts
+import { verifyRestaurantAuth } from '../lib/auth'
 
 const commandesRouter = new Hono<{ Bindings: Env }>()
 
-// ---- Helper auth dashboard ----
-// B-CMD-01 — fix session-5 : utilise createSupabaseAdminClient (service role) au lieu de
-// createSupabaseClientWithToken (RLS actif) pour ce lookup interne. Une policy RLS trop
-// stricte pouvait bloquer silencieusement un restaurateur légitime (utData null → 403
-// injustifié). La protection est conservée par la vérification MANUELLE de auth_user_id
-// (filtre strict, impossibilité d'accéder aux commandes d'un autre tenant).
-// NOTE SÉCURITÉ : le client admin bypasse RLS — c'est sécurisé ICI car :
-//   1. L'identité est vérifiée via supabase.auth.getUser(token) juste avant.
-//   2. Le filtre .eq('auth_user_id', user.id) garantit qu'on ne lit que le lien
-//      appartenant à cet utilisateur authentifié, jamais à un autre compte.
-async function verifyRestaurantAuth(c: any): Promise<{ user_id: string; tenant_id: string; tenant_statut: string } | null> {
-  const authHeader = c.req.header('Authorization')
-  if (!authHeader?.startsWith('Bearer ')) return null
-  const token = authHeader.replace('Bearer ', '')
-  if (!token || token.length < 20) return null
-
-  try {
-    const supabase = createSupabaseClient(c.env)
-    const { data: { user }, error } = await supabase.auth.getUser(token)
-    if (error || !user) return null
-
-    // B-CMD-01 : client ADMIN (service role) — RLS bypassé, vérification manuelle obligatoire.
-    const adminClient = createSupabaseAdminClient(c.env)
-    const { data: utData, error: utError } = await adminClient
-      .from('utilisateurs_tenant')
-      .select('tenant_id, tenants!inner(id, statut, deleted_at)')
-      .eq('auth_user_id', user.id)  // vérification manuelle : uniquement le compte authentifié
-      .is('tenants.deleted_at', null)
-      .neq('tenants.statut', 'suspendu')
-      .single()
-
-    if (utError || !utData) return null
-    const tenant = utData.tenants as any
-
-    // S2-05 CORRIGÉ — verifyRestaurantAuth() ne vérifiait que 'suspendu', permettant
-    // à un tenant 'inactif' ou 'bloque' de continuer via l'app mobile alors que le
-    // dashboard web lui est bloqué (incohérence métier). On aligne sur verifierAccesTenant() :
-    // seuls 'actif', 'essai', 'en_attente_paiement_initial' et 'inactif' (avec fenêtre de
-    // grâce active — vérifiée via le statut) autorisent l'accès. 'bloque' et 'inactif'
-    // hors grâce doivent être bloqués même via l'app mobile pour éviter le contournement.
-    // Note : 'inactif' est toléré ici car verifierAccesTenant() le gère via la fenêtre de
-    // grâce 72h — mais pour la route de mise à jour de statut commandes (opération légère),
-    // on autorise 'inactif' car le restaurant peut encore avoir des commandes en cours.
-    // La cohérence stricte est 'bloque' → refusé (abonnement expiré, sans grâce active).
-    if (tenant.statut === 'bloque') return null
-
-    return { user_id: user.id, tenant_id: utData.tenant_id, tenant_statut: tenant.statut }
-  } catch { return null }
-}
+// R3 — verifyRestaurantAuth déplacé dans src/lib/auth.ts (comportement identique).
+// Voir lib/auth.ts pour les commentaires B-CMD-01 et S2-05.
 
 // ---- Helper validation code promo (Supabase) ----
 async function validerCodePromo(
