@@ -74,7 +74,7 @@ export function renderContactPage(nomProjet: string, whatsappSupport: string = '
           Envoyer un message
         </h2>
 
-        <form id="contact-form" class="space-y-5" onsubmit="submitContact(event)" novalidate>
+        <form id="contact-form" class="space-y-5" novalidate>
           <div class="grid sm:grid-cols-2 gap-4">
             <div>
               <label for="contact-nom" class="block text-sm font-semibold text-gray-700 mb-1.5">
@@ -204,16 +204,20 @@ export function renderContactPage(nomProjet: string, whatsappSupport: string = '
       btn.innerHTML = '<i class="fa-solid fa-paper-plane"></i><span>Envoyer le message</span>';
     }
 
-    // Pré-remplir le sujet si passé en query param
-    const urlParams = new URLSearchParams(window.location.search);
-    const sujet = urlParams.get('sujet');
-    if (sujet) {
-      const select = document.getElementById('contact-sujet');
-      if (select) {
-        const opt = Array.from(select.options).find(o => o.value === sujet);
-        if (opt) select.value = sujet;
+    // Pré-remplir le sujet si passé en query param + attacher submit
+    document.addEventListener('DOMContentLoaded', function() {
+      var urlParams = new URLSearchParams(window.location.search);
+      var sujet = urlParams.get('sujet');
+      if (sujet) {
+        var select = document.getElementById('contact-sujet');
+        if (select) {
+          var opt = Array.from(select.options).find(function(o) { return o.value === sujet; });
+          if (opt) select.value = sujet;
+        }
       }
-    }
+      var form = document.getElementById('contact-form');
+      if (form) form.addEventListener('submit', submitContact);
+    });
   </script>
 </body>
 </html>`

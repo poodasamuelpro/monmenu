@@ -71,14 +71,14 @@ export function renderInscriptionPage(nomProjet: string, nonce: string = ''): st
           <p class="text-sm font-semibold text-gray-900">Plan sélectionné : <span id="badge-plan-nom" class="text-red-600">—</span></p>
           <p class="text-xs text-gray-500 mt-0.5">Vous pourrez passer à un autre plan depuis votre tableau de bord.</p>
         </div>
-        <button type="button" onclick="afficherGrillePlans()" class="ml-auto text-xs text-gray-400 hover:text-red-600 underline flex-shrink-0">Changer</button>
+        <button type="button" id="btn-changer-plan" class="ml-auto text-xs text-gray-400 hover:text-red-600 underline flex-shrink-0">Changer</button>
       </div>
 
       <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-8">
         <!-- Champ caché pour plan_id -->
         <input type="hidden" id="reg-plan-id" value="">
 
-        <form id="inscription-form" class="space-y-5" onsubmit="handleInscription(event)">
+        <form id="inscription-form" class="space-y-5">
           <div>
             <label class="block text-sm font-semibold text-gray-700 mb-1.5">
               Nom du restaurant <span class="text-red-500">*</span>
@@ -86,7 +86,7 @@ export function renderInscriptionPage(nomProjet: string, nonce: string = ''): st
             <input id="reg-nom-restaurant" type="text" required minlength="2" maxlength="100"
               class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200 focus:border-red-400 transition-colors"
               placeholder="Chez Fatou, La Bonne Table..."
-              oninput="updateSlugPreview()">
+              id="reg-nom-restaurant-input">
           </div>
 
           <div>
@@ -125,7 +125,7 @@ export function renderInscriptionPage(nomProjet: string, nonce: string = ''): st
               <input id="reg-password" type="password" required minlength="8"
                 class="w-full border border-gray-200 rounded-xl px-4 py-3 pr-10 text-sm focus:outline-none focus:ring-2 focus:ring-red-200 focus:border-red-400 transition-colors"
                 placeholder="8 caractères minimum">
-              <button type="button" onclick="togglePwd()" class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+              <button type="button" id="reg-toggle-pwd-btn" class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
                 <i id="reg-eye" class="fa-regular fa-eye text-sm"></i>
               </button>
             </div>
@@ -287,7 +287,7 @@ export function renderInscriptionPage(nomProjet: string, nonce: string = ''): st
       if (features.length > 4) {
         featuresHtml += '<li class="text-xs text-gray-400">+' + (features.length - 4) + ' autres...</li>'
       }
-      return '<div class="plan-card relative border rounded-xl p-5 cursor-pointer transition-all ' + ringClasses + '" data-plan-id="' + plan.id + '" onclick="selectionnerPlan(' + "'" + plan.id + "'" + ', ' + "'" + (plan.nom || '').replace(/'/g,"\\'") + "'" + ')">' +
+      return '<div class="plan-card relative border rounded-xl p-5 cursor-pointer transition-all ' + ringClasses + '" data-plan-id="' + plan.id + '" data-plan-nom="' + (plan.nom || '').replace(/"/g,'&quot;') + '">' +
         badgeGratuit +
         '<i class="plan-check fa-solid fa-circle-check text-red-600 absolute top-3 left-3 ' + checkClasses + '"></i>' +
         '<h3 class="font-bold text-gray-900 text-base mb-1 mt-1">' + (plan.nom || '').replace(/</g,'&lt;') + '</h3>' +
@@ -347,8 +347,33 @@ export function renderInscriptionPage(nomProjet: string, nonce: string = ''): st
     document.addEventListener('DOMContentLoaded', function() {
       var params = new URLSearchParams(window.location.search)
       var planIdFromUrl = params.get('plan') || ''
-      // Toujours charger les plans pour permettre la sélection ou la confirmation
       chargerEtAfficherPlans(planIdFromUrl)
+
+      // Event delegation : clic sur une carte plan (remplace onclick= inline)
+      var grille = document.getElementById('grille-plans')
+      if (grille) {
+        grille.addEventListener('click', function(e) {
+          var card = e.target.closest('.plan-card')
+          if (!card) return
+          selectionnerPlan(card.dataset.planId, card.dataset.planNom || '')
+        })
+      }
+
+      // Bouton "Changer" dans le badge (remplace onclick= inline)
+      var btnChanger = document.getElementById('btn-changer-plan')
+      if (btnChanger) btnChanger.addEventListener('click', afficherGrillePlans)
+
+      // Input slug preview (remplace oninput= inline)
+      var inputNomRestaurant = document.getElementById('reg-nom-restaurant')
+      if (inputNomRestaurant) inputNomRestaurant.addEventListener('input', updateSlugPreview)
+
+      // Toggle password (remplace onclick= inline)
+      var regTogglePwd = document.getElementById('reg-toggle-pwd-btn')
+      if (regTogglePwd) regTogglePwd.addEventListener('click', togglePwd)
+
+      // Submit formulaire inscription (remplace onsubmit= inline)
+      var inscriptionForm = document.getElementById('inscription-form')
+      if (inscriptionForm) inscriptionForm.addEventListener('submit', handleInscription)
     })
 
     // ─── Utilitaires formulaire ───────────────────────────────────────────────

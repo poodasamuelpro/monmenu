@@ -41,7 +41,7 @@ export function renderForgotPasswordPage(nomProjet: string, nonce: string = ''):
       <p class="text-sm text-gray-500 mb-6">
         Entrez votre adresse email. Nous vous enverrons un code OTP à 8 chiffres.
       </p>
-      <form id="form-email" onsubmit="sendOtp(event)" class="space-y-4">
+      <form id="form-email" class="space-y-4">
         <div>
           <label class="block text-sm font-semibold text-gray-700 mb-1.5">
             Adresse email
@@ -70,7 +70,7 @@ export function renderForgotPasswordPage(nomProjet: string, nonce: string = ''):
       <p id="otp-hint" class="text-sm text-gray-500 mb-6">
         Code OTP envoyé à votre adresse.
       </p>
-      <form id="form-otp" onsubmit="verifyOtp(event)" class="space-y-4">
+      <form id="form-otp" class="space-y-4">
         <div>
           <label class="block text-sm font-semibold text-gray-700 mb-1.5">
             Code OTP à 8 chiffres
@@ -86,7 +86,7 @@ export function renderForgotPasswordPage(nomProjet: string, nonce: string = ''):
           <span>Vérifier le code</span>
         </button>
       </form>
-      <button onclick="goBack('step-email')" class="mt-4 w-full text-sm text-gray-500 hover:text-gray-700 transition-colors">
+      <button id="btn-go-back" class="mt-4 w-full text-sm text-gray-500 hover:text-gray-700 transition-colors">
         <i class="fa-solid fa-arrow-left mr-1"></i> Changer d'adresse
       </button>
     </div>
@@ -95,7 +95,7 @@ export function renderForgotPasswordPage(nomProjet: string, nonce: string = ''):
     <div id="step-password" class="bg-white rounded-2xl shadow-sm border border-gray-100 p-8 hidden">
       <h1 class="text-xl font-bold text-gray-900 mb-1">Nouveau mot de passe</h1>
       <p class="text-sm text-gray-500 mb-6">Choisissez un mot de passe sécurisé (8 caractères minimum).</p>
-      <form id="form-password" onsubmit="resetPassword(event)" class="space-y-4">
+      <form id="form-password" class="space-y-4">
         <div>
           <label class="block text-sm font-semibold text-gray-700 mb-1.5">
             Nouveau mot de passe
@@ -104,7 +104,7 @@ export function renderForgotPasswordPage(nomProjet: string, nonce: string = ''):
             <input id="input-password" type="password" required minlength="8" autocomplete="new-password"
               class="w-full border border-gray-200 bg-white text-gray-900 rounded-xl px-4 py-3 pr-10 text-sm focus:outline-none focus:ring-2 focus:ring-red-200 focus:border-red-400 placeholder-gray-400"
               placeholder="Minimum 8 caractères">
-            <button type="button" onclick="togglePwd()" class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+            <button type="button" id="btn-toggle-pwd" class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
               <i id="pwd-icon" class="fa-regular fa-eye text-sm"></i>
             </button>
           </div>
@@ -139,6 +139,19 @@ export function renderForgotPasswordPage(nomProjet: string, nonce: string = ''):
   <script nonce="${nonce}">
     let otpEmail = ''
     let otpAccessToken = ''
+
+    document.addEventListener('DOMContentLoaded', function() {
+      var fEmail = document.getElementById('form-email')
+      if (fEmail) fEmail.addEventListener('submit', sendOtp)
+      var fOtp = document.getElementById('form-otp')
+      if (fOtp) fOtp.addEventListener('submit', verifyOtp)
+      var fPwd = document.getElementById('form-password')
+      if (fPwd) fPwd.addEventListener('submit', resetPassword)
+      var btnBack = document.getElementById('btn-go-back')
+      if (btnBack) btnBack.addEventListener('click', function() { goBack('step-email') })
+      var btnTogglePwd = document.getElementById('btn-toggle-pwd')
+      if (btnTogglePwd) btnTogglePwd.addEventListener('click', togglePwd)
+    })
 
     function showStep(id) {
       ['step-email','step-otp','step-password','step-success'].forEach(s => {
