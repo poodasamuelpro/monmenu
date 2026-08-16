@@ -306,12 +306,13 @@ paiementRouter.post('/soumettre', async (c) => {
   const auth = await verifyAuthPaiement(c)
   if (!auth) return c.json({ error: 'Non authentifié.' }, 401)
 
-  if (c.env.KV_CACHE) {
-    const rateKey = `paiement_upload:${auth.tenant_id}`
-    const rateLimit = await checkRateLimit(rateKey, RATE_LIMIT_UPLOAD, RATE_LIMIT_WINDOW, c.env.KV_CACHE)
-    if (!rateLimit.allowed) {
-      return c.json({ error: 'Trop de soumissions. Veuillez réessayer dans 1 heure.' }, 429)
-    }
+  // S7-04 CORRIGÉ — checkRateLimit() a un fallback Map mémoire si KV absent.
+  // Retirer le if (c.env.KV_CACHE) pour toujours appliquer le rate limiting,
+  // même sans KV configuré (protection locale au moins).
+  const rateKey = `paiement_upload:${auth.tenant_id}`
+  const rateLimit = await checkRateLimit(rateKey, RATE_LIMIT_UPLOAD, RATE_LIMIT_WINDOW, c.env.KV_CACHE)
+  if (!rateLimit.allowed) {
+    return c.json({ error: 'Trop de soumissions. Veuillez réessayer dans 1 heure.' }, 429)
   }
 
   if (!c.env.R2_MEDIA) {

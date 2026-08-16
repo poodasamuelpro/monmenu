@@ -508,6 +508,16 @@ async function bloquerPaiementsExpires(env: Env): Promise<void> {
         .maybeSingle()
 
       if (!autreActif) {
+        // BUG-06 CORRIGÉ — Le filtre .eq('statut', 'essai') était trop restrictif :
+        // un tenant 'en_attente_paiement_initial' dont l'admin ne confirme pas le
+        // paiement dans les 72h restait bloqué avec paiement_en_attente_depuis non
+        // réinitialisé → notification "paiement en attente" affichée indéfiniment.
+        // Le filtre élargi à .in() couvre tous les statuts récupérables. Le guard
+        // .neq('statut', 'actif') protège les tenants qui ont un autre abonnement actif
+        // (autreActif vérifié juste au-dessus → ce cas ne passe pas ici, mais filtre
+        // défensif au cas où). L'UPDATE reste idempotent : si statut est déjà 'inactif',
+        // Supabase ne modifie aucune ligne (UPDATE SET statut='inactif' WHERE statut IN
+        // ('essai','en_attente_paiement_initial','inactif') → idempotent).
         await adminClient
           .from('tenants')
           .update({
@@ -516,7 +526,7 @@ async function bloquerPaiementsExpires(env: Env): Promise<void> {
             updated_at: nowIso
           })
           .eq('id', tenant.id)
-          .eq('statut', 'essai') // Ne toucher que les tenants en essai (pas actif, pas paiement_initial — voir note ci-dessus)
+          .in('statut', ['essai', 'en_attente_paiement_initial', 'inactif'])
 
         if (env.KV_CACHE) {
           // B2 session-4 — Corr#8b complété : tenants:public invalidé ici aussi

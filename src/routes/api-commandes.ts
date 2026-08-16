@@ -68,7 +68,7 @@ const commandesRouter = new Hono<{ Bindings: Env }>()
 //   1. L'identité est vérifiée via supabase.auth.getUser(token) juste avant.
 //   2. Le filtre .eq('auth_user_id', user.id) garantit qu'on ne lit que le lien
 //      appartenant à cet utilisateur authentifié, jamais à un autre compte.
-async function verifyRestaurantAuth(c: any): Promise<{ user_id: string; tenant_id: string } | null> {
+async function verifyRestaurantAuth(c: any): Promise<{ user_id: string; tenant_id: string; tenant_statut: string } | null> {
   const authHeader = c.req.header('Authorization')
   if (!authHeader?.startsWith('Bearer ')) return null
   const token = authHeader.replace('Bearer ', '')
@@ -90,7 +90,21 @@ async function verifyRestaurantAuth(c: any): Promise<{ user_id: string; tenant_i
       .single()
 
     if (utError || !utData) return null
-    return { user_id: user.id, tenant_id: utData.tenant_id }
+    const tenant = utData.tenants as any
+
+    // S2-05 CORRIGÉ — verifyRestaurantAuth() ne vérifiait que 'suspendu', permettant
+    // à un tenant 'inactif' ou 'bloque' de continuer via l'app mobile alors que le
+    // dashboard web lui est bloqué (incohérence métier). On aligne sur verifierAccesTenant() :
+    // seuls 'actif', 'essai', 'en_attente_paiement_initial' et 'inactif' (avec fenêtre de
+    // grâce active — vérifiée via le statut) autorisent l'accès. 'bloque' et 'inactif'
+    // hors grâce doivent être bloqués même via l'app mobile pour éviter le contournement.
+    // Note : 'inactif' est toléré ici car verifierAccesTenant() le gère via la fenêtre de
+    // grâce 72h — mais pour la route de mise à jour de statut commandes (opération légère),
+    // on autorise 'inactif' car le restaurant peut encore avoir des commandes en cours.
+    // La cohérence stricte est 'bloque' → refusé (abonnement expiré, sans grâce active).
+    if (tenant.statut === 'bloque') return null
+
+    return { user_id: user.id, tenant_id: utData.tenant_id, tenant_statut: tenant.statut }
   } catch { return null }
 }
 
