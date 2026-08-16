@@ -134,6 +134,15 @@ async function fetchTenantAvecPdv(env: Env, slug: string): Promise<TenantBoutiqu
 // ---- Middleware globaux ----
 app.use('*', logger())
 
+// A-6 (FINDING-20, session-7) — URL workers.dev exacte du projet, en dur.
+// Avant : hostname.endsWith('.workers.dev') autorisait N'IMPORTE QUEL sous-domaine
+// workers.dev (y compris celui d'un attaquant avec un compte Cloudflare gratuit).
+// Après : seul le sous-domaine exact de CE projet est autorisé.
+// SOURCE : wrangler.jsonc, champ "name": "monmenu" → workers.dev = monmenu.poodasamuelpro.workers.dev
+// Mise à jour requise si le compte Cloudflare change ou si le Worker est renommé.
+// À terme, remplacer par un domaine personnalisé et supprimer cette entrée workers.dev.
+const WORKERS_DEV_URL_PROJET = 'monmenu.poodasamuelpro.workers.dev'
+
 function originAutorisee(origin: string): string | null {
   const domainesRacines = ['monmenu.app', 'monmenu.com', 'monmenu.bf']
   const localhosts = ['http://localhost:5173', 'http://localhost:3000']
@@ -145,9 +154,10 @@ function originAutorisee(origin: string): string | null {
     const estDomaineAutorise = domainesRacines.some(
       (racine) => hostname === racine || hostname.endsWith(`.${racine}`)
     )
-    const estWorkersDev = hostname.endsWith('.workers.dev')
+    // A-6 — comparaison exacte de l'URL workers.dev du projet (plus de wildcard)
+    const estWorkersDevProjet = hostname === WORKERS_DEV_URL_PROJET
 
-    if (estDomaineAutorise || estWorkersDev) return origin
+    if (estDomaineAutorise || estWorkersDevProjet) return origin
   } catch {
     return null
   }
