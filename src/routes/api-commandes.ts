@@ -347,18 +347,18 @@ commandesRouter.post('/', async (c) => {
   }
 
   c.executionCtx.waitUntil(
-    adminClient
-      .from('commandes_historique')
-      .insert({
-        id: crypto.randomUUID(),
-        commande_id: commandeId,
-        ancien_statut: 'en_attente',
-        nouveau_statut: 'en_attente',
-        timestamp: now,
-        source: 'client'
-      })
-      .then(() => {})
-      .catch(() => {})
+    Promise.resolve(
+      adminClient
+        .from('commandes_historique')
+        .insert({
+          id: crypto.randomUUID(),
+          commande_id: commandeId,
+          ancien_statut: 'en_attente',
+          nouveau_statut: 'en_attente',
+          timestamp: now,
+          source: 'client'
+        })
+    ).then(() => {}).catch(() => {})
   )
 
   const commandeComplete = {
@@ -406,18 +406,18 @@ commandesRouter.post('/', async (c) => {
   // la création de la commande elle-même (catch silencieux, comme les
   // autres notifications de ce fichier).
   c.executionCtx.waitUntil(
-    adminClient
-      .from('notifications_restaurant')
-      .insert({
-        tenant_id: resolvedTenantId,
-        type: 'info',
-        titre: 'Nouvelle commande reçue',
-        message: `Commande de ${data.client_nom} — ${montantTotal.toLocaleString('fr-FR')} FCFA.`,
-        lien: '/dashboard/commandes',
-        payload: { commande_id: commandeId, montant: montantTotal, client: data.client_nom }
-      })
-      .then(() => {})
-      .catch(() => {})
+    Promise.resolve(
+      adminClient
+        .from('notifications_restaurant')
+        .insert({
+          tenant_id: resolvedTenantId,
+          type: 'info',
+          titre: 'Nouvelle commande reçue',
+          message: `Commande de ${data.client_nom} — ${montantTotal.toLocaleString('fr-FR')} FCFA.`,
+          lien: '/dashboard/commandes',
+          payload: { commande_id: commandeId, montant: montantTotal, client: data.client_nom }
+        })
+    ).then(() => {}).catch(() => {})
   )
 
   const responseData = {

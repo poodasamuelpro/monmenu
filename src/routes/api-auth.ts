@@ -227,15 +227,17 @@ authRouter.post('/login', async (c) => {
 
   const adminClient = createSupabaseAdminClient(c.env)
   c.executionCtx.waitUntil(
-    adminClient.from('audit_log').insert({
-      id: crypto.randomUUID(),
-      tenant_id: tenant.id,
-      action: 'LOGIN',
-      table_name: 'auth',
-      record_id: data.user.id,
-      changes: { email: data.user.email, ip: c.req.header('CF-Connecting-IP') ?? 'unknown' },
-      created_at: new Date().toISOString()
-    }).then(() => {}).catch(() => {})
+    Promise.resolve(
+      adminClient.from('audit_log').insert({
+        id: crypto.randomUUID(),
+        tenant_id: tenant.id,
+        action: 'LOGIN',
+        table_name: 'auth',
+        record_id: data.user.id,
+        changes: { email: data.user.email, ip: c.req.header('CF-Connecting-IP') ?? 'unknown' },
+        created_at: new Date().toISOString()
+      })
+    ).then(() => {}).catch(() => {})
   )
 
   // S1-05 CORRIGÉ — Tokens JWT renvoyés en clair dans le body uniquement pour
