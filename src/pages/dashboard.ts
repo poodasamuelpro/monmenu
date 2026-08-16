@@ -182,8 +182,14 @@ export function renderDashboardPage(
     <div id="sidebar-overlay" class="fixed inset-0 bg-black/50 z-30 hidden lg:hidden" onclick="toggleSidebar()"></div>
   </div>
 
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+  <!-- S6-03 : SRI sha384 calculé sur chart.js@4.5.1/dist/chart.umd.min.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js"
+          integrity="sha384-jb8JQMbMoBUzgWatfe6COACi2ljcDdZQ2OxczGA3bGNeWe+6DChMTBJemed7ZnvJ"
+          crossorigin="anonymous"></script>
+  <!-- S6-03 : SRI sha384 calculé sur @supabase/supabase-js@2.112.3/dist/umd/supabase.js -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.112.3/dist/umd/supabase.js"
+          integrity="sha384-qafw21c/iciq0VXsi9FzkfoQv5I/V0iqE4lSNcKXPnW9/UTJLnv5CcN4FHxVLnKg"
+          crossorigin="anonymous"></script>
   <!-- auth-fetch.js DOIT être chargé avant dashboard.js et dashboard-paiement.js -->
   <script src="/static/js/auth-fetch.js"></script>
   <script src="/static/js/dashboard.js"></script>

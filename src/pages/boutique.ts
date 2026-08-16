@@ -195,7 +195,11 @@ export function renderBoutiquePage(tenant: TenantBoutique, nomProjet: string): s
         url: boutiqueUrl
       }),
       extra: `<!-- Leaflet CSS — carte interactive livraison -->
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.css">`
+  <!-- S6-03 : SRI sha384 calculé sur leaflet@1.9.4/dist/leaflet.min.css -->
+  <link rel="stylesheet"
+        href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.css"
+        integrity="sha384-b8ANgTJvdlAnWM5YGMpKn7Kodm+1k7NYNG9zdjTCcZcKatzYHwZ0RLdWarbJJVzU"
+        crossorigin="anonymous">`
     }
   )}
 <body class="font-sans bg-gray-50">
@@ -591,7 +595,10 @@ export function renderBoutiquePage(tenant: TenantBoutique, nomProjet: string): s
   </footer>
 
   <!-- Leaflet JS — carte interactive -->
-  <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.js"></script>
+  <!-- S6-03 : SRI sha384 calculé sur leaflet@1.9.4/dist/leaflet.min.js -->
+  <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.js"
+          integrity="sha384-u5N8qJeJOO2iqNjIKTdl6KeKsEikMAmCUBPc6sC6uGpgL34aPJ4VgNhuhumedpEk"
+          crossorigin="anonymous"></script>
   <script src="/static/js/main.js"></script>
   <script src="/static/js/boutique.js"></script>
   <script>

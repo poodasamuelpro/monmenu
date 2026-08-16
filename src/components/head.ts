@@ -109,8 +109,13 @@ ${jsonLdTag}
   <link rel="icon" type="image/svg+xml" href="/static/img/favicon.svg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <!-- Google Fonts : CSS dynamique, SRI impossible (contenu varie selon les paramètres) -->
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.5.0/css/all.min.css">
+  <!-- S6-03 : SRI sha384 calculé sur @fortawesome/fontawesome-free@6.5.0/css/all.min.css -->
+  <link rel="stylesheet"
+        href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.5.0/css/all.min.css"
+        integrity="sha384-/o6I2CkkWC//PSjvWC/eYN7l3xM3tJm8ZzVkCOfp//W05QcE3mlGskpoHB6XqI+B"
+        crossorigin="anonymous">
 
   <!-- Config Tailwind centralisée — source unique de vérité pour toutes les pages -->
   <script>
@@ -135,6 +140,7 @@ ${jsonLdTag}
       }
     }
   </script>
+  <!-- Tailwind Play CDN : contenu dynamique (classes injectées à la demande), SRI impossible -->
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="/static/css/design-tokens.css">
   <link rel="stylesheet" href="/static/css/main.css">
