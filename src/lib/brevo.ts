@@ -201,9 +201,11 @@ ${formulaire.message}`
 type BrevoEnv = {
   DB: D1Database
   KV_CACHE?: KVNamespace
-  BREVO_API_KEY_1: string
-  BREVO_API_KEY_2: string
-  BREVO_API_KEY_3: string
+  // Les clés Brevo sont optionnelles dans Env (secrets Cloudflare non injectés en dev)
+  // mais les fonctions vérifient leur présence avant de les utiliser.
+  BREVO_API_KEY_1?: string
+  BREVO_API_KEY_2?: string
+  BREVO_API_KEY_3?: string
   PUBLIC_BASE_URL?: string
 }
 
