@@ -33,15 +33,15 @@ const keyStates: KeyState[] = []
 let initialized = false
 
 function initKeys(env: {
-  BREVO_API_KEY_1: string
-  BREVO_API_KEY_2: string
-  BREVO_API_KEY_3: string
+  BREVO_API_KEY_1?: string
+  BREVO_API_KEY_2?: string
+  BREVO_API_KEY_3?: string
 }): void {
   if (initialized) return
   keyStates.push(
-    { key: env.BREVO_API_KEY_1, errorCount: 0, lastError: null, exhausted: false },
-    { key: env.BREVO_API_KEY_2, errorCount: 0, lastError: null, exhausted: false },
-    { key: env.BREVO_API_KEY_3, errorCount: 0, lastError: null, exhausted: false }
+    { key: env.BREVO_API_KEY_1 ?? '', errorCount: 0, lastError: null, exhausted: false },
+    { key: env.BREVO_API_KEY_2 ?? '', errorCount: 0, lastError: null, exhausted: false },
+    { key: env.BREVO_API_KEY_3 ?? '', errorCount: 0, lastError: null, exhausted: false }
   )
   initialized = true
 }
@@ -115,9 +115,9 @@ export async function sendEmail(
   env: {
     DB: D1Database
     KV_CACHE?: KVNamespace
-    BREVO_API_KEY_1: string
-    BREVO_API_KEY_2: string
-    BREVO_API_KEY_3: string
+    BREVO_API_KEY_1?: string
+    BREVO_API_KEY_2?: string
+    BREVO_API_KEY_3?: string
   },
   senderOverride?: { email: string; name: string }
 ): Promise<{ success: boolean; error?: string }> {
@@ -155,9 +155,9 @@ export async function envoyerEmailContact(
   env: {
     DB: D1Database
     KV_CACHE?: KVNamespace
-    BREVO_API_KEY_1: string
-    BREVO_API_KEY_2: string
-    BREVO_API_KEY_3: string
+    BREVO_API_KEY_1?: string
+    BREVO_API_KEY_2?: string
+    BREVO_API_KEY_3?: string
   },
   formulaire: { nom: string; email: string; profil: string; sujet: string; message: string }
 ): Promise<{ success: boolean; error?: string }> {
