@@ -143,10 +143,26 @@ export function generateCspNonce(): string {
   return btoa(String.fromCharCode(...array))
 }
 
-export function setSecurityHeaders(c: Context, nonce?: string): void {
+// setSecurityHeaders retourne désormais le nonce utilisé pour que l'appelant
+// puisse l'injecter dans les balises <script nonce="…"> de ses templates SSR.
+// A-5 (FINDING-18, session-7) : si un nonce est fourni par l'appelant, il est
+// utilisé dans la CSP (mode strict, sans unsafe-inline) ; sinon la fonction
+// génère automatiquement un nonce et le retourne avec 'unsafe-inline' en
+// fallback de migration (les navigateurs CSP Level 3 ignorent unsafe-inline si
+// un nonce est présent et que les scripts portent le bon nonce — mais pour les
+// navigateurs plus anciens ou les templates pas encore migrés, unsafe-inline
+// garantit la non-régression pendant la migration progressive).
+// Migration : une fois tous les templates mis à jour avec nonce="...", supprimer
+// 'unsafe-inline' de cette directive.
+export function setSecurityHeaders(c: Context, nonce?: string): string {
+  const usedNonce = nonce ?? generateCspNonce()
+  // Inclure 'unsafe-inline' uniquement si aucun nonce explicite n'est fourni
+  // par l'appelant (migration progressive — les templates non encore mis à jour
+  // continuent de fonctionner). Quand un nonce est explicitement fourni ET injecté
+  // dans les templates, supprimer 'unsafe-inline' de cette ligne.
   const scriptSrcDirective = nonce
-    ? `'nonce-${nonce}' cdn.tailwindcss.com cdn.jsdelivr.net api.mapbox.com`
-    : `'unsafe-inline' cdn.tailwindcss.com cdn.jsdelivr.net api.mapbox.com`
+    ? `'nonce-${usedNonce}' cdn.tailwindcss.com cdn.jsdelivr.net api.mapbox.com`
+    : `'unsafe-inline' 'nonce-${usedNonce}' cdn.tailwindcss.com cdn.jsdelivr.net api.mapbox.com`
 
   c.header('Strict-Transport-Security', 'max-age=31536000; includeSubDomains; preload')
   c.header('X-Content-Type-Options', 'nosniff')
@@ -164,6 +180,7 @@ export function setSecurityHeaders(c: Context, nonce?: string): void {
     `font-src 'self' fonts.gstatic.com cdn.jsdelivr.net; ` +
     `frame-ancestors 'none';`
   )
+  return usedNonce
 }
 
 // ---- UUID v4 ----
