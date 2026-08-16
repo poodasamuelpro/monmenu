@@ -493,12 +493,16 @@ commandesRouter.get('/suivi/:token', async (c) => {
 
   const adminClient = createSupabaseAdminClient(c.env)
 
+  // S2-02 CORRIGÉ — 'notes' et 'metadata' retirés du select public.
+  // 'metadata' contient code_promo et remise_promo (confidentiels).
+  // 'notes' = commentaires internes du client — non pertinents pour la page suivi publique.
+  // Aucune fonctionnalité frontend (page de suivi) ne dépend de ces champs.
   const { data: commande, error: cmdError } = await adminClient
     .from('commandes')
     .select(`
       id, client_nom, items_json, montant_total,
       frais_livraison, mode_paiement, statut,
-      token_suivi, notes, metadata, created_at, updated_at,
+      token_suivi, created_at, updated_at,
       tenants!inner(nom, logo_url, couleur_primaire, slug)
     `)
     .eq('token_suivi', token)
@@ -524,13 +528,20 @@ commandesRouter.get('/suivi/:token', async (c) => {
 
   return c.json({
     commande: {
-      ...commande,
+      id: commande.id,
+      client_nom: commande.client_nom,
       items,
+      montant_total: commande.montant_total,
+      frais_livraison: commande.frais_livraison,
+      mode_paiement: commande.mode_paiement,
+      statut: commande.statut,
+      token_suivi: commande.token_suivi,
+      created_at: commande.created_at,
+      updated_at: commande.updated_at,
       restaurant_nom: tenantInfo?.nom,
       logo_url: tenantInfo?.logo_url,
       couleur_primaire: tenantInfo?.couleur_primaire,
-      restaurant_slug: tenantInfo?.slug,
-      tenants: undefined
+      restaurant_slug: tenantInfo?.slug
     },
     historique: historique ?? []
   })
