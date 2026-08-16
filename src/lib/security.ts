@@ -167,7 +167,10 @@ export function setSecurityHeaders(c: Context, nonce?: string): string {
   c.header('Strict-Transport-Security', 'max-age=31536000; includeSubDomains; preload')
   c.header('X-Content-Type-Options', 'nosniff')
   c.header('X-Frame-Options', 'DENY')
-  c.header('X-XSS-Protection', '1; mode=block')
+  // S5-01 — X-XSS-Protection retiré (déprécié, interférence avec les navigateurs modernes)
+  // Remplacé par Cross-Origin-Opener-Policy + Cross-Origin-Embedder-Policy
+  c.header('Cross-Origin-Opener-Policy', 'same-origin')
+  c.header('Cross-Origin-Embedder-Policy', 'require-corp')
   c.header('Referrer-Policy', 'strict-origin-when-cross-origin')
   c.header('Permissions-Policy', 'geolocation=(self), microphone=()')
   c.header(
@@ -176,7 +179,8 @@ export function setSecurityHeaders(c: Context, nonce?: string): string {
     `script-src 'self' ${scriptSrcDirective}; ` +
     `style-src 'self' 'unsafe-inline' cdn.tailwindcss.com cdn.jsdelivr.net api.mapbox.com fonts.googleapis.com; ` +
     `img-src 'self' data: blob: *.mapbox.com *.openstreetmap.org *.supabase.co *.tile.openstreetmap.org api.qrserver.com image.thum.io; ` +
-    `connect-src 'self' https://*.supabase.co wss://*.supabase.co api.mapbox.com events.mapbox.com api.openweathermap.org graph.facebook.com nominatim.openstreetmap.org api.qrserver.com; ` +
+    // S5-02 — graph.facebook.com retiré de connect-src (pixel FB non utilisé, surface d'attaque inutile)
+    `connect-src 'self' https://*.supabase.co wss://*.supabase.co api.mapbox.com events.mapbox.com api.openweathermap.org nominatim.openstreetmap.org api.qrserver.com; ` +
     `font-src 'self' fonts.gstatic.com cdn.jsdelivr.net; ` +
     `frame-ancestors 'none';`
   )
