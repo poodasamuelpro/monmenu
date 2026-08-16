@@ -238,10 +238,19 @@ authRouter.post('/login', async (c) => {
     }).then(() => {}).catch(() => {})
   )
 
+  // S1-05 CORRIGÉ — Tokens JWT renvoyés en clair dans le body uniquement pour
+  // les clients API (header Authorization: Bearer présent = client mobile/API).
+  // Pour les clients navigateur (formulaire web avec cookies httpOnly), ne pas
+  // exposer les tokens dans le body JSON — ils vivent déjà dans les cookies httpOnly,
+  // inaccessibles à JavaScript → réduit la surface d'exfiltration en cas de XSS.
+  const isApiClient = !!c.req.header('Authorization')?.startsWith('Bearer ')
+
   return c.json({
     success: true,
-    access_token: data.session.access_token,
-    refresh_token: data.session.refresh_token,
+    ...(isApiClient ? {
+      access_token: data.session.access_token,
+      refresh_token: data.session.refresh_token
+    } : {}),
     tenant: {
       id: tenant.id,
       nom: tenant.nom,

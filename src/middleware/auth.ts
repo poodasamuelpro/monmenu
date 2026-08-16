@@ -15,7 +15,7 @@
 import type { MiddlewareHandler } from 'hono'
 import { getCookie } from 'hono/cookie'
 import type { Env } from '../types/database'
-import { createSupabaseClient, createSupabaseClientWithToken } from '../lib/supabase'
+import { createSupabaseClient, createSupabaseClientWithToken, createSupabaseAdminClient } from '../lib/supabase'
 
 export interface AuthContext {
   user_id: string
@@ -72,8 +72,12 @@ export const authMiddleware: MiddlewareHandler<{ Bindings: Env; Variables: AuthV
     }
 
     // 2. Résoudre le tenant associé à cet utilisateur
-    const supabaseToken = createSupabaseClientWithToken(c.env, token)
-    const { data: utData, error: utError } = await supabaseToken
+    // BUG-16 CORRIGÉ — utiliser adminClient (service role) pour bypasser les RLS
+    // qui pourraient masquer un tenant en 'en_attente_paiement_initial' ou 'essai'.
+    // Même correctif que api-auth.ts et api-dashboard.ts. La requête reste filtrée
+    // sur auth_user_id — impossible de lire les données d'un autre utilisateur.
+    const adminClientForLookup = createSupabaseAdminClient(c.env)
+    const { data: utData, error: utError } = await adminClientForLookup
       .from('utilisateurs_tenant')
       .select('tenant_id, tenants!inner(id, slug, statut, deleted_at)')
       .eq('auth_user_id', user.id)
