@@ -537,6 +537,13 @@ adminPaiementsRouter.get('/preuve/:id', async (c) => {
   const abonnementId = c.req.param('id')
   if (!abonnementId) return c.json({ error: 'id requis.' }, 422)
 
+  // S2-04 CORRIGÉ — validation UUID v4 pour éviter les injections de chemin
+  // (ex: abonnementId = '../../autre-ressource') et les requêtes Supabase inutiles
+  const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+  if (!UUID_REGEX.test(abonnementId)) {
+    return c.json({ error: 'Identifiant d\'abonnement invalide (UUID v4 requis).' }, 422)
+  }
+
   const adminClient = createSupabaseAdminClient(c.env)
 
   const { data: abonnement } = await adminClient

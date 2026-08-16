@@ -340,12 +340,19 @@ async function verifierAbonnementsExpires(env: Env): Promise<void> {
 
   for (const ab of abExpires) {
     try {
-      // Passer l'abonnement à 'expire'
-      await adminClient
+      // BUG-07/A-09 CORRIGÉ — .select('id') + log si 0 lignes affectées
+      // (race condition : abonnement déjà mis à jour par une autre instance cron)
+      const { data: updatedAb } = await adminClient
         .from('abonnements')
         .update({ statut: 'expire', updated_at: nowIso })
         .eq('id', ab.id)
         .eq('statut', 'actif')
+        .select('id')
+
+      if (!updatedAb || updatedAb.length === 0) {
+        console.warn(`[CRON:abonnements-expires] 0 lignes affectées pour abonnement ${ab.id} — déjà traité par une autre instance ?`)
+        continue
+      }
 
       // Passer le tenant à 'inactif' si toujours 'actif' et aucun autre abonnement actif
       const { data: autreActif } = await adminClient
