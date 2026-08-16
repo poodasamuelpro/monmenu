@@ -428,6 +428,10 @@ dashboardRouter.get('/commandes/export-csv', async (c) => {
   const auth = await verifyAuth(c)
   if (!auth) return c.json({ error: 'Non authentifié.' }, 401)
 
+  // A-9 (FINDING-29, session-7) — rate limiting export CSV (10/heure par tenant)
+  const rateLimit = await checkRateLimit(`export-csv:${auth.tenant_id}`, 10, 3600000, c.env.KV_CACHE)
+  if (!rateLimit.allowed) return c.json({ error: 'Export limité à 10 fois par heure. Réessayez plus tard.' }, 429)
+
   const dateDebut = c.req.query('date_debut') ?? new Date(Date.now() - 30 * 86400000).toISOString().split('T')[0]
   const dateFin = c.req.query('date_fin') ?? new Date().toISOString().split('T')[0]
 
