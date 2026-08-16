@@ -160,14 +160,25 @@ newsletterRouter.post('/desinscription', async (c) => {
   }
 
   const adminClient = createSupabaseAdminClient(c.env)
-  const { error } = await adminClient
+
+  // BUG-04 CORRIGÉ — ajouter .select('id') pour détecter si l'email existe.
+  // Sans ça, Supabase retourne { error: null } même si 0 lignes mises à jour
+  // (UPDATE qui touche 0 lignes n'est pas une erreur côté DB). On retourne 404
+  // si l'email n'est pas dans la table, pour cohérence métier.
+  const { data: rows, error } = await adminClient
     .from('newsletter_subscribers')
     .update({ statut: 'desinscrit' })
     .eq('email', email)
+    .select('id')
 
   if (error) {
     console.error('[Newsletter/desinscription] Erreur:', error.message)
     return c.json({ error: 'Erreur lors de la désinscription.' }, 500)
+  }
+
+  if (!rows || rows.length === 0) {
+    // Email non trouvé — 404 explicite (pas de succès silencieux pour un email inexistant)
+    return c.json({ error: 'Email non trouvé dans notre liste.' }, 404)
   }
 
   return c.json({ success: true, message: 'Désinscription enregistrée.' })

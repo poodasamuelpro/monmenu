@@ -730,13 +730,21 @@ dashboardRouter.patch('/categories/:id', async (c) => {
   if (body.actif !== undefined) updateData.actif = body.actif
   if (body.ordre_affichage !== undefined) updateData.ordre_affichage = body.ordre_affichage
 
-  const { error } = await supabase
+  // BUG-09/A-09 CORRIGÉ — .select('id') pour détecter les 0 lignes affectées
+  // (race condition RLS ou suppression concurrente entre le SELECT de vérif et l'UPDATE)
+  const { data: updatedCat, error } = await supabase
     .from('categories_menu')
     .update(updateData)
     .eq('id', catId)
     .eq('tenant_id', auth.tenant_id)
+    .select('id')
 
   if (error) return c.json({ error: 'Erreur mise à jour catégorie.', detail: error.message }, 500)
+
+  if (!updatedCat || updatedCat.length === 0) {
+    console.warn('[Dashboard/PATCH categories] 0 lignes affectées — tenant_id:', auth.tenant_id, 'cat_id:', catId)
+    return c.json({ error: 'Catégorie introuvable ou supprimée entre-temps.' }, 404)
+  }
 
   try { if (c.env.KV_CACHE) await c.env.KV_CACHE.delete(`menu:${auth.tenant_slug}`) } catch {}
 
@@ -870,13 +878,20 @@ dashboardRouter.patch('/produits/:id', async (c) => {
   if (body.ordre_affichage !== undefined) updateData.ordre_affichage = body.ordre_affichage
   if (body.categorie_id !== undefined) updateData.categorie_id = body.categorie_id
 
-  const { error } = await supabase
+  // BUG-09/A-09 CORRIGÉ — .select('id') pour détecter les 0 lignes affectées
+  const { data: updatedProd, error } = await supabase
     .from('produits')
     .update(updateData)
     .eq('id', prodId)
     .eq('tenant_id', auth.tenant_id)
+    .select('id')
 
   if (error) return c.json({ error: 'Erreur mise à jour produit.', detail: error.message }, 500)
+
+  if (!updatedProd || updatedProd.length === 0) {
+    console.warn('[Dashboard/PATCH produits] 0 lignes affectées — tenant_id:', auth.tenant_id, 'prod_id:', prodId)
+    return c.json({ error: 'Produit introuvable ou supprimé entre-temps.' }, 404)
+  }
 
   try { if (c.env.KV_CACHE) await c.env.KV_CACHE.delete(`menu:${auth.tenant_slug}`) } catch {}
 
@@ -1033,13 +1048,20 @@ dashboardRouter.patch('/supplements/:id', async (c) => {
   if (body.actif !== undefined) updateData.actif = body.actif
   if (body.ordre_affichage !== undefined) updateData.ordre_affichage = body.ordre_affichage
 
-  const { error } = await supabase
+  // BUG-09/A-09 CORRIGÉ — .select('id') pour détecter les 0 lignes affectées
+  const { data: updatedSup, error } = await supabase
     .from('supplements')
     .update(updateData)
     .eq('id', supId)
     .eq('tenant_id', auth.tenant_id)
+    .select('id')
 
   if (error) return c.json({ error: 'Erreur mise à jour supplément.', detail: error.message }, 500)
+
+  if (!updatedSup || updatedSup.length === 0) {
+    console.warn('[Dashboard/PATCH supplements] 0 lignes affectées — tenant_id:', auth.tenant_id, 'sup_id:', supId)
+    return c.json({ error: 'Supplément introuvable ou supprimé entre-temps.' }, 404)
+  }
 
   try { if (c.env.KV_CACHE) await c.env.KV_CACHE.delete(`menu:${auth.tenant_slug}`) } catch {}
   return c.json({ success: true })
