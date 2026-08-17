@@ -109,7 +109,7 @@ export function renderBienvenuePage(nomProjet: string, nonce: string = ''): stri
             <!-- Géolocalisation (§ localisation carte) -->
             <input type="hidden" id="inp-latitude" value="">
             <input type="hidden" id="inp-longitude" value="">
-            <button type="button" onclick="localiserRestaurant()" id="btn-localiser"
+            <button type="button" id="btn-localiser"
               class="mt-2 inline-flex items-center gap-2 text-xs font-semibold text-red-600 hover:text-red-700 transition-colors">
               <i class="fa-solid fa-location-crosshairs"></i>
               <span id="btn-localiser-label">Localiser mon restaurant sur la carte</span>
@@ -128,7 +128,7 @@ export function renderBienvenuePage(nomProjet: string, nonce: string = ''): stri
           </div>
         </div>
         <div class="flex justify-end mt-8">
-          <button onclick="goStep(2)"
+          <button id="btn-step1-next"
             class="bg-red-600 hover:bg-red-700 text-white font-bold px-8 py-3 rounded-xl transition-colors flex items-center gap-2">
             Suivant <i class="fa-solid fa-arrow-right"></i>
           </button>
@@ -144,16 +144,16 @@ export function renderBienvenuePage(nomProjet: string, nonce: string = ''): stri
           <!-- Généré par JS -->
         </div>
         <div class="flex justify-between mt-8">
-          <button onclick="goStep(1)"
+          <button id="btn-step2-back"
             class="border border-gray-200 text-gray-700 font-semibold px-6 py-3 rounded-xl hover:bg-gray-50 transition-colors flex items-center gap-2">
             <i class="fa-solid fa-arrow-left"></i> Retour
           </button>
           <div class="flex gap-3">
-            <button onclick="goStep(3)"
+            <button id="btn-step2-skip"
               class="text-gray-400 hover:text-gray-600 text-sm font-medium px-4 py-3 transition-colors">
               Passer
             </button>
-            <button onclick="goStep(3)"
+            <button id="btn-step2-next"
               class="bg-red-600 hover:bg-red-700 text-white font-bold px-8 py-3 rounded-xl transition-colors flex items-center gap-2">
               Suivant <i class="fa-solid fa-arrow-right"></i>
             </button>
@@ -182,7 +182,7 @@ export function renderBienvenuePage(nomProjet: string, nonce: string = ''): stri
                   <span class="text-sm text-gray-400 group-hover:text-red-500 transition-colors">Cliquer pour choisir un logo</span>
                 </div>
               </label>
-              <input id="inp-logo" type="file" accept="image/*" class="hidden" onchange="previewImage(this,'logo')">
+              <input id="inp-logo" type="file" accept="image/*" class="hidden">
             </div>
             <p id="logo-existant-note" class="hidden text-xs text-gray-400 mt-2">
               <i class="fa-solid fa-circle-info mr-1"></i>Logo déjà enregistré. Choisissez un fichier pour le remplacer.
@@ -204,7 +204,7 @@ export function renderBienvenuePage(nomProjet: string, nonce: string = ''): stri
                   <span class="text-sm text-gray-400 group-hover:text-red-500 transition-colors">Cliquer pour choisir une bannière</span>
                 </div>
               </label>
-              <input id="inp-banniere" type="file" accept="image/*" class="hidden" onchange="previewImage(this,'banniere')">
+              <input id="inp-banniere" type="file" accept="image/*" class="hidden">
             </div>
             <p id="banniere-existant-note" class="hidden text-xs text-gray-400 mt-2">
               <i class="fa-solid fa-circle-info mr-1"></i>Bannière déjà enregistrée. Choisissez un fichier pour la remplacer.
@@ -212,16 +212,16 @@ export function renderBienvenuePage(nomProjet: string, nonce: string = ''): stri
           </div>
         </div>
         <div class="flex justify-between mt-8">
-          <button onclick="goStep(2)"
+          <button id="btn-step3-back"
             class="border border-gray-200 text-gray-700 font-semibold px-6 py-3 rounded-xl hover:bg-gray-50 transition-colors flex items-center gap-2">
             <i class="fa-solid fa-arrow-left"></i> Retour
           </button>
           <div class="flex gap-3">
-            <button onclick="goStep(4)"
+            <button id="btn-step3-skip"
               class="text-gray-400 hover:text-gray-600 text-sm font-medium px-4 py-3 transition-colors">
               Passer
             </button>
-            <button onclick="goStep(4)"
+            <button id="btn-step3-next"
               class="bg-red-600 hover:bg-red-700 text-white font-bold px-8 py-3 rounded-xl transition-colors flex items-center gap-2">
               Suivant <i class="fa-solid fa-arrow-right"></i>
             </button>
@@ -267,11 +267,11 @@ export function renderBienvenuePage(nomProjet: string, nonce: string = ''): stri
         <div id="setup-message" class="hidden mt-6 p-4 rounded-xl text-sm font-medium"></div>
 
         <div class="flex justify-between mt-8">
-          <button onclick="goStep(3)"
+          <button id="btn-step4-back"
             class="border border-gray-200 text-gray-700 font-semibold px-6 py-3 rounded-xl hover:bg-gray-50 transition-colors flex items-center gap-2">
             <i class="fa-solid fa-arrow-left"></i> Retour
           </button>
-          <button id="btn-submit-setup" onclick="soumettreBienvenue()"
+          <button id="btn-submit-setup"
             class="bg-red-600 hover:bg-red-700 text-white font-bold px-8 py-3 rounded-xl transition-colors flex items-center gap-2">
             Suivant <i class="fa-solid fa-arrow-right"></i>
           </button>
@@ -312,7 +312,7 @@ export function renderBienvenuePage(nomProjet: string, nonce: string = ''): stri
               </p>
               <div class="bg-white border border-blue-200 rounded-xl px-4 py-3 flex items-center justify-between">
                 <code id="reference-paiement-value" class="text-lg font-mono font-bold text-blue-700 tracking-wider">—</code>
-                <button onclick="copierReference()" id="btn-copier-ref"
+                <button id="btn-copier-ref"
                   class="ml-3 text-xs text-blue-600 hover:text-blue-800 border border-blue-200 hover:border-blue-400 px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1.5">
                   <i class="fa-solid fa-copy"></i> Copier
                 </button>
@@ -352,7 +352,7 @@ export function renderBienvenuePage(nomProjet: string, nonce: string = ''): stri
         </div>
 
         <div class="flex justify-between mt-8">
-          <button onclick="goStep(4)"
+          <button id="btn-step5-back"
             class="border border-gray-200 text-gray-700 font-semibold px-6 py-3 rounded-xl hover:bg-gray-50 transition-colors flex items-center gap-2">
             <i class="fa-solid fa-arrow-left"></i> Retour
           </button>
@@ -472,7 +472,7 @@ export function renderBienvenuePage(nomProjet: string, nonce: string = ''): stri
           <div class="w-24 text-sm font-medium text-gray-700 flex-shrink-0">\${joursLabels[jour]}</div>
           <label class="relative inline-flex items-center cursor-pointer flex-shrink-0">
             <input type="checkbox" id="h-\${jour}-ouvert" class="sr-only peer" checked
-              onchange="toggleHoraire('\${jour}')">
+              data-action-change="toggleHoraire" data-jour="\${jour}">
             <div class="w-10 h-5 bg-gray-200 peer-focus:ring-2 peer-focus:ring-red-300 rounded-full peer peer-checked:bg-red-600 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-5"></div>
           </label>
           <div id="h-\${jour}-times" class="flex items-center gap-2 flex-1">
@@ -723,8 +723,7 @@ export function renderBienvenuePage(nomProjet: string, nonce: string = ''): stri
 
         grid.innerHTML = plans.map(p => \`
           <div class="plan-card border-2 border-gray-200 rounded-2xl p-5 cursor-pointer transition-all hover:border-red-300 hover:shadow-md"
-               data-plan-id="\${p.id}" data-plan-nom="\${escHtml(p.nom)}" data-plan-prix="\${p.prix_mensuel}"
-               onclick="selectionnerPlan('\${p.id}', '\${escHtml(p.nom)}', \${p.prix_mensuel})">
+               data-action="selectionnerPlan" data-plan-id="\${p.id}" data-plan-nom="\${escHtml(p.nom)}" data-plan-prix="\${p.prix_mensuel}">
             <div class="flex items-start justify-between mb-3">
               <div>
                 <h3 class="font-bold text-gray-900 text-sm">\${escHtml(p.nom)}</h3>
@@ -825,6 +824,58 @@ export function renderBienvenuePage(nomProjet: string, nonce: string = ''): stri
         }
       });
     }
+
+    // ═══════════════════════════════════════════
+    // CSP-FIX (session 16) — Event delegation
+    // Remplace tous les onclick=/onchange= inline
+    // ═══════════════════════════════════════════
+    document.addEventListener('DOMContentLoaded', function() {
+      // Boutons de navigation statiques
+      var _ev = [
+        ['btn-localiser',   function() { localiserRestaurant(); }],
+        ['btn-step1-next',  function() { goStep(2); }],
+        ['btn-step2-back',  function() { goStep(1); }],
+        ['btn-step2-skip',  function() { goStep(3); }],
+        ['btn-step2-next',  function() { goStep(3); }],
+        ['btn-step3-back',  function() { goStep(2); }],
+        ['btn-step3-skip',  function() { goStep(4); }],
+        ['btn-step3-next',  function() { goStep(4); }],
+        ['btn-step4-back',  function() { goStep(3); }],
+        ['btn-submit-setup',function() { soumettreBienvenue(); }],
+        ['btn-copier-ref',  function() { copierReference(); }],
+        ['btn-step5-back',  function() { goStep(4); }],
+        ['inp-logo',        null],   // change, voir ci-dessous
+        ['inp-banniere',    null]    // change, voir ci-dessous
+      ];
+      _ev.forEach(function(pair) {
+        var el = document.getElementById(pair[0]);
+        if (el && pair[1]) el.addEventListener('click', pair[1]);
+      });
+
+      // input file → change
+      var inpLogo = document.getElementById('inp-logo');
+      if (inpLogo) inpLogo.addEventListener('change', function() { previewImage(this, 'logo'); });
+      var inpBanniere = document.getElementById('inp-banniere');
+      if (inpBanniere) inpBanniere.addEventListener('change', function() { previewImage(this, 'banniere'); });
+    });
+
+    // Délégation pour les éléments générés dynamiquement
+    // (plan-cards dans chargerPlans() + horaires dans initHoraires())
+    document.addEventListener('click', function(e) {
+      var el = e.target.closest('[data-action]');
+      if (!el) return;
+      switch (el.dataset.action) {
+        case 'selectionnerPlan':
+          selectionnerPlan(el.dataset.planId, el.dataset.planNom, parseFloat(el.dataset.planPrix));
+          break;
+      }
+    });
+
+    document.addEventListener('change', function(e) {
+      var el = e.target.closest('[data-action-change]');
+      if (!el) return;
+      if (el.dataset.actionChange === 'toggleHoraire') toggleHoraire(el.dataset.jour);
+    });
   </script>
 </body>
 </html>`
