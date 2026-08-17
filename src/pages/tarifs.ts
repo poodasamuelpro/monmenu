@@ -27,18 +27,18 @@ export function renderTarifsPage(nomProjet: string, nonce: string = ''): string 
       <!-- Sélecteur devise + période -->
       <div class="flex flex-col sm:flex-row gap-4 justify-center items-center mb-4">
         <div class="inline-flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-xl p-1 shadow-sm">
-          <button onclick="changerDevise('FCFA')" id="btn-fcfa"
+          <button id="btn-fcfa"
             class="devise-btn active px-4 py-2 rounded-lg text-sm font-semibold bg-white shadow-sm text-gray-900 transition-all">FCFA</button>
-          <button onclick="changerDevise('EUR')" id="btn-eur"
+          <button id="btn-eur"
             class="devise-btn px-4 py-2 rounded-lg text-sm font-semibold text-gray-500 hover:text-gray-900 transition-all">EUR</button>
-          <button onclick="changerDevise('USD')" id="btn-usd"
+          <button id="btn-usd"
             class="devise-btn px-4 py-2 rounded-lg text-sm font-semibold text-gray-500 hover:text-gray-900 transition-all">USD</button>
         </div>
 
         <div class="inline-flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-xl p-1 shadow-sm">
-          <button onclick="changerPeriode('mensuel')" id="btn-mensuel"
+          <button id="btn-mensuel"
             class="periode-btn active px-4 py-2 rounded-lg text-sm font-semibold bg-white shadow-sm text-gray-900 transition-all">Mensuel</button>
-          <button onclick="changerPeriode('annuel')" id="btn-annuel"
+          <button id="btn-annuel"
             class="periode-btn px-4 py-2 rounded-lg text-sm font-semibold text-gray-500 hover:text-gray-900 transition-all flex items-center gap-1.5">
             Annuel
             <span class="bg-green-100 text-green-700 text-xs font-bold px-1.5 py-0.5 rounded-full">-17%</span>
@@ -188,7 +188,7 @@ export function renderTarifsPage(nomProjet: string, nonce: string = ''): string 
           },
         ].map((faq, i) => `
           <div class="border border-gray-100 rounded-xl overflow-hidden">
-            <button onclick="toggleTariffsFaq(${i})"
+            <button data-action="toggleTariffsFaq" data-idx="${i}"
               class="w-full text-left px-5 py-4 flex items-center justify-between gap-3 hover:bg-gray-50 transition-colors"
               aria-expanded="false" aria-controls="tariffs-faq-${i}">
               <span class="font-semibold text-gray-900 text-sm">${faq.q}</span>
@@ -316,6 +316,28 @@ export function renderTarifsPage(nomProjet: string, nonce: string = ''): string 
     }
 
     document.addEventListener('DOMContentLoaded', () => chargerPlans());
+
+    // ═══════════════════════════════════════════
+    // CSP-FIX (session 16) — Event listeners tarifs
+    // ═══════════════════════════════════════════
+    (function() {
+      // Boutons devise
+      var devises = {fcfa:'FCFA', eur:'EUR', usd:'USD'};
+      Object.keys(devises).forEach(function(k) {
+        var el = document.getElementById('btn-' + k);
+        if (el) el.addEventListener('click', (function(d){ return function(){ changerDevise(d); }; })(devises[k]));
+      });
+      // Boutons période
+      ['mensuel','annuel'].forEach(function(p) {
+        var el = document.getElementById('btn-' + p);
+        if (el) el.addEventListener('click', (function(pp){ return function(){ changerPeriode(pp); }; })(p));
+      });
+      // Délégation FAQ (éléments générés dynamiquement)
+      document.addEventListener('click', function(e) {
+        var btn = e.target.closest('[data-action="toggleTariffsFaq"]');
+        if (btn) toggleTariffsFaq(parseInt(btn.dataset.idx));
+      });
+    }());
   </script>
 </body>
 </html>`
