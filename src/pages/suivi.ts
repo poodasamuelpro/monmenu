@@ -176,7 +176,7 @@ export function renderSuiviPage(token: string, nomProjet: string, tenantSlug?: s
             <i class="fa-solid fa-triangle-exclamation text-yellow-500 text-2xl mb-2 block"></i>
             <p class="text-gray-700 font-semibold">Erreur de chargement</p>
             <p class="text-sm text-gray-500 mt-1">Réessayez dans quelques instants.</p>
-            <button onclick="chargerSuivi()" class="mt-3 text-xs font-semibold text-red-600 hover:underline">Réessayer</button>
+            <button data-action="chargerSuivi" class="mt-3 text-xs font-semibold text-red-600 hover:underline">Réessayer</button>
           </div>
         \`;
       }
@@ -184,6 +184,12 @@ export function renderSuiviPage(token: string, nomProjet: string, tenantSlug?: s
 
     chargerSuivi();
     setInterval(chargerSuivi, 30000);
+
+    // CSP-FIX (session 16) — délégation pour bouton "Réessayer" (généré dans innerHTML)
+    document.addEventListener('click', function(e) {
+      var btn = e.target.closest('[data-action="chargerSuivi"]');
+      if (btn) chargerSuivi();
+    });
   </script>
 </body>
 </html>`
