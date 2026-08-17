@@ -117,11 +117,11 @@ function showModal(titre, contenu) {
     document.body.appendChild(modal);
   }
   modal.innerHTML = `
-    <div class="absolute inset-0 bg-black/50" onclick="closeModal()"></div>
+    <div class="absolute inset-0 bg-black/50" data-action="close-modal"></div>
     <div class="absolute inset-x-4 bottom-0 sm:inset-auto sm:top-1/2 sm:left-1/2 sm:-translate-x-1/2 sm:-translate-y-1/2 bg-white rounded-2xl sm:w-96 shadow-2xl max-h-[90vh] overflow-y-auto">
       <div class="flex items-center justify-between px-5 py-4 border-b border-gray-100 sticky top-0 bg-white z-10">
         <h3 class="font-bold text-gray-900">${escHtml(titre)}</h3>
-        <button onclick="closeModal()" class="p-1.5 text-gray-400 hover:text-gray-700 rounded-lg hover:bg-gray-100 transition-colors" aria-label="Fermer">
+        <button data-action="close-modal" class="p-1.5 text-gray-400 hover:text-gray-700 rounded-lg hover:bg-gray-100 transition-colors" aria-label="Fermer">
           <i class="fa-solid fa-xmark"></i>
         </button>
       </div>
@@ -495,7 +495,7 @@ async function loadHistoriquePaiements() {
     wrap.innerHTML = `
       <div class="bg-red-50 border border-red-100 rounded-xl p-4 text-center text-sm text-red-600">
         <i class="fa-solid fa-circle-exclamation mr-1"></i> Erreur de chargement.
-        <button onclick="loadHistoriquePaiements()" class="underline ml-1">Réessayer</button>
+        <button data-action="loadHistoriquePaiements" class="underline ml-1">Réessayer</button>
       </div>`;
   }
 }
@@ -508,14 +508,14 @@ async function loadCommandes() {
   if (!content) return;
   content.innerHTML = `
     <div class="flex flex-wrap gap-2 mb-5">
-      <button onclick="filtrerCommandes(null)" class="statut-filter-btn active px-3 py-1.5 rounded-lg text-xs font-semibold bg-red-600 text-white" data-statut="toutes">Toutes</button>
+      <button data-action="filtrerCommandes" data-statut="toutes" class="statut-filter-btn active px-3 py-1.5 rounded-lg text-xs font-semibold bg-red-600 text-white">Toutes</button>
       ${['en_attente','confirmee','en_preparation','en_livraison','livree','annulee'].map(s =>
-        `<button onclick="filtrerCommandes('${s}')" class="statut-filter-btn px-3 py-1.5 rounded-lg text-xs font-semibold border border-gray-200 text-gray-600 hover:border-red-300 hover:text-red-600 transition-colors" data-statut="${s}">${s.replace(/_/g,' ')}</button>`
+        `<button data-action="filtrerCommandes" data-statut="${s}" class="statut-filter-btn px-3 py-1.5 rounded-lg text-xs font-semibold border border-gray-200 text-gray-600 hover:border-red-300 hover:text-red-600 transition-colors">${s.replace(/_/g,' ')}</button>`
       ).join('')}
-      <button onclick="loadCommandes()" class="ml-auto flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-700 border border-gray-200 rounded-lg px-3 py-1.5 transition-colors">
+      <button data-action="loadCommandes" class="ml-auto flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-700 border border-gray-200 rounded-lg px-3 py-1.5 transition-colors">
         <i class="fa-solid fa-rotate-right"></i> Actualiser
       </button>
-      <button onclick="exportCommandes()" class="flex items-center gap-1.5 text-xs text-green-700 hover:text-green-800 border border-green-200 rounded-lg px-3 py-1.5 transition-colors bg-green-50 hover:bg-green-100">
+      <button data-action="exportCommandes" class="flex items-center gap-1.5 text-xs text-green-700 hover:text-green-800 border border-green-200 rounded-lg px-3 py-1.5 transition-colors bg-green-50 hover:bg-green-100">
         <i class="fa-solid fa-file-csv"></i> Export CSV
       </button>
     </div>
@@ -568,7 +568,7 @@ async function fetchCommandes() {
   } catch {
     listEl.innerHTML = `<div class="bg-red-50 border border-red-100 rounded-xl p-4 text-center text-sm text-red-600">
       <i class="fa-solid fa-circle-exclamation mr-1"></i> Erreur de chargement.
-      <button onclick="fetchCommandes()" class="underline ml-1">Réessayer</button>
+      <button data-action="fetchCommandes" class="underline ml-1">Réessayer</button>
     </div>`;
   }
 }
@@ -607,17 +607,17 @@ function renderCommandes(commandes, container, total) {
       : '';
     const actions = [];
     if (cmd.statut === 'en_attente') {
-      actions.push(`<button onclick="changerStatut('${cmd.id}','confirmee')" class="bg-blue-600 text-white text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-blue-700"><i class="fa-solid fa-check mr-1"></i>Confirmer</button>`);
-      actions.push(`<button onclick="changerStatut('${cmd.id}','annulee')" class="border border-red-200 text-red-600 text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-red-50">Annuler</button>`);
+      actions.push(`<button data-action="changerStatut" data-cmd-id="${cmd.id}" data-statut="confirmee" class="bg-blue-600 text-white text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-blue-700"><i class="fa-solid fa-check mr-1"></i>Confirmer</button>`);
+      actions.push(`<button data-action="changerStatut" data-cmd-id="${cmd.id}" data-statut="annulee" class="border border-red-200 text-red-600 text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-red-50">Annuler</button>`);
     }
     if (cmd.statut === 'confirmee') {
-      actions.push(`<button onclick="choisirLivreurEtPreparer('${cmd.id}')" class="bg-orange-500 text-white text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-orange-600"><i class="fa-solid fa-fire-burner mr-1"></i>Préparer</button>`);
+      actions.push(`<button data-action="choisirLivreurEtPreparer" data-cmd-id="${cmd.id}" class="bg-orange-500 text-white text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-orange-600"><i class="fa-solid fa-fire-burner mr-1"></i>Préparer</button>`);
     }
     if (cmd.statut === 'en_preparation') {
-      actions.push(`<button onclick="changerStatut('${cmd.id}','en_livraison')" class="bg-purple-600 text-white text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-purple-700"><i class="fa-solid fa-motorcycle mr-1"></i>En livraison</button>`);
+      actions.push(`<button data-action="changerStatut" data-cmd-id="${cmd.id}" data-statut="en_livraison" class="bg-purple-600 text-white text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-purple-700"><i class="fa-solid fa-motorcycle mr-1"></i>En livraison</button>`);
     }
     if (cmd.statut === 'en_livraison') {
-      actions.push(`<button onclick="changerStatut('${cmd.id}','livree')" class="bg-green-600 text-white text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-green-700"><i class="fa-solid fa-check-double mr-1"></i>Livrée</button>`);
+      actions.push(`<button data-action="changerStatut" data-cmd-id="${cmd.id}" data-statut="livree" class="bg-green-600 text-white text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-green-700"><i class="fa-solid fa-check-double mr-1"></i>Livrée</button>`);
     }
     // AJOUT — affichage des suppléments choisis sous chaque ligne d'article
     const itemsHtml = items.map(i => {
@@ -704,7 +704,7 @@ async function choisirLivreurEtPreparer(commandeId) {
   }
 
   showModal('Mettre en préparation', `
-    <form onsubmit="submitChoixLivreur(event,'${commandeId}')" class="space-y-4">
+    <form data-form-action="submitChoixLivreur" data-cmd-id="${commandeId}" class="space-y-4">
       <div>
         <label class="block text-sm font-semibold text-gray-700 mb-1.5">Assigner un livreur (optionnel)</label>
         <select id="choix-livreur" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200">
@@ -848,7 +848,7 @@ function renderMenuEditor(categories, container) {
   container.innerHTML = `
     <div class="flex items-center justify-between mb-5">
       <p class="text-sm text-gray-500">${categories.length} catégorie(s)</p>
-      <button onclick="showAddCategorieModal()" class="bg-red-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-red-700 transition-colors flex items-center gap-1.5">
+      <button data-action="showAddCategorieModal" class="bg-red-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-red-700 transition-colors flex items-center gap-1.5">
         <i class="fa-solid fa-plus text-xs"></i> Nouvelle catégorie
       </button>
     </div>
@@ -857,7 +857,7 @@ function renderMenuEditor(categories, container) {
         <i class="fa-solid fa-book-open text-4xl text-gray-200 mb-4 block"></i>
         <p class="font-semibold text-gray-500 mb-2">Menu vide</p>
         <p class="text-sm text-gray-400 mb-5">Commencez par créer votre première catégorie (ex: Entrées, Plats, Boissons).</p>
-        <button onclick="showAddCategorieModal()" class="bg-red-600 text-white text-sm font-semibold px-5 py-2.5 rounded-xl hover:bg-red-700">
+        <button data-action="showAddCategorieModal" class="bg-red-600 text-white text-sm font-semibold px-5 py-2.5 rounded-xl hover:bg-red-700">
           <i class="fa-solid fa-plus mr-1.5"></i> Créer une catégorie
         </button>
       </div>` :
@@ -869,13 +869,13 @@ function renderMenuEditor(categories, container) {
             ${cat.description ? `<p class="text-xs text-gray-400">${escHtml(cat.description)}</p>` : ''}
           </div>
           <div class="flex gap-2">
-            <button onclick="showAddProduitModal('${cat.id}')" class="text-xs bg-blue-50 text-blue-600 font-semibold px-3 py-1.5 rounded-lg hover:bg-blue-100 transition-colors">
+            <button data-action="showAddProduitModal" data-cat-id="${cat.id}" class="text-xs bg-blue-50 text-blue-600 font-semibold px-3 py-1.5 rounded-lg hover:bg-blue-100 transition-colors">
               <i class="fa-solid fa-plus mr-1"></i>Produit
             </button>
-            <button onclick="showEditCategorieModal('${cat.id}','${escJs(cat.nom)}')" class="text-xs bg-gray-50 text-gray-600 font-semibold px-3 py-1.5 rounded-lg hover:bg-gray-100">
+            <button data-action="showEditCategorieModal" data-cat-id="${cat.id}" data-cat-nom="${escHtml(cat.nom)}" class="text-xs bg-gray-50 text-gray-600 font-semibold px-3 py-1.5 rounded-lg hover:bg-gray-100">
               <i class="fa-solid fa-pen text-xs"></i>
             </button>
-            <button onclick="supprimerCategorie('${cat.id}')" class="text-xs bg-red-50 text-red-500 font-semibold px-3 py-1.5 rounded-lg hover:bg-red-100">
+            <button data-action="supprimerCategorie" data-cat-id="${cat.id}" class="text-xs bg-red-50 text-red-500 font-semibold px-3 py-1.5 rounded-lg hover:bg-red-100">
               <i class="fa-solid fa-trash text-xs"></i>
             </button>
           </div>
@@ -892,15 +892,14 @@ function renderMenuEditor(categories, container) {
                 <div class="text-xs font-bold text-gray-700 mt-0.5">${(p.prix||0).toLocaleString('fr-FR')} FCFA</div>
               </div>
               <div class="flex items-center gap-2 flex-shrink-0">
-                <span class="text-xs px-2 py-0.5 rounded-full cursor-pointer ${p.disponible ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}"
-                  onclick="toggleDisponible('${p.id}',${p.disponible?1:0})" title="${p.disponible?'Désactiver':'Activer'}">${p.disponible?'Dispo':'Indispo'}</span>
-                <button onclick="showSupplementsModal('${p.id}','${escJs(p.nom)}')" class="p-1.5 text-gray-400 hover:text-purple-600" title="Suppléments">
+                <span data-action="toggleDisponible" data-prod-id="${p.id}" data-disponible="${p.disponible?1:0}" class="text-xs px-2 py-0.5 rounded-full cursor-pointer ${p.disponible ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}" title="${p.disponible?'Désactiver':'Activer'}">${p.disponible?'Dispo':'Indispo'}</span>
+                <button data-action="showSupplementsModal" data-prod-id="${p.id}" data-prod-nom="${escHtml(p.nom)}" class="p-1.5 text-gray-400 hover:text-purple-600" title="Suppléments">
                   <i class="fa-solid fa-layer-group text-xs"></i>
                 </button>
-                <button onclick="showEditProduitModal('${p.id}','${escJs(p.nom)}','${escJs(p.description||'')}',${p.prix},'${escJs(p.photo_url||'')}')" class="p-1.5 text-gray-400 hover:text-blue-600" title="Modifier">
+                <button data-action="showEditProduitModal" data-prod-id="${p.id}" data-prod-nom="${escHtml(p.nom)}" data-prod-desc="${escHtml(p.description||'')}" data-prod-prix="${p.prix}" data-prod-photo="${escHtml(p.photo_url||'')}" class="p-1.5 text-gray-400 hover:text-blue-600" title="Modifier">
                   <i class="fa-solid fa-pen text-xs"></i>
                 </button>
-                <button onclick="supprimerProduit('${p.id}')" class="p-1.5 text-gray-400 hover:text-red-500" title="Supprimer">
+                <button data-action="supprimerProduit" data-prod-id="${p.id}" class="p-1.5 text-gray-400 hover:text-red-500" title="Supprimer">
                   <i class="fa-solid fa-trash text-xs"></i>
                 </button>
               </div>
@@ -912,7 +911,7 @@ function renderMenuEditor(categories, container) {
 // --- Catégories modals ---
 function showAddCategorieModal() {
   showModal('Nouvelle catégorie', `
-    <form onsubmit="submitAddCategorie(event)" class="space-y-4">
+    <form data-form-action="submitAddCategorie" class="space-y-4">
       <div>
         <label class="block text-sm font-semibold text-gray-700 mb-1.5">Nom *</label>
         <input id="cat-nom" type="text" required maxlength="100" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200" placeholder="Entrées, Plats, Boissons...">
@@ -934,7 +933,7 @@ async function submitAddCategorie(e) {
 }
 function showEditCategorieModal(catId, nom) {
   showModal('Modifier la catégorie', `
-    <form onsubmit="submitEditCategorie(event,'${catId}')" class="space-y-4">
+    <form data-form-action="submitEditCategorie" data-cat-id="${catId}" class="space-y-4">
       <div>
         <label class="block text-sm font-semibold text-gray-700 mb-1.5">Nom *</label>
         <input id="edit-cat-nom" type="text" required maxlength="100" value="${escHtml(nom)}" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200">
@@ -968,7 +967,7 @@ async function supprimerCategorie(catId) {
 // --- Produits modals ---
 function showAddProduitModal(categorieId) {
   showModal('Nouveau produit', `
-    <form onsubmit="submitAddProduit(event,'${categorieId}')" class="space-y-4">
+    <form data-form-action="submitAddProduit" data-cat-id="${categorieId}" class="space-y-4">
       <div>
         <label class="block text-sm font-semibold text-gray-700 mb-1.5">Nom *</label>
         <input id="prod-nom" type="text" required maxlength="200" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200" placeholder="Thiéboudienne, Jus de bissap...">
@@ -1028,7 +1027,7 @@ async function submitAddProduit(e, categorieId) {
 
 function showEditProduitModal(prodId, nom, description, prix, photoUrl) {
   showModal('Modifier le produit', `
-    <form onsubmit="submitEditProduit(event,'${prodId}')" class="space-y-4">
+    <form data-form-action="submitEditProduit" data-prod-id="${prodId}" class="space-y-4">
       <div>
         <label class="block text-sm font-semibold text-gray-700 mb-1.5">Nom *</label>
         <input id="edit-prod-nom" type="text" required maxlength="200" value="${escHtml(nom)}" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200">
@@ -1115,7 +1114,7 @@ async function showSupplementsModal(produitId, produitNom) {
     <div id="supplements-list-${produitId}" class="space-y-2 mb-4">
       <div class="text-center py-4 text-gray-400"><i class="fa-solid fa-circle-notch fa-spin"></i></div>
     </div>
-    <form onsubmit="submitAddSupplement(event,'${produitId}')" class="space-y-2">
+    <form data-form-action="submitAddSupplement" data-prod-id="${produitId}" class="space-y-2">
       <div class="flex gap-2">
         <input id="sup-nom-${produitId}" type="text" required maxlength="100" placeholder="Ex: Fromage"
           class="flex-1 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-200">
@@ -1148,10 +1147,10 @@ async function chargerSupplements(produitId) {
       <div class="flex items-center gap-2 bg-gray-50 rounded-lg px-3 py-2">
         <span class="flex-1 text-sm font-medium text-gray-800 truncate">${escHtml(s.nom)}</span>
         <span class="text-xs text-gray-500 flex-shrink-0">${(s.prix||0).toLocaleString('fr-FR')} FCFA</span>
-        <button onclick="toggleSupplementActif('${s.id}',${s.actif?1:0},'${produitId}')"
+        <button data-action="toggleSupplementActif" data-sup-id="${s.id}" data-actif="${s.actif?1:0}" data-prod-id="${produitId}"
           class="text-xs px-2 py-0.5 rounded-full flex-shrink-0 ${s.actif?'bg-green-100 text-green-700':'bg-gray-200 text-gray-500'}"
           title="${s.actif?'Désactiver':'Activer'}">${s.actif?'Actif':'Inactif'}</button>
-        <button onclick="supprimerSupplement('${s.id}','${produitId}')" class="text-gray-400 hover:text-red-500 flex-shrink-0" title="Supprimer">
+        <button data-action="supprimerSupplement" data-sup-id="${s.id}" data-prod-id="${produitId}" class="text-gray-400 hover:text-red-500 flex-shrink-0" title="Supprimer">
           <i class="fa-solid fa-trash text-xs"></i>
         </button>
       </div>`).join('');
@@ -1247,8 +1246,8 @@ async function loadStatistiques() {
       <div class="flex items-center justify-between mb-4">
         <h3 class="font-bold text-gray-900">Évolution sur 30 jours</h3>
         <div class="flex gap-2">
-          <button onclick="switchChart('commandes')" id="btn-chart-cmd" class="text-xs px-3 py-1.5 rounded-lg bg-red-600 text-white font-semibold">Commandes</button>
-          <button onclick="switchChart('ca')" id="btn-chart-ca" class="text-xs px-3 py-1.5 rounded-lg border border-gray-200 text-gray-600 font-semibold hover:bg-gray-50">CA (FCFA)</button>
+          <button data-action="switchChart" data-mode="commandes" id="btn-chart-cmd" class="text-xs px-3 py-1.5 rounded-lg bg-red-600 text-white font-semibold">Commandes</button>
+          <button data-action="switchChart" data-mode="ca" id="btn-chart-ca" class="text-xs px-3 py-1.5 rounded-lg border border-gray-200 text-gray-600 font-semibold hover:bg-gray-50">CA (FCFA)</button>
         </div>
       </div>
       <canvas id="stats-chart" height="80"></canvas>
@@ -1340,14 +1339,14 @@ async function loadLivreurs() {
     const data = await res.json();
     renderLivreurs(data.livreurs||[], content);
   } catch {
-    content.innerHTML = `<div class="text-center py-10"><p class="text-red-500 text-sm">Erreur de chargement.</p><button onclick="loadLivreurs()" class="mt-3 text-xs text-red-600 underline">Réessayer</button></div>`;
+    content.innerHTML = `<div class="text-center py-10"><p class="text-red-500 text-sm">Erreur de chargement.</p><button data-action="loadLivreurs" class="mt-3 text-xs text-red-600 underline">Réessayer</button></div>`;
   }
 }
 function renderLivreurs(livreurs, container) {
   container.innerHTML = `
     <div class="flex justify-between items-center mb-5">
       <p class="text-sm text-gray-500">${livreurs.length} livreur(s) enregistré(s)</p>
-      <button onclick="showAddLivreurModal()" class="bg-red-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-red-700 flex items-center gap-1.5">
+      <button data-action="showAddLivreurModal" class="bg-red-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-red-700 flex items-center gap-1.5">
         <i class="fa-solid fa-plus text-xs"></i> Ajouter
       </button>
     </div>
@@ -1356,7 +1355,7 @@ function renderLivreurs(livreurs, container) {
         <i class="fa-solid fa-motorcycle text-4xl text-gray-200 mb-4 block"></i>
         <p class="font-semibold text-gray-500 mb-2">Aucun livreur</p>
         <p class="text-sm text-gray-400 mb-5">Ajoutez vos livreurs pour leur assigner des commandes.</p>
-        <button onclick="showAddLivreurModal()" class="bg-red-600 text-white text-sm font-semibold px-5 py-2.5 rounded-xl hover:bg-red-700"><i class="fa-solid fa-plus mr-1.5"></i>Ajouter</button>
+        <button data-action="showAddLivreurModal" class="bg-red-600 text-white text-sm font-semibold px-5 py-2.5 rounded-xl hover:bg-red-700"><i class="fa-solid fa-plus mr-1.5"></i>Ajouter</button>
       </div>` :
     `<div class="space-y-3">${livreurs.map(l => `
       <div class="bg-white border border-gray-100 rounded-xl p-4 flex items-center gap-4">
@@ -1368,20 +1367,20 @@ function renderLivreurs(livreurs, container) {
           <div class="text-xs text-gray-500">${escHtml(l.whatsapp_number||'—')}</div>
         </div>
         <span class="text-xs px-2.5 py-1 rounded-full font-semibold ${l.actif ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}">${l.actif?'Actif':'Inactif'}</span>
-        <button onclick="toggleLivreurActif('${l.id}',${l.actif?1:0})" class="p-1.5 text-gray-400 hover:text-blue-600" title="${l.actif?'Désactiver':'Activer'}">
+        <button data-action="toggleLivreurActif" data-liv-id="${l.id}" data-actif="${l.actif?1:0}" class="p-1.5 text-gray-400 hover:text-blue-600" title="${l.actif?'Désactiver':'Activer'}">
           <i class="fa-solid ${l.actif ? 'fa-toggle-on text-green-500' : 'fa-toggle-off'} text-lg"></i>
         </button>
-        <button onclick="showEditLivreurModal('${l.id}','${escJs(l.nom)}','${escJs(l.whatsapp_number||'')}')" class="p-1.5 text-gray-400 hover:text-blue-600" title="Modifier">
+        <button data-action="showEditLivreurModal" data-liv-id="${l.id}" data-liv-nom="${escHtml(l.nom)}" data-liv-tel="${escHtml(l.whatsapp_number||'')}" class="p-1.5 text-gray-400 hover:text-blue-600" title="Modifier">
           <i class="fa-solid fa-pen text-xs"></i>
         </button>
-        <button onclick="supprimerLivreur('${l.id}')" class="p-1.5 text-gray-400 hover:text-red-500" title="Supprimer">
+        <button data-action="supprimerLivreur" data-liv-id="${l.id}" class="p-1.5 text-gray-400 hover:text-red-500" title="Supprimer">
           <i class="fa-solid fa-trash text-sm"></i>
         </button>
       </div>`).join('')}</div>`}`;
 }
 function showAddLivreurModal() {
   showModal('Ajouter un livreur', `
-    <form onsubmit="submitAddLivreur(event)" class="space-y-4">
+    <form data-form-action="submitAddLivreur" class="space-y-4">
       <div>
         <label class="block text-sm font-semibold text-gray-700 mb-1.5">Nom complet *</label>
         <input id="liv-nom" type="text" required maxlength="100" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200" placeholder="Kofi Mensah">
@@ -1412,7 +1411,7 @@ async function submitAddLivreur(e) {
 // accepter ces deux champs indépendamment.
 function showEditLivreurModal(livId, nom, whatsapp) {
   showModal('Modifier le livreur', `
-    <form onsubmit="submitEditLivreur(event,'${livId}')" class="space-y-4">
+    <form data-form-action="submitEditLivreur" data-liv-id="${livId}" class="space-y-4">
       <div>
         <label class="block text-sm font-semibold text-gray-700 mb-1.5">Nom complet *</label>
         <input id="edit-liv-nom" type="text" required maxlength="100" value="${escHtml(nom)}" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200">
@@ -1475,7 +1474,7 @@ async function loadQRCode() {
           <p class="text-xs text-gray-500 mb-5">Imprimez-le et affichez-le en salle, sur vos emballages ou en vitrine.</p>
           <div id="qr-image-wrap" class="w-48 h-48 mx-auto rounded-2xl border border-gray-200 shadow-sm mb-4 bg-white flex items-center justify-center overflow-hidden">
             <img src="${escHtml(data.qr_display)}" alt="QR Code" class="w-full h-full object-contain p-3"
-              onerror="this.parentElement.innerHTML='<div class=&quot;text-xs text-red-500 p-4&quot;><i class=&quot;fa-solid fa-triangle-exclamation mb-2 block text-lg&quot;></i>QR indisponible pour le moment.<br><button onclick=&quot;loadQRCode()&quot; class=&quot;underline mt-2&quot;>Réessayer</button></div>'">
+              onerror="this.parentElement.innerHTML='<div class=&quot;text-xs text-red-500 p-4&quot;><i class=&quot;fa-solid fa-triangle-exclamation mb-2 block text-lg&quot;></i>QR indisponible.<br><button data-action=&quot;loadQRCode&quot; class=&quot;underline mt-2&quot;>Réessayer</button></div>'">
           </div>
           <p class="text-xs text-gray-400 mb-4"><strong>${escHtml(data.boutique_url)}</strong></p>
           <div class="flex gap-3 justify-center flex-wrap">
@@ -1487,7 +1486,7 @@ async function loadQRCode() {
               class="flex items-center gap-1.5 border border-gray-200 text-gray-700 text-sm font-semibold px-4 py-2 rounded-xl hover:bg-gray-50">
               <i class="fa-solid fa-vector-square"></i> SVG
             </a>
-            <button onclick="copyLink('${escJs(data.boutique_url)}')"
+            <button data-action="copyLink" data-url="${escHtml(data.boutique_url)}"
               class="flex items-center gap-1.5 border border-gray-200 text-gray-700 text-sm font-semibold px-4 py-2 rounded-xl hover:bg-gray-50">
               <i class="fa-solid fa-copy"></i> Copier lien
             </button>
@@ -1512,7 +1511,7 @@ async function loadQRCode() {
           <p class="text-sm font-semibold text-blue-800 mb-2"><i class="fa-solid fa-link mr-1.5"></i>URL de votre boutique</p>
           <div class="flex items-center gap-2">
             <code class="flex-1 bg-white border border-blue-200 rounded-lg px-3 py-2 text-xs text-blue-900 font-mono break-all">${escHtml(data.boutique_url)}</code>
-            <button onclick="copyLink('${escJs(data.boutique_url)}')" class="bg-blue-600 text-white text-xs font-semibold px-3 py-2 rounded-lg hover:bg-blue-700 flex-shrink-0">Copier</button>
+            <button data-action="copyLink" data-url="${escHtml(data.boutique_url)}" class="bg-blue-600 text-white text-xs font-semibold px-3 py-2 rounded-lg hover:bg-blue-700 flex-shrink-0">Copier</button>
           </div>
         </div>
       </div>`;
@@ -1521,9 +1520,9 @@ async function loadQRCode() {
   }
 }
 
-function copyLink(url) {
+function copyLink(url, triggerBtn) {
   navigator.clipboard.writeText(url).then(() => {
-    const btn = event && event.target ? event.target.closest('button') : null;
+    const btn = triggerBtn || (typeof event !== 'undefined' && event && event.target ? event.target.closest('button') : null);
     if (btn) { const orig = btn.innerHTML; btn.innerHTML = '<i class="fa-solid fa-check"></i> Copié !'; setTimeout(()=>btn.innerHTML=orig, 2000); }
     else alert('Copié : ' + url);
   }).catch(() => alert('Lien : ' + url));
@@ -1544,7 +1543,7 @@ async function loadApparence() {
     <div class="max-w-lg space-y-4">
       <div class="bg-white rounded-2xl border border-gray-100 p-6">
         <h2 class="font-bold text-gray-900 mb-5">Couleurs de la boutique</h2>
-        <form onsubmit="saveApparence(event)" class="space-y-5">
+        <form data-form-action="saveApparence" class="space-y-5">
           <div>
             <label class="block text-sm font-semibold text-gray-700 mb-1.5">Couleur principale</label>
             <div class="flex items-center gap-3">
@@ -1581,7 +1580,7 @@ async function loadApparence() {
           <p class="text-xs text-gray-400 text-center">— ou URL externe —</p>
           <input id="app-logo" type="url" value="${escHtml(tenant.logo_url||'')}" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200" placeholder="https://...">
           <p id="logo-feedback" class="text-xs hidden rounded-lg px-3 py-2"></p>
-          <button onclick="saveLogo()" type="button" class="w-full border border-red-200 text-red-600 font-bold py-2.5 rounded-xl hover:bg-red-50 text-sm">
+          <button data-action="saveLogo" type="button" class="w-full border border-red-200 text-red-600 font-bold py-2.5 rounded-xl hover:bg-red-50 text-sm">
             <i class="fa-solid fa-floppy-disk mr-1.5"></i> Enregistrer le logo
           </button>
         </div>
@@ -1599,7 +1598,7 @@ async function loadApparence() {
           <p class="text-xs text-gray-400 text-center">— ou URL externe —</p>
           <input id="app-banniere" type="url" value="${escHtml(tenant.banniere_url||'')}" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200" placeholder="https://...">
           <p id="banniere-feedback" class="text-xs hidden rounded-lg px-3 py-2"></p>
-          <button onclick="saveBanniere()" type="button" class="w-full border border-red-200 text-red-600 font-bold py-2.5 rounded-xl hover:bg-red-50 text-sm">
+          <button data-action="saveBanniere" type="button" class="w-full border border-red-200 text-red-600 font-bold py-2.5 rounded-xl hover:bg-red-50 text-sm">
             <i class="fa-solid fa-floppy-disk mr-1.5"></i> Enregistrer la bannière
           </button>
         </div>
@@ -1690,7 +1689,7 @@ async function loadParametres() {
     <div class="max-w-lg space-y-4">
       <div class="bg-white rounded-2xl border border-gray-100 p-6">
         <h2 class="font-bold text-gray-900 mb-5">Informations du restaurant</h2>
-        <form onsubmit="saveParametres(event)" class="space-y-4">
+        <form data-form-action="saveParametres" class="space-y-4">
           <div>
             <label class="block text-sm font-semibold text-gray-700 mb-1.5">Nom du restaurant</label>
             <input id="param-nom" type="text" required maxlength="100" value="${escHtml(tenant.nom||'')}" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200">
@@ -1726,13 +1725,13 @@ async function loadParametres() {
             </span>
             <p class="text-xs text-gray-500 mt-1">Statut : <strong>${escHtml(tenant.statut||'essai')}</strong> • ${tenant.total_commandes||0} commande(s) total</p>
           </div>
-          <a href="/dashboard/abonnement" onclick="navigateTo('abonnement');return false;" class="text-xs text-red-600 font-semibold hover:underline">Gérer l'abonnement →</a>
+          <a href="/dashboard/abonnement" data-action="navigateTo" data-section="abonnement" class="text-xs text-red-600 font-semibold hover:underline">Gérer l'abonnement →</a>
         </div>
       </div>
       <div class="bg-white rounded-2xl border border-gray-100 p-6">
         <h3 class="font-bold text-gray-900 mb-1">Sécurité</h3>
         <p class="text-sm text-gray-500 mb-4">Changez votre mot de passe.</p>
-        <form onsubmit="saveChangementMdp(event)" class="space-y-3">
+        <form data-form-action="saveChangementMdp" class="space-y-3">
           <div>
             <label class="block text-xs font-semibold text-gray-600 mb-1">Mot de passe actuel</label>
             <input id="pwd-actuel" type="password" required autocomplete="current-password"
@@ -1758,7 +1757,7 @@ async function loadParametres() {
       <div class="bg-red-50 border border-red-100 rounded-2xl p-6">
         <h3 class="font-bold text-red-800 mb-1">Zone dangereuse</h3>
         <p class="text-sm text-red-600 mb-4">La suppression est irréversible. Toutes vos données seront effacées.</p>
-        <button onclick="confirmerSuppression()" class="border border-red-300 text-red-600 font-semibold text-sm px-4 py-2 rounded-xl hover:bg-red-100">
+        <button data-action="confirmerSuppression" class="border border-red-300 text-red-600 font-semibold text-sm px-4 py-2 rounded-xl hover:bg-red-100">
           <i class="fa-solid fa-trash mr-1.5"></i> Demander la suppression du compte
         </button>
       </div>
@@ -1881,10 +1880,10 @@ function renderCodesPromo(codes, container) {
     <div class="flex items-center justify-between mb-5 flex-wrap gap-2">
       <p class="text-sm text-gray-500">${codes.length} code(s) promo</p>
       <div class="flex gap-2">
-        <button onclick="exportCodesPromo()" class="flex items-center gap-1.5 text-xs text-green-700 hover:text-green-800 border border-green-200 rounded-lg px-3 py-1.5 transition-colors bg-green-50 hover:bg-green-100">
+        <button data-action="exportCodesPromo" class="flex items-center gap-1.5 text-xs text-green-700 hover:text-green-800 border border-green-200 rounded-lg px-3 py-1.5 transition-colors bg-green-50 hover:bg-green-100">
           <i class="fa-solid fa-file-csv"></i> Exporter
         </button>
-        <button onclick="showAddCodePromoModal()" class="bg-red-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-red-700 flex items-center gap-1.5">
+        <button data-action="showAddCodePromoModal" class="bg-red-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-red-700 flex items-center gap-1.5">
           <i class="fa-solid fa-plus text-xs"></i> Nouveau code
         </button>
       </div>
@@ -1894,7 +1893,7 @@ function renderCodesPromo(codes, container) {
         <i class="fa-solid fa-ticket text-4xl text-gray-200 mb-4 block"></i>
         <p class="font-semibold text-gray-500 mb-2">Aucun code promo</p>
         <p class="text-sm text-gray-400 mb-5">Créez des codes de réduction pour fidéliser vos clients.</p>
-        <button onclick="showAddCodePromoModal()" class="bg-red-600 text-white text-sm font-semibold px-5 py-2.5 rounded-xl hover:bg-red-700">Créer un code promo</button>
+        <button data-action="showAddCodePromoModal" class="bg-red-600 text-white text-sm font-semibold px-5 py-2.5 rounded-xl hover:bg-red-700">Créer un code promo</button>
       </div>` :
     `<div class="bg-white border border-gray-100 rounded-xl overflow-hidden">
       <div class="divide-y divide-gray-50">
@@ -1916,10 +1915,10 @@ function renderCodesPromo(codes, container) {
                 ${c.usage_max ? ' • '+c.usage_actuel+'/'+c.usage_max+' util.' : ' • '+c.usage_actuel+' util.'}
               </div>
             </div>
-            <button onclick="copierCodePromo('${escJs(c.code)}')" class="p-2 text-gray-400 hover:text-blue-600" title="Copier le code">
+            <button data-action="copierCodePromo" data-code="${escHtml(c.code)}" class="p-2 text-gray-400 hover:text-blue-600" title="Copier le code">
               <i class="fa-solid fa-copy text-sm"></i>
             </button>
-            <button onclick="supprimerCodePromo('${c.id}')" class="p-2 text-gray-400 hover:text-red-500" title="Supprimer">
+            <button data-action="supprimerCodePromo" data-promo-id="${c.id}" class="p-2 text-gray-400 hover:text-red-500" title="Supprimer">
               <i class="fa-solid fa-trash text-sm"></i>
             </button>
           </div>`;
@@ -1929,15 +1928,15 @@ function renderCodesPromo(codes, container) {
 }
 function showAddCodePromoModal() {
   showModal('Nouveau code promo', `
-    <form onsubmit="submitAddCodePromo(event)" class="space-y-4">
+    <form data-form-action="submitAddCodePromo" class="space-y-4">
       <div>
         <label class="block text-sm font-semibold text-gray-700 mb-1.5">Code *</label>
-        <input id="promo-code" type="text" required maxlength="20" placeholder="BIENVENUE20" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-red-200 uppercase" oninput="this.value=this.value.toUpperCase()">
+        <input id="promo-code" type="text" required maxlength="20" placeholder="BIENVENUE20" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-red-200 uppercase" data-action-input="promoCodeUppercase">
         <p class="text-xs text-gray-400 mt-1">3-20 caractères alphanumériques.</p>
       </div>
       <div>
         <label class="block text-sm font-semibold text-gray-700 mb-1.5">Type *</label>
-        <select id="promo-type" onchange="updatePromoValeurMax()" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200">
+        <select id="promo-type" data-action-change="updatePromoValeurMax" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200">
           <option value="pourcentage">Pourcentage (%)</option>
           <option value="montant_fixe">Montant fixe (FCFA)</option>
         </select>
@@ -2045,7 +2044,7 @@ function renderPdvConfig(pdv, container) {
       <div class="bg-white rounded-2xl border border-gray-100 p-6">
         <h2 class="font-bold text-gray-900 mb-1">Point de vente</h2>
         <p class="text-sm text-gray-500 mb-5">Configurez l'adresse et les coordonnées GPS.</p>
-        <form onsubmit="savePdv(event)" class="space-y-4">
+        <form data-form-action="savePdv" class="space-y-4">
           <div>
             <label class="block text-sm font-semibold text-gray-700 mb-1.5">Nom du point de vente</label>
             <input id="pdv-nom" type="text" maxlength="100" value="${escHtml(pdv?.nom||'')}" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200" placeholder="Restaurant principal">
@@ -2064,7 +2063,7 @@ function renderPdvConfig(pdv, container) {
               <input id="pdv-lon" type="number" step="0.000001" min="-180" max="180" value="${pdv?.longitude??''}" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200" placeholder="-1.5353">
             </div>
           </div>
-          <button type="button" onclick="useMyLocation()" class="w-full border border-gray-200 text-gray-700 font-semibold text-sm py-2.5 rounded-xl hover:bg-gray-50 flex items-center justify-center gap-2">
+          <button type="button" data-action="useMyLocation" class="w-full border border-gray-200 text-gray-700 font-semibold text-sm py-2.5 rounded-xl hover:bg-gray-50 flex items-center justify-center gap-2">
             <i class="fa-solid fa-location-crosshairs"></i> Utiliser ma position actuelle
           </button>
           <div class="grid grid-cols-2 gap-3">
@@ -2111,7 +2110,7 @@ function renderPdvHorairesEditor(horaires) {
     return `<div class="flex items-center gap-3 py-2.5 border-b border-gray-200/70 last:border-0">
       <div class="w-20 text-sm font-medium text-gray-700 flex-shrink-0">${JOURS_LABELS[jour]}</div>
       <label class="relative inline-flex items-center cursor-pointer flex-shrink-0">
-        <input type="checkbox" id="pdv-h-${jour}-ouvert" class="sr-only peer" ${ouvert ? 'checked' : ''} onchange="_togglePdvHoraire('${jour}')">
+        <input type="checkbox" id="pdv-h-${jour}-ouvert" class="sr-only peer" ${ouvert ? 'checked' : ''} data-action-change="_togglePdvHoraire" data-jour="${jour}">
         <div class="w-9 h-5 bg-gray-300 rounded-full peer peer-checked:bg-red-600 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-4"></div>
       </label>
       <div id="pdv-h-${jour}-times" class="flex items-center gap-1.5 flex-1 ${ouvert ? '' : 'hidden'}">
@@ -2228,3 +2227,90 @@ async function savePdv(e) {
     if (submitBtn) submitBtn.disabled = false;
   }
 }
+
+// ==============================
+// DISPATCHER GLOBAL CSP-SAFE
+// ==============================
+(function initDashboardDispatcher() {
+  'use strict';
+  // --- CLICK ---
+  document.addEventListener('click', function(e) {
+    const btn = e.target.closest('[data-action]');
+    if (!btn) return;
+    const action = btn.dataset.action;
+    if (btn.tagName === 'A') e.preventDefault();
+    switch (action) {
+      case 'close-modal':              closeModal(); break;
+      case 'loadHistoriquePaiements':  loadHistoriquePaiements(); break;
+      case 'filtrerCommandes':         filtrerCommandes(btn.dataset.statut === 'toutes' ? null : btn.dataset.statut); break;
+      case 'loadCommandes':            loadCommandes(); break;
+      case 'exportCommandes':          exportCommandes(); break;
+      case 'fetchCommandes':           fetchCommandes(); break;
+      case 'changerStatut':            changerStatut(btn.dataset.cmdId, btn.dataset.statut); break;
+      case 'choisirLivreurEtPreparer': choisirLivreurEtPreparer(btn.dataset.cmdId); break;
+      case 'showAddCategorieModal':    showAddCategorieModal(); break;
+      case 'showEditCategorieModal':   showEditCategorieModal(btn.dataset.catId, btn.dataset.catNom); break;
+      case 'supprimerCategorie':       supprimerCategorie(btn.dataset.catId); break;
+      case 'showAddProduitModal':      showAddProduitModal(btn.dataset.catId); break;
+      case 'toggleDisponible':         toggleDisponible(btn.dataset.prodId, parseInt(btn.dataset.disponible)); break;
+      case 'showSupplementsModal':     showSupplementsModal(btn.dataset.prodId, btn.dataset.prodNom); break;
+      case 'showEditProduitModal':     showEditProduitModal(btn.dataset.prodId, btn.dataset.prodNom, btn.dataset.prodDesc, parseFloat(btn.dataset.prodPrix), btn.dataset.prodPhoto); break;
+      case 'supprimerProduit':         supprimerProduit(btn.dataset.prodId); break;
+      case 'toggleSupplementActif':    toggleSupplementActif(btn.dataset.supId, parseInt(btn.dataset.actif), btn.dataset.prodId); break;
+      case 'supprimerSupplement':      supprimerSupplement(btn.dataset.supId, btn.dataset.prodId); break;
+      case 'switchChart':              switchChart(btn.dataset.mode); break;
+      case 'loadLivreurs':             loadLivreurs(); break;
+      case 'showAddLivreurModal':      showAddLivreurModal(); break;
+      case 'showEditLivreurModal':     showEditLivreurModal(btn.dataset.livId, btn.dataset.livNom, btn.dataset.livTel); break;
+      case 'toggleLivreurActif':       toggleLivreurActif(btn.dataset.livId, parseInt(btn.dataset.actif)); break;
+      case 'supprimerLivreur':         supprimerLivreur(btn.dataset.livId); break;
+      case 'loadQRCode':               loadQRCode(); break;
+      case 'copyLink':                 copyLink(btn.dataset.url, btn); break;
+      case 'saveLogo':                 saveLogo(); break;
+      case 'saveBanniere':             saveBanniere(); break;
+      case 'navigateTo':               navigateTo(btn.dataset.section); break;
+      case 'confirmerSuppression':     confirmerSuppression(); break;
+      case 'exportCodesPromo':         exportCodesPromo(); break;
+      case 'showAddCodePromoModal':    showAddCodePromoModal(); break;
+      case 'copierCodePromo':          copierCodePromo(btn.dataset.code); break;
+      case 'supprimerCodePromo':       supprimerCodePromo(btn.dataset.promoId); break;
+      case 'useMyLocation':            useMyLocation(); break;
+    }
+  });
+  // --- SUBMIT ---
+  document.addEventListener('submit', function(e) {
+    const form = e.target.closest('[data-form-action]');
+    if (!form) return;
+    e.preventDefault();
+    switch (form.dataset.formAction) {
+      case 'submitChoixLivreur':  submitChoixLivreur(e, form.dataset.cmdId); break;
+      case 'submitAddCategorie':  submitAddCategorie(e); break;
+      case 'submitEditCategorie': submitEditCategorie(e, form.dataset.catId); break;
+      case 'submitAddProduit':    submitAddProduit(e, form.dataset.catId); break;
+      case 'submitEditProduit':   submitEditProduit(e, form.dataset.prodId); break;
+      case 'submitAddSupplement': submitAddSupplement(e, form.dataset.prodId); break;
+      case 'submitAddLivreur':    submitAddLivreur(e); break;
+      case 'submitEditLivreur':   submitEditLivreur(e, form.dataset.livId); break;
+      case 'saveApparence':       saveApparence(e); break;
+      case 'saveParametres':      saveParametres(e); break;
+      case 'saveChangementMdp':   saveChangementMdp(e); break;
+      case 'submitAddCodePromo':  submitAddCodePromo(e); break;
+      case 'savePdv':             savePdv(e); break;
+    }
+  });
+  // --- CHANGE ---
+  document.addEventListener('change', function(e) {
+    const el = e.target.closest('[data-action-change]');
+    if (!el) return;
+    switch (el.dataset.actionChange) {
+      case 'updatePromoValeurMax': updatePromoValeurMax(); break;
+      case '_togglePdvHoraire':   _togglePdvHoraire(el.dataset.jour); break;
+    }
+  });
+  // --- INPUT ---
+  document.addEventListener('input', function(e) {
+    const el = e.target.closest('[data-action-input]');
+    if (!el) return;
+    if (el.dataset.actionInput === 'promoCodeUppercase') el.value = el.value.toUpperCase();
+  });
+}());
