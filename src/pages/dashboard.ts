@@ -45,6 +45,10 @@ export function renderDashboardPage(
         <a href="/dashboard/menu" class="nav-link flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-gray-300 hover:bg-gray-800 hover:text-white transition-colors">
           <i class="fa-solid fa-book-open w-4 text-center"></i> Menu
         </a>
+        <!-- AJOUT — Suppléments généraux, juste après Menu -->
+        <a href="/dashboard/supplements" class="nav-link flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-gray-300 hover:bg-gray-800 hover:text-white transition-colors">
+          <i class="fa-solid fa-pepper-hot w-4 text-center"></i> Suppléments
+        </a>
         <a href="/dashboard/statistiques" class="nav-link flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-gray-300 hover:bg-gray-800 hover:text-white transition-colors">
           <i class="fa-solid fa-chart-bar w-4 text-center"></i> Statistiques
         </a>
@@ -197,6 +201,8 @@ export function renderDashboardPage(
   <!-- auth-fetch.js DOIT être chargé avant dashboard.js et dashboard-paiement.js -->
   <script src="/static/js/auth-fetch.js"></script>
   <script src="/static/js/dashboard.js"></script>
+  <!-- AJOUT — Suppléments généraux (chargé après dashboard.js) -->
+  <script src="/static/js/supplements.js"></script>
   <script src="/static/js/dashboard-paiement.js"></script>
   <script src="/static/js/notifications.js"></script>
   <script nonce="${nonce}">

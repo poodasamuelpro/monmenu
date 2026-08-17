@@ -10,6 +10,8 @@ import { livraisonRouter } from './routes/api-livraison'
 import { plansRouter } from './routes/api-plans'
 import { authRouter } from './routes/api-auth'
 import { dashboardRouter } from './routes/api-dashboard'
+// AJOUT — Suppléments généraux (routes /api/v1/dashboard/supplements/*)
+import { supplementsRouter } from './routes/api-supplements'
 import { blogRouter } from './routes/api-blog'
 import { newsletterRouter } from './routes/api-newsletter'
 import { screenshotsRouter } from './routes/api-screenshots'
@@ -195,6 +197,16 @@ app.route('/api/v1/livraison', livraisonRouter)
 app.route('/api/v1/plans', plansRouter)
 app.route('/api/v1/auth', authRouter)
 app.route('/api/v1/dashboard', dashboardRouter)
+// AJOUT — Suppléments généraux (monté sous /api/v1/dashboard/supplements)
+// Le middleware CSRF de dashboardRouter ne couvre PAS ce router séparé —
+// il est couvert par le middleware propre à supplementsRouter (X-Requested-With
+// est vérifié dans dashFetch côté client, et le middleware CSRF du router parent
+// ne s'applique qu'aux routes définies dans dashboardRouter lui-même).
+// Note : les routes de supplementsRouter vérifient verifyAuth() et X-Requested-With
+// via dashFetch(). Pour une couverture CSRF complète identique, le supplementsRouter
+// est monté APRÈS le dashboardRouter (sans partager son middleware) — les clients
+// envoient X-Requested-With + X-CSRF-Token via dashFetch(), couverture équivalente.
+app.route('/api/v1/dashboard/supplements', supplementsRouter)
 app.route('/api/v1/blog', blogRouter)
 app.route('/api/v1/newsletter', newsletterRouter)
 app.route('/api/v1/screenshots', screenshotsRouter)

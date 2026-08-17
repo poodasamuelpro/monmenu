@@ -207,6 +207,13 @@ tenantsRouter.get('/:slug', async (c) => {
 // fenêtre. Cette route ne faisait déjà PAS de jointure inner sur
 // points_de_vente — elle n'était donc pas affectée par le bug 3-bis
 // décrit en tête de fichier, seul le filtre statut était en cause ici.
+//
+// AJOUT — Suppléments généraux : la réponse inclut désormais un tableau
+// `supplements` au niveau racine (suppléments actifs du tenant, sans lien
+// produit obligatoire). Compatible mobile Flutter : champs additifs uniquement,
+// aucun champ existant n'est renommé, retiré ou changé de type.
+// L'ancienne structure `produit.supplements` (par produit) reste inchangée
+// pour la rétrocompatibilité ; les suppléments généraux sont en parallèle.
 tenantsRouter.get('/:slug/menu', async (c) => {
   setSecurityHeaders(c)
   const slug = c.req.param('slug')
@@ -269,24 +276,38 @@ tenantsRouter.get('/:slug/menu', async (c) => {
 
   if (catError) return c.json({ error: 'Erreur récupération menu.', ...(c.env.ENVIRONMENT !== 'production' ? { detail: catError.message } : {}) }, 500)
 
-  // AJOUT — suppléments actifs, groupés par produit, une seule requête.
+  // AJOUT — suppléments actifs, groupés par produit (rétrocompatibilité mobile),
+  // ET suppléments généraux du tenant (sans lien produit — nouveau modèle).
+  // Une seule requête groupée pour tous les suppléments (actif=true, deleted_at null).
+  // Les suppléments produit-liés gardent leur champ produit_id pour la rétrocompatibilité.
+  // Les suppléments généraux (produit_id IS NULL) sont exposés au niveau racine.
   const catIds = new Set((categories ?? []).map((cat: any) => cat.id))
   const produitsFiltres = (produits ?? []).filter((p: any) => catIds.has(p.categorie_id))
   const produitIds = produitsFiltres.map((p: any) => p.id)
   const supplementsByProduit = new Map<string, Array<{ id: string; nom: string; prix: number }>>()
-  if (produitIds.length > 0) {
-    const { data: supplementsData } = await adminClient
-      .from('supplements')
-      .select('id, produit_id, nom, prix, ordre_affichage')
-      .in('produit_id', produitIds)
-      .eq('actif', true)
-      .is('deleted_at', null)
-      .order('ordre_affichage', { ascending: true })
+  // AJOUT — suppléments généraux (tenant-level, produit_id IS NULL)
+  const supplementsGeneraux: Array<{ id: string; nom: string; prix: number; photo_url: string | null }> = []
 
-    for (const s of (supplementsData ?? [])) {
+  // Une seule requête pour tous les suppléments actifs du tenant :
+  // - ceux liés à un produit (produit_id non null) → groupés par produit
+  // - ceux généraux (produit_id null) → tableau racine `supplements`
+  const { data: supplementsData } = await adminClient
+    .from('supplements')
+    .select('id, produit_id, nom, prix, photo_url, ordre_affichage')
+    .eq('tenant_id', tenantRow.id)
+    .eq('actif', true)
+    .is('deleted_at', null)
+    .order('ordre_affichage', { ascending: true })
+
+  for (const s of (supplementsData ?? [])) {
+    if (s.produit_id && produitIds.includes(s.produit_id)) {
+      // Supplément lié à un produit (ancien modèle — rétrocompatibilité)
       const list = supplementsByProduit.get(s.produit_id) ?? []
       list.push({ id: s.id, nom: s.nom, prix: s.prix })
       supplementsByProduit.set(s.produit_id, list)
+    } else if (!s.produit_id) {
+      // AJOUT — Supplément général (nouveau modèle — sans produit associé)
+      supplementsGeneraux.push({ id: s.id, nom: s.nom, prix: s.prix, photo_url: s.photo_url ?? null })
     }
   }
 
@@ -303,8 +324,11 @@ tenantsRouter.get('/:slug/menu', async (c) => {
   }))
 
   // B7 — Métadonnées de pagination dans la réponse.
+  // AJOUT — `supplements` au niveau racine (suppléments généraux du tenant).
+  // Champ additif : ne casse pas les clients existants (Flutter, etc.).
   const result = {
     categories: menu,
+    supplements: supplementsGeneraux, // AJOUT — tableau racine suppléments généraux
     pagination: {
       page,
       limit,

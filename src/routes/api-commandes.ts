@@ -9,7 +9,7 @@
 // PATCH /api/v1/commandes/:id/statut - Mise à jour statut (AUTH REQUISE via dashboard)
 // POST /api/v1/commandes/valider-promo - Vérifier un code promo
 //
-// AJOUT — SUPPLÉMENTS : chaque item de commande peut désormais inclure
+// AJOUT — SUPPLÉMENTS GÉNÉRAUX : chaque item de commande peut désormais inclure
 // `supplement_ids` (tableau d'UUID). Le PRIX de chaque supplément n'est
 // JAMAIS accepté depuis le client — il est systématiquement recalculé
 // côté serveur depuis la table `supplements` (actif=true, tenant_id
@@ -17,6 +17,13 @@
 // inactif, supprimé, ou n'appartenant pas au tenant est silencieusement
 // ignoré (pas d'erreur bloquante — le client peut avoir une vue légèrement
 // périmée du menu, ce n'est pas une raison de faire échouer la commande).
+//
+// CORRECTIF — Suppression du filtre produit_id dans la validation des suppléments :
+// les suppléments sont désormais GÉNÉRAUX (tenant-scoped, pas produit-scoped).
+// Un supplement_id reçu est accepté s'il existe, est actif, et appartient au
+// tenant — peu importe le produit commandé. Rétrocompatibilité assurée : les
+// anciens suppléments avec produit_id en base sont toujours valides (produit_id
+// est nullable mais pas supprimé).
 //
 // CORRECTIF — AJOUT d'une notification in-app (notifications_restaurant)
 // pour chaque nouvelle commande. Cette insertion n'existait pas
@@ -200,21 +207,27 @@ commandesRouter.post('/', async (c) => {
   // requête groupée, filtrés actif=true et tenant_id correspondant côté
   // serveur (jamais confiance au prix envoyé par le client — même
   // principe que la validation du code promo ci-dessus).
+  //
+  // CORRECTIF — Le filtre `.produit_id === item.produit_id` est supprimé :
+  // les suppléments sont désormais généraux (tenant-scoped). Un supplement_id
+  // valide appartenant au tenant est accepté quel que soit le produit commandé.
+  // Rétrocompatibilité : les anciens suppléments avec produit_id en base
+  // restent valides — seul le filtre côté applicatif est retiré.
   const tousSupplementIds = Array.from(
     new Set(data.items.flatMap((i) => i.supplement_ids ?? []))
   )
-  const supplementsMap = new Map<string, { id: string; nom: string; prix: number; produit_id: string }>()
+  const supplementsMap = new Map<string, { id: string; nom: string; prix: number }>()
   if (tousSupplementIds.length > 0) {
     const { data: supplementsRows } = await adminClient
       .from('supplements')
-      .select('id, produit_id, nom, prix')
+      .select('id, nom, prix')
       .in('id', tousSupplementIds)
       .eq('tenant_id', resolvedTenantId)
       .eq('actif', true)
       .is('deleted_at', null)
 
     for (const s of (supplementsRows ?? [])) {
-      supplementsMap.set(s.id, { id: s.id, nom: s.nom, prix: s.prix, produit_id: s.produit_id })
+      supplementsMap.set(s.id, { id: s.id, nom: s.nom, prix: s.prix })
     }
   }
 
@@ -222,15 +235,13 @@ commandesRouter.post('/', async (c) => {
   const itemsJson = data.items.map((item) => {
     const produit = produitMap.get(item.produit_id) as any
 
-    // AJOUT — ne garder que les suppléments réellement actifs ET
-    // appartenant bien au produit commandé (sécurité anti-mélange :
-    // un supplement_id valide pour un autre produit du même tenant
-    // n'est pas appliqué à ce produit-ci).
+    // CORRECTIF — Suppléments généraux : un supplement_id reçu est accepté
+    // s'il existe, est actif et appartient au tenant — sans restriction produit.
+    // Un supplement_id invalide (inactif, supprimé, mauvais tenant) est
+    // silencieusement ignoré (client peut avoir vue périmée du menu).
     const supplementsChoisis = (item.supplement_ids ?? [])
       .map((sid) => supplementsMap.get(sid))
-      .filter((s): s is { id: string; nom: string; prix: number; produit_id: string } =>
-        !!s && s.produit_id === item.produit_id
-      )
+      .filter((s): s is { id: string; nom: string; prix: number } => !!s)
 
     const totalSupplements = supplementsChoisis.reduce((s, sup) => s + sup.prix, 0)
     const sous_total = (produit.prix + totalSupplements) * item.quantite

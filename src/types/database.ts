@@ -160,21 +160,32 @@ export interface VarianteProduit {
   prix_supplement: number
 }
 
-// AJOUT — Supplément d'un produit (migration 014). Configuré par le
-// restaurant dans le dashboard (section Menu → bouton Suppléments d'un
-// produit), activable/désactivable indépendamment, proposé au client au
-// moment de l'ajout au panier sur la boutique publique.
+// AJOUT — Supplément général par restaurant (migration 019).
+// Configurable dans le dashboard (section "Suppléments"), activable/
+// désactivable indépendamment, proposé au client sur toute commande.
+// produit_id est NULLABLE depuis la migration 019 : null = supplément
+// général (nouveau modèle), non-null = ancien modèle lié à un produit
+// (conservé pour rétrocompatibilité, non créé par le nouveau code).
+// photo_url et photo_r2_key ajoutés en migration 019.
 export interface Supplement {
   id: string
   tenant_id: string
-  produit_id: string
+  produit_id: string | null  // CORRECTIF — nullable depuis migration 019
   nom: string
   prix: number
+  photo_url: string | null   // AJOUT — URL publique de l'image
+  photo_r2_key: string | null // AJOUT — clé R2 pour purge propre
   actif: boolean
   ordre_affichage: number
   created_at: string
   updated_at: string
   deleted_at: string | null
+}
+
+// AJOUT — Plan enrichi avec scaffold suppléments (migration 019)
+export interface PlanAvecSupplements {
+  supplements_actifs: boolean  // fonctionnalité activée pour ce plan
+  limite_supplements: number | null  // null = illimité
 }
 
 export interface Produit {

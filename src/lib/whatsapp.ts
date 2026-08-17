@@ -92,6 +92,10 @@ export function genererMessageCommande(
     .map((item) => {
       let ligne = `• ${item.nom}`
       if (item.variante_nom) ligne += ` (${item.variante_nom})`
+      // AJOUT — Suppléments généraux : affichage sur la même ligne (ex: "+ Sauce piment, Fromage")
+      if (item.supplements && item.supplements.length > 0) {
+        ligne += ` [+ ${item.supplements.map(s => s.nom).join(', ')}]`
+      }
       ligne += ` ×${item.quantite} — ${formatMontant(item.sous_total)}`
       return ligne
     })

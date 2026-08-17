@@ -1,18 +1,21 @@
 // MonMenu — Boutique restaurant (JS côté client)
-// v1.4.0 — AJOUT : suppléments proposés à l'ajout au panier.
+// v2.0.0 — REFONTE : suppléments GÉNÉRAUX par restaurant (non liés à un produit).
 //
-// Chaque produit peut désormais porter un tableau `supplements` (renvoyé
-// par GET /api/v1/tenants/:slug/menu). Si le produit a au moins un
-// supplément actif, un clic sur "+" ouvre une modal de sélection au lieu
-// d'ajouter directement au panier — comportement inchangé pour les
-// produits SANS supplément (ajout direct, comme avant).
+// Modèle :
+//   - GET /:slug/menu retourne maintenant `supplements` au niveau racine
+//     (tableau des suppléments généraux actifs du tenant).
+//   - Les boutons "+" et "-" sur les cartes produits ajoutent/retirent DIRECTEMENT
+//     au panier — jamais de modal par produit.
+//   - Bouton "Passer à la commande" : si le panier contient des articles et
+//     qu'il y a des suppléments généraux disponibles, un écran groupé unique
+//     est affiché pour les proposer (sélection libre), avant le checkout.
+//   - Les suppléments par produit (ancien modèle) sont conservés dans la réponse
+//     menu pour rétrocompatibilité mais ne déclenchent plus de modal par produit.
 //
-// Chaque combinaison produit + suppléments distincts devient une ligne de
-// panier séparée (ex: "Pizza + Fromage" et "Pizza" simple sont deux
-// lignes distinctes), pour ne jamais fusionner par erreur des choix
-// différents. Au moment de la commande, seuls les IDs de suppléments sont
-// envoyés au serveur — jamais leur prix (recalculé côté serveur, voir
-// api-commandes.ts).
+// Supprimé : ouvrirModalSupplements (modal par produit) — l'écran groupé
+// remplace entièrement cette UX. Voir rapport final section "suppressions".
+//
+// CSP : aucun handler inline (data-action= + dispatcher global CSP-safe).
 'use strict';
 
 let tenantId = '';
@@ -24,6 +27,9 @@ let pdvData = null;
 let fraisLivraison = 0;
 let clientLat = null;
 let clientLon = null;
+
+// AJOUT — suppléments généraux du tenant (chargés depuis menuData.supplements)
+let supplementsGeneraux = [];
 
 let boutiqueOuverte = true;
 let _statutIntervalId = null;
@@ -58,13 +64,11 @@ function attacherEcouteurMenu() {
       if (!boutiqueOuverte) return;
       const produit = _produitRegistry[produitId];
       if (!produit) return;
-      // AJOUT — si le produit a des suppléments actifs, ouvrir la modal
-      // de sélection au lieu d'ajouter directement au panier.
-      if (produit.supplements && produit.supplements.length > 0) {
-        ouvrirModalSupplements(produit);
-      } else {
-        addToCart(produit);
-      }
+      // CORRECTIF — Suppléments généraux : les boutons +/- ajoutent/retirent
+      // DIRECTEMENT au panier. Les suppléments généraux sont proposés via
+      // l'écran groupé au moment de "Passer à la commande" (voir ouvrirEcranSupplementsGroupes).
+      // L'ancienne modal par produit (ouvrirModalSupplements) est supprimée.
+      addToCart(produit);
     } else if (action === 'remove') {
       removeFromCart(produitId);
     }
@@ -149,7 +153,13 @@ async function loadTenant() {
 async function loadMenu() {
   try {
     const res = await fetch('/api/v1/tenants/' + tenantSlug + '/menu');
-    if (res.ok) menuData = await res.json();
+    if (res.ok) {
+      menuData = await res.json();
+      // AJOUT — charger les suppléments généraux depuis la racine de la réponse
+      supplementsGeneraux = (menuData && Array.isArray(menuData.supplements))
+        ? menuData.supplements
+        : [];
+    }
   } catch (e) { console.error('loadMenu', e); }
 }
 
@@ -254,15 +264,14 @@ function attacherEcouteurCategories() {
   _catListenerAttache = true;
 }
 
-// Carte produit — AJOUT : le registre stocke désormais aussi les
-// suppléments du produit (utilisés par ouvrirModalSupplements()). Un
-// petit badge "+ options" apparaît sur la photo si le produit a des
-// suppléments actifs, pour signaler visuellement qu'un choix suivra.
+// Carte produit — CORRECTIF : le badge "+ options" est supprimé (plus de modal
+// par produit). Les suppléments généraux sont proposés via l'écran groupé.
+// Le registre conserve les infos produit pour les actions add/remove.
 function renderProduitCard(p) {
   const quantiteInCart = getQuantiteInCart(p.id);
   _produitRegistry[p.id] = {
     id: p.id, nom: p.nom, prix: p.prix, photo_url: p.photo_url,
-    supplements: p.supplements || []
+    supplements: p.supplements || [] // conservé pour rétrocompatibilité interne
   };
 
   let controles;
@@ -286,10 +295,9 @@ function renderProduitCard(p) {
       </button>`;
   }
 
-  const aDesSupplements = p.supplements && p.supplements.length > 0;
-  const badgeOptions = (aDesSupplements && boutiqueOuverte && p.disponible)
-    ? `<span class="absolute top-2 left-2 text-[10px] font-semibold text-white px-2 py-1 rounded-lg shadow-sm" style="background-color:${PRIMARY_COLOR}">+ options</span>`
-    : '';
+  // CORRECTIF — Badge "+ options" supprimé : les suppléments sont généraux
+  // (proposés via l'écran groupé au checkout, pas par produit au clic +).
+  const badgeOptions = '';
 
   const assombri = (!p.disponible || !boutiqueOuverte) ? 'opacity-60' : '';
 
@@ -608,6 +616,16 @@ function renderCartModal() {
       <i class="fa-solid fa-arrow-right"></i> Passer à la commande
     </button>
   `;
+  // AJOUT — Badge suppléments disponibles dans le panier
+  const nbSuppsDispos = supplementsGeneraux ? supplementsGeneraux.length : 0;
+  const aDesSuppsNonChoisis = nbSuppsDispos > 0 && cart.items.some(i => !i.supplements || i.supplements.length === 0);
+  if (aDesSuppsNonChoisis) {
+    footerEl.insertAdjacentHTML('afterbegin', `
+      <div class="bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 mb-3 flex items-center gap-2 text-xs text-amber-800">
+        <i class="fa-solid fa-pepper-hot text-amber-500"></i>
+        <span>${nbSuppsDispos} supplément${nbSuppsDispos > 1 ? 's' : ''} disponible${nbSuppsDispos > 1 ? 's' : ''} — vous pourrez les ajouter à l'étape suivante.</span>
+      </div>`);
+  }
 }
 
 function openCheckout() {
@@ -1083,9 +1101,154 @@ window.confirmerAjoutAvecSupplements = confirmerAjoutAvecSupplements;
     const btn = e.target.closest('[data-action]');
     if (!btn) return;
     switch (btn.dataset.action) {
-      case 'fermerModalSupplements':        document.getElementById('modal-supplements')?.remove(); break;
-      case 'confirmerAjoutAvecSupplements': confirmerAjoutAvecSupplements(btn.dataset.prodId); break;
-      case 'passerCommande':                closeCart(); openCheckout(); break;
+      // CORRECTIF — fermerModalSupplements conservé (rétrocompatibilité si modal créée ailleurs)
+      case 'fermerModalSupplements':
+        document.getElementById('modal-supplements')?.remove();
+        break;
+      // CORRECTIF — confirmerAjoutAvecSupplements conservé (rétrocompatibilité)
+      case 'confirmerAjoutAvecSupplements':
+        confirmerAjoutAvecSupplements(btn.dataset.prodId);
+        break;
+      // AJOUT — Passer à la commande : écran groupé si suppléments disponibles
+      case 'passerCommande':
+        closeCart();
+        _verifierEcranSupplementsAvantCheckout();
+        break;
+      // AJOUT — Écran groupé de suppléments généraux
+      case 'fermerEcranSupplements':
+        document.getElementById('ecran-supplements-generaux')?.remove();
+        openCheckout();
+        break;
+      case 'confirmerSupplementsGroupes':
+        _confirmerSupplementsGroupes();
+        break;
     }
   });
 }());
+
+// ============================================================
+// AJOUT — Écran groupé de suppléments généraux (5.6)
+// ============================================================
+// Déclenché par "Passer à la commande" si :
+//   - Il y a des suppléments généraux disponibles (supplementsGeneraux.length > 0)
+//   - Le panier contient au moins un article sans supplément déjà sélectionné
+// L'utilisateur peut choisir des suppléments ou continuer sans.
+
+function _verifierEcranSupplementsAvantCheckout() {
+  const nbSupps = supplementsGeneraux ? supplementsGeneraux.length : 0;
+  // Si aucun supplément général disponible → aller directement au checkout
+  if (nbSupps === 0) {
+    openCheckout();
+    return;
+  }
+  // Si TOUS les articles ont déjà des suppléments → aller directement au checkout
+  const tousOntDesSupps = cart.items.every(i => i.supplements && i.supplements.length > 0);
+  if (tousOntDesSupps) {
+    openCheckout();
+    return;
+  }
+  // Sinon → afficher l'écran groupé
+  ouvrirEcranSupplementsGroupes();
+}
+
+function ouvrirEcranSupplementsGroupes() {
+  document.getElementById('ecran-supplements-generaux')?.remove();
+
+  const modal = document.createElement('div');
+  modal.id = 'ecran-supplements-generaux';
+  modal.className = 'fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 p-0 sm:p-4';
+
+  const lignesSupplements = supplementsGeneraux.map(s => `
+    <label class="flex items-center gap-3 border border-gray-200 rounded-xl px-4 py-3 cursor-pointer hover:border-red-300 has-[:checked]:border-red-500 has-[:checked]:bg-red-50 transition-colors">
+      <input type="checkbox"
+        data-gen-sup-id="${escHtml(s.id)}"
+        data-gen-sup-prix="${s.prix}"
+        data-gen-sup-nom="${escHtml(s.nom)}"
+        class="text-red-600 rounded w-4 h-4">
+      ${s.photo_url
+        ? `<img src="${escHtml(s.photo_url)}" alt="${escHtml(s.nom)}" class="w-10 h-10 rounded-lg object-cover">`
+        : `<div class="w-10 h-10 rounded-lg bg-gray-100 flex items-center justify-center flex-shrink-0"><i class="fa-solid fa-pepper-hot text-gray-300"></i></div>`}
+      <div class="flex-1 min-w-0">
+        <div class="text-sm font-medium text-gray-800">${escHtml(s.nom)}</div>
+        <div class="text-xs text-gray-500">+${formatMontant(s.prix)}</div>
+      </div>
+    </label>`).join('');
+
+  modal.innerHTML = `
+    <div class="bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl max-w-md w-full max-h-[85vh] overflow-y-auto">
+      <div class="flex items-center justify-between px-5 py-4 border-b border-gray-100 sticky top-0 bg-white z-10">
+        <div>
+          <h2 class="font-bold text-gray-900">Suppléments disponibles</h2>
+          <p class="text-xs text-gray-500 mt-0.5">Ajoutez des extras à votre commande (facultatif)</p>
+        </div>
+      </div>
+      <div class="p-5">
+        <div class="space-y-2 mb-5">
+          ${lignesSupplements}
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <button data-action="fermerEcranSupplements"
+            class="border border-gray-200 text-gray-700 font-medium py-3 rounded-xl hover:bg-gray-50 transition-colors text-sm">
+            Continuer sans
+          </button>
+          <button data-action="confirmerSupplementsGroupes"
+            class="text-white font-bold py-3 rounded-xl transition-colors text-sm"
+            style="background-color:${PRIMARY_COLOR}">
+            Ajouter et continuer
+          </button>
+        </div>
+      </div>
+    </div>`;
+
+  document.body.appendChild(modal);
+  document.body.style.overflow = 'hidden';
+  // Fermer en cliquant sur l'overlay
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) {
+      modal.remove();
+      document.body.style.overflow = '';
+      openCheckout();
+    }
+  });
+}
+
+function _confirmerSupplementsGroupes() {
+  const modal = document.getElementById('ecran-supplements-generaux');
+  if (!modal) { openCheckout(); return; }
+
+  const checked = Array.from(modal.querySelectorAll('input[data-gen-sup-id]:checked'));
+  const supplements = checked.map(el => ({
+    supplement_id: el.getAttribute('data-gen-sup-id'),
+    nom: el.getAttribute('data-gen-sup-nom'),
+    prix: parseFloat(el.getAttribute('data-gen-sup-prix') || '0')
+  }));
+
+  modal.remove();
+  document.body.style.overflow = '';
+
+  if (supplements.length === 0) {
+    // L'utilisateur a cliqué "Ajouter et continuer" sans rien cocher
+    openCheckout();
+    return;
+  }
+
+  // Appliquer les suppléments à TOUS les articles du panier qui n'en ont pas encore
+  // (les articles qui ont déjà des suppléments gardent les leurs)
+  cart.items = cart.items.map(item => {
+    if (item.supplements && item.supplements.length > 0) return item; // déjà des supps
+    const totalSupplements = supplements.reduce((s, x) => s + x.prix, 0);
+    return {
+      ...item,
+      supplements: supplements,
+      prix_supplement: totalSupplements,
+      _supKey: supplements.map(s => s.supplement_id).sort().join(',')
+    };
+  });
+
+  saveCart();
+  updateCartUI();
+  openCheckout();
+}
+
+// Exposer pour usage éventuel
+window.ouvrirEcranSupplementsGroupes = ouvrirEcranSupplementsGroupes;

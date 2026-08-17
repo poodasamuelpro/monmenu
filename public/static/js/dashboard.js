@@ -147,7 +147,8 @@ function _modalEscHandler(e) {
 // ==============================
 // GESTION DU BOUTON RETOUR
 // ==============================
-const SECTIONS_AVEC_RETOUR = ['menu','statistiques','livreurs','qrcode','apparence','parametres','codes-promo','pdv','abonnement','historique-paiements'];
+// AJOUT — 'supplements' inclus dans les sections avec bouton retour
+const SECTIONS_AVEC_RETOUR = ['menu','supplements','statistiques','livreurs','qrcode','apparence','parametres','codes-promo','pdv','abonnement','historique-paiements'];
 
 function _updateBtnRetour(section) {
   const btn = document.getElementById('btn-retour');
@@ -304,6 +305,7 @@ async function initDashboard() {
   const path = window.location.pathname;
   let section = 'commandes';
   if (path.includes('/menu')) section = 'menu';
+  else if (path.includes('/supplements')) section = 'supplements'; // AJOUT — avant /parametres
   else if (path.includes('/statistiques')) section = 'statistiques';
   else if (path.includes('/livreurs')) section = 'livreurs';
   else if (path.includes('/qrcode')) section = 'qrcode';
@@ -347,6 +349,7 @@ async function initDashboard() {
     else if (path.includes('/pdv')) sec = 'pdv';
     else if (path.includes('/apparence')) sec = 'apparence';
     else if (path.includes('/abonnement')) sec = 'abonnement';
+    else if (path.includes('/supplements')) sec = 'supplements'; // AJOUT
     else if (path.includes('/historique-paiements')) sec = 'historique-paiements';
     else if (path.includes('/parametres')) sec = 'parametres';
     navigateTo(sec);
@@ -381,6 +384,7 @@ function navigateTo(section) {
   const titles = {
     commandes: 'Commandes',
     menu: 'Gestion du menu',
+    supplements: 'Suppléments', // AJOUT
     statistiques: 'Statistiques',
     livreurs: 'Livreurs',
     qrcode: 'QR Code',
@@ -398,6 +402,15 @@ function navigateTo(section) {
   switch (section) {
     case 'commandes':    loadCommandes();    break;
     case 'menu':         loadMenu();         break;
+    // AJOUT — Suppléments généraux (délégué à supplements.js)
+    case 'supplements':
+      if (typeof loadSupplements === 'function') {
+        loadSupplements();
+      } else {
+        const content = document.getElementById('dashboard-content');
+        if (content) content.innerHTML = `<div class="text-center py-12 text-gray-400 text-sm">Module Suppléments non disponible (supplements.js non chargé).</div>`;
+      }
+      break;
     case 'statistiques': loadStatistiques(); break;
     case 'livreurs':     loadLivreurs();     break;
     case 'qrcode':       loadQRCode();       break;

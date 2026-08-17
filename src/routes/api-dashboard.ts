@@ -881,10 +881,15 @@ dashboardRouter.delete('/produits/:id', async (c) => {
 })
 
 // ============================================================
-// AJOUT — SUPPLÉMENTS (CRUD par produit)
+// ANCIENS ENDPOINTS SUPPLÉMENTS (par produit — conservés pour
+// rétrocompatibilité app mobile et dashboard existant).
+// Les nouveaux suppléments généraux passent par api-supplements.ts.
 // ============================================================
 
 // ---- GET /api/v1/dashboard/produits/:id/supplements ----
+// CONSERVÉ — rétrocompatibilité app mobile (si utilisé) et dashboard.
+// Note : la nouvelle page "Suppléments" du dashboard utilise
+// /api/v1/dashboard/supplements (api-supplements.ts) qui est général.
 dashboardRouter.get('/produits/:id/supplements', async (c) => {
   setSecurityHeaders(c)
   const auth = await verifyAuth(c)
@@ -904,7 +909,7 @@ dashboardRouter.get('/produits/:id/supplements', async (c) => {
 
   const { data: supplements, error } = await supabase
     .from('supplements')
-    .select('id, nom, prix, actif, ordre_affichage')
+    .select('id, nom, prix, photo_url, actif, ordre_affichage')
     .eq('produit_id', produitId)
     .eq('tenant_id', auth.tenant_id)
     .is('deleted_at', null)
