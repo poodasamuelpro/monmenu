@@ -977,13 +977,21 @@ dashboardRouter.post('/produits/:id/supplements', async (c) => {
 })
 
 // ---- PATCH /api/v1/dashboard/supplements/:id — modifier / activer / désactiver ----
+// FIX CONTRE-AUDIT-2026-08-17 (BLOQUANT-1) : cette route intercepte les requêtes
+// PATCH /api/v1/dashboard/supplements/:id avant supplementsRouter car dashboardRouter
+// est monté en premier dans index.tsx (l.199 avant l.209). Elle doit donc :
+//   1. Invalider AUSSI le cache `supplements:` KV (pas seulement `menu:`)
+//   2. Gérer les champs photo_url / photo_r2_key (envoyés par _retirerImageSupplement)
+//      avec purge R2 propre si photo_r2_key est mis à null.
+//   3. Utiliser adminClient (service role) pour contourner les éventuelles
+//      restrictions RLS strictes sur le client token (cohérence avec api-supplements.ts).
 dashboardRouter.patch('/supplements/:id', async (c) => {
   setSecurityHeaders(c)
   const auth = await verifyAuth(c)
   if (!auth) return c.json({ error: 'Non authentifié.' }, 401)
 
   const supId = c.req.param('id')
-  let body: { nom?: string; prix?: number; actif?: boolean; ordre_affichage?: number }
+  let body: { nom?: string; prix?: number; actif?: boolean; ordre_affichage?: number; photo_url?: string | null; photo_r2_key?: string | null }
   try { body = await c.req.json() } catch { return c.json({ error: 'JSON invalide.' }, 400) }
 
   if (body.nom !== undefined && (body.nom.trim().length < 1 || body.nom.trim().length > 100)) {
@@ -993,25 +1001,30 @@ dashboardRouter.patch('/supplements/:id', async (c) => {
     return c.json({ error: 'Prix invalide.' }, 422)
   }
 
-  const supabase = createSupabaseClientWithToken(c.env, auth.token)
+  // FIX — adminClient pour cohérence avec api-supplements.ts (contourne RLS).
+  const adminClient = createSupabaseAdminClient(c.env)
 
-  const { data: sup } = await supabase
+  // Lire la clé R2 existante AVANT la mise à jour (pour purge si photo retirée).
+  const { data: supAvant } = await adminClient
     .from('supplements')
-    .select('id')
+    .select('id, photo_r2_key')
     .eq('id', supId)
     .eq('tenant_id', auth.tenant_id)
     .is('deleted_at', null)
-    .single()
-  if (!sup) return c.json({ error: 'Supplément introuvable.' }, 404)
+    .maybeSingle()
+  if (!supAvant) return c.json({ error: 'Supplément introuvable.' }, 404)
 
   const updateData: any = { updated_at: new Date().toISOString() }
   if (body.nom !== undefined) updateData.nom = body.nom.trim()
   if (body.prix !== undefined) updateData.prix = body.prix
   if (body.actif !== undefined) updateData.actif = body.actif
   if (body.ordre_affichage !== undefined) updateData.ordre_affichage = body.ordre_affichage
+  // FIX — accepter photo_url/photo_r2_key null (action "Retirer image" du dashboard).
+  if ('photo_url' in body) updateData.photo_url = body.photo_url ?? null
+  if ('photo_r2_key' in body) updateData.photo_r2_key = body.photo_r2_key ?? null
 
   // BUG-09/A-09 CORRIGÉ — .select('id') pour détecter les 0 lignes affectées
-  const { data: updatedSup, error } = await supabase
+  const { data: updatedSup, error } = await adminClient
     .from('supplements')
     .update(updateData)
     .eq('id', supId)
@@ -1025,22 +1038,51 @@ dashboardRouter.patch('/supplements/:id', async (c) => {
     return c.json({ error: 'Supplément introuvable ou supprimé entre-temps.' }, 404)
   }
 
-  try { if (c.env.KV_CACHE) await c.env.KV_CACHE.delete(`menu:${auth.tenant_slug}`) } catch {}
+  // FIX — Purge R2 si photo retirée (photo_r2_key passé à null, ancienne clé non nulle).
+  if ('photo_r2_key' in body && body.photo_r2_key === null && supAvant.photo_r2_key && c.env.R2_MEDIA) {
+    try { await c.env.R2_MEDIA.delete(supAvant.photo_r2_key) } catch (r2Err: any) {
+      console.warn('[Dashboard/PATCH supplements] Purge R2 échouée après retrait image:', r2Err?.message ?? r2Err)
+    }
+  }
+
+  // FIX — invalider AUSSI le cache supplements: (en plus de menu:).
+  try {
+    if (c.env.KV_CACHE) {
+      await c.env.KV_CACHE.delete(`menu:${auth.tenant_slug}`)
+      await c.env.KV_CACHE.delete(`supplements:${auth.tenant_slug}`)
+    }
+  } catch {}
   return c.json({ success: true })
 })
 
 // ---- DELETE /api/v1/dashboard/supplements/:id ----
+// FIX CONTRE-AUDIT-2026-08-17 (BLOQUANT-2) : idem PATCH ci-dessus —
+//   1. Invalider AUSSI le cache `supplements:` KV.
+//   2. Purger l'image R2 associée (si présente) APRÈS le soft-delete DB.
+//   3. Utiliser adminClient pour cohérence avec api-supplements.ts.
 dashboardRouter.delete('/supplements/:id', async (c) => {
   setSecurityHeaders(c)
   const auth = await verifyAuth(c)
   if (!auth) return c.json({ error: 'Non authentifié.' }, 401)
 
   const supId = c.req.param('id')
-  const supabase = createSupabaseClientWithToken(c.env, auth.token)
+  // FIX — adminClient pour cohérence + lire photo_r2_key avant suppression.
+  const adminClient = createSupabaseAdminClient(c.env)
 
-  const { error, data } = await supabase
+  // FIX — lire la clé R2 avant le soft-delete (pour purge post-DB).
+  const { data: supAvant } = await adminClient
     .from('supplements')
-    .update({ deleted_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+    .select('id, photo_r2_key')
+    .eq('id', supId)
+    .eq('tenant_id', auth.tenant_id)
+    .is('deleted_at', null)
+    .maybeSingle()
+  if (!supAvant) return c.json({ error: 'Supplément introuvable.' }, 404)
+
+  const now = new Date().toISOString()
+  const { error, data } = await adminClient
+    .from('supplements')
+    .update({ deleted_at: now, updated_at: now })
     .eq('id', supId)
     .eq('tenant_id', auth.tenant_id)
     .is('deleted_at', null)
@@ -1049,7 +1091,20 @@ dashboardRouter.delete('/supplements/:id', async (c) => {
   if (error) return c.json({ error: 'Erreur suppression supplément.', ...(c.env.ENVIRONMENT !== 'production' ? { detail: error.message } : {}) }, 500)
   if (!data || data.length === 0) return c.json({ error: 'Supplément introuvable.' }, 404)
 
-  try { if (c.env.KV_CACHE) await c.env.KV_CACHE.delete(`menu:${auth.tenant_slug}`) } catch {}
+  // FIX — Purge R2 de l'image associée APRÈS confirmation DB réussie.
+  if (supAvant.photo_r2_key && c.env.R2_MEDIA) {
+    try { await c.env.R2_MEDIA.delete(supAvant.photo_r2_key) } catch (r2Err: any) {
+      console.warn('[Dashboard/DELETE supplements] Purge R2 échouée — clé:', supAvant.photo_r2_key, r2Err?.message ?? r2Err)
+    }
+  }
+
+  // FIX — invalider AUSSI le cache supplements: (en plus de menu:).
+  try {
+    if (c.env.KV_CACHE) {
+      await c.env.KV_CACHE.delete(`menu:${auth.tenant_slug}`)
+      await c.env.KV_CACHE.delete(`supplements:${auth.tenant_slug}`)
+    }
+  } catch {}
   return c.json({ success: true })
 })
 
