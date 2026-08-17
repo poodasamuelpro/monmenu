@@ -1473,8 +1473,7 @@ async function loadQRCode() {
           <h2 class="font-bold text-gray-900 mb-1">QR Code de votre boutique</h2>
           <p class="text-xs text-gray-500 mb-5">Imprimez-le et affichez-le en salle, sur vos emballages ou en vitrine.</p>
           <div id="qr-image-wrap" class="w-48 h-48 mx-auto rounded-2xl border border-gray-200 shadow-sm mb-4 bg-white flex items-center justify-center overflow-hidden">
-            <img src="${escHtml(data.qr_display)}" alt="QR Code" class="w-full h-full object-contain p-3"
-              onerror="this.parentElement.innerHTML='<div class=&quot;text-xs text-red-500 p-4&quot;><i class=&quot;fa-solid fa-triangle-exclamation mb-2 block text-lg&quot;></i>QR indisponible.<br><button data-action=&quot;loadQRCode&quot; class=&quot;underline mt-2&quot;>Réessayer</button></div>'">
+            <img id="qr-img" src="${escHtml(data.qr_display)}" alt="QR Code" class="w-full h-full object-contain p-3">
           </div>
           <p class="text-xs text-gray-400 mb-4"><strong>${escHtml(data.boutique_url)}</strong></p>
           <div class="flex gap-3 justify-center flex-wrap">
@@ -1515,6 +1514,14 @@ async function loadQRCode() {
           </div>
         </div>
       </div>`;
+    // CSP-FIX: onerror inline retiré → assignation JS après innerHTML
+    const qrImg = document.getElementById('qr-img');
+    if (qrImg) {
+      qrImg.onerror = function() {
+        const wrap = document.getElementById('qr-image-wrap');
+        if (wrap) wrap.innerHTML = '<div class="text-xs text-red-500 p-4"><i class="fa-solid fa-triangle-exclamation mb-2 block text-lg"></i>QR indisponible.<br><button data-action="loadQRCode" class="underline mt-2">Réessayer</button></div>';
+      };
+    }
   } catch {
     content.innerHTML = '<p class="text-red-500 text-sm p-4">Erreur de chargement du QR Code.</p>';
   }
