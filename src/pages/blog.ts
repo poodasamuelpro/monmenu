@@ -50,9 +50,9 @@ export function renderBlogPage(nomProjet: string, articles: ArticleBlog[] = [], 
 
   const filtresHtml = categories.length > 1 ? `
     <div class="flex flex-wrap gap-2 mb-8">
-      <button onclick="filtrerArticles('tous')" class="cat-btn text-sm font-semibold text-white bg-red-600 px-4 py-1.5 rounded-full" data-cat="tous">Tous les articles</button>
+      <button class="cat-btn text-sm font-semibold text-white bg-red-600 px-4 py-1.5 rounded-full" data-action="filtrerArticles" data-cat="tous">Tous les articles</button>
       ${categories.map(cat => `
-        <button onclick="filtrerArticles('${cat}')" class="cat-btn text-sm font-medium text-gray-600 bg-white border border-gray-200 px-4 py-1.5 rounded-full hover:border-red-300 transition-colors" data-cat="${cat}">${cat}</button>
+        <button class="cat-btn text-sm font-medium text-gray-600 bg-white border border-gray-200 px-4 py-1.5 rounded-full hover:border-red-300 transition-colors" data-action="filtrerArticles" data-cat="${cat}">${cat}</button>
       `).join('')}
     </div>
   ` : ''
@@ -117,6 +117,14 @@ export function renderBlogPage(nomProjet: string, articles: ArticleBlog[] = [], 
           : 'cat-btn text-sm font-medium text-gray-600 bg-white border border-gray-200 px-4 py-1.5 rounded-full hover:border-red-300 transition-colors';
       });
     }
+
+    // ═══════════════════════════════════════════
+    // CSP-FIX (session 16) — Event delegation blog
+    // ═══════════════════════════════════════════
+    document.addEventListener('click', function(e) {
+      var btn = e.target.closest('[data-action="filtrerArticles"]');
+      if (btn) filtrerArticles(btn.dataset.cat);
+    });
   </script>
 </body>
 </html>`
