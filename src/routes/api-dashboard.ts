@@ -1161,12 +1161,18 @@ dashboardRouter.patch('/livreurs/:id', async (c) => {
 
   const supabase = createSupabaseClientWithToken(c.env, auth.token)
 
+  // BUG-LIVREUR-PATCH CORRIGÉ — le SELECT préalable utilisait .single() sans
+  // .is('deleted_at', null), et l'UPDATE n'avait ni .select('id') ni
+  // vérification des lignes affectées : un livreur soft-deleted pouvait être
+  // matché par le SELECT (livreur non null) puis l'UPDATE retournait
+  // success:true sans jamais modifier quoi que ce soit. Fix aligné sur le
+  // pattern B-DASH-05 (DELETE /livreurs/:id) et BUG-09/A-09 (produits, catégories).
   const { data: livreur } = await supabase
     .from('livreurs')
     .select('id')
     .eq('id', livId)
     .eq('tenant_id', auth.tenant_id)
-    .single()
+    .maybeSingle()
 
   if (!livreur) return c.json({ error: 'Livreur introuvable.' }, 404)
 
@@ -1175,13 +1181,20 @@ dashboardRouter.patch('/livreurs/:id', async (c) => {
   if (body.nom !== undefined) updateData.nom = body.nom.trim()
   if (body.whatsapp_number !== undefined) updateData.whatsapp_number = body.whatsapp_number.replace(/\s/g, '')
 
-  const { error } = await supabase
+  // BUG-LIVREUR-PATCH CORRIGÉ — .select('id') + vérification explicite des
+  // lignes affectées (race condition entre SELECT de vérif et UPDATE).
+  const { data: livUpdatedRows, error } = await supabase
     .from('livreurs')
     .update(updateData)
     .eq('id', livId)
     .eq('tenant_id', auth.tenant_id)
+    .select('id')
 
   if (error) return c.json({ error: 'Erreur mise à jour livreur.', ...(c.env.ENVIRONMENT !== 'production' ? { detail: error.message } : {}) }, 500)
+  if (!livUpdatedRows || livUpdatedRows.length === 0) {
+    console.warn('[Dashboard/PATCH livreurs] 0 lignes affectées — tenant_id:', auth.tenant_id, 'liv_id:', livId)
+    return c.json({ error: 'Livreur introuvable ou supprimé entre-temps.' }, 404)
+  }
 
   return c.json({
     success: true,
