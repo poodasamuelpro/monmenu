@@ -333,7 +333,7 @@ export function renderBoutiquePage(tenant: TenantBoutique, nomProjet: string, no
   </main>
 
   <!-- §Retour en haut — visible uniquement en approchant du bas de page (géré en JS) -->
-  <button id="back-to-top-btn" onclick="scrollToTop()"
+  <button id="back-to-top-btn"
     class="fixed bottom-24 right-4 z-40 w-11 h-11 rounded-full bg-gray-900/90 backdrop-blur text-white shadow-lg flex items-center justify-center hover:bg-gray-900 transition-colors"
     aria-label="Revenir en haut de la page">
     <i class="fa-solid fa-arrow-up"></i>
@@ -352,7 +352,7 @@ export function renderBoutiquePage(tenant: TenantBoutique, nomProjet: string, no
 
   <!-- Bouton panier flottant — EN BAS À DROITE -->
   <div id="cart-btn" class="fixed bottom-5 right-4 z-40 hidden">
-    <button onclick="openCart()"
+    <button id="cart-open-btn"
       class="btn-primary font-semibold px-4 py-2.5 rounded-xl shadow-lg flex items-center gap-2 min-w-[180px] justify-between relative text-sm">
       <span id="cart-ferme-tag" class="hidden absolute -top-2 -right-2 bg-red-600 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full">Fermé</span>
       <div class="flex items-center gap-1.5">
@@ -367,14 +367,14 @@ export function renderBoutiquePage(tenant: TenantBoutique, nomProjet: string, no
 
   <!-- Modal Panier -->
   <div id="cart-modal" class="fixed inset-0 z-50 hidden">
-    <div class="absolute inset-0 bg-black/50" onclick="closeCart()"></div>
+    <div id="cart-overlay" class="absolute inset-0 bg-black/50"></div>
     <div class="sheet-modal absolute bottom-0 left-0 right-0 bg-white rounded-t-2xl overflow-y-auto flex flex-col">
       <div class="sticky top-0 bg-white border-b border-gray-100 px-4 py-4 flex items-center justify-between z-10">
-        <button onclick="closeCart()" class="flex items-center gap-1.5 p-2 -ml-2 hover:bg-gray-100 rounded-lg transition-colors text-sm font-medium text-gray-600" aria-label="Retour">
+        <button id="cart-back-btn" class="flex items-center gap-1.5 p-2 -ml-2 hover:bg-gray-100 rounded-lg transition-colors text-sm font-medium text-gray-600" aria-label="Retour">
           <i class="fa-solid fa-arrow-left"></i> Retour
         </button>
         <h2 class="font-bold text-lg text-gray-900">Votre commande</h2>
-        <button onclick="closeCart()" class="p-2 hover:bg-gray-100 rounded-lg transition-colors" aria-label="Fermer">
+        <button id="cart-close-btn" class="p-2 hover:bg-gray-100 rounded-lg transition-colors" aria-label="Fermer">
           <i class="fa-solid fa-xmark text-gray-600"></i>
         </button>
       </div>
@@ -385,17 +385,17 @@ export function renderBoutiquePage(tenant: TenantBoutique, nomProjet: string, no
 
   <!-- Modal Checkout (confirmation / paiement) -->
   <div id="checkout-modal" class="fixed inset-0 z-50 hidden">
-    <div class="absolute inset-0 bg-black/50" onclick="closeCheckout()"></div>
+    <div id="checkout-overlay" class="absolute inset-0 bg-black/50"></div>
     <div class="sheet-modal absolute bottom-0 left-0 right-0 bg-white rounded-t-2xl overflow-y-auto">
       <!-- §Retour — Bouton retour explicite (icône + texte) toujours visible
            en haut de la confirmation de commande / paiement. -->
       <div class="sticky top-0 bg-white border-b border-gray-100 px-4 py-4 flex items-center gap-3 z-10">
-        <button onclick="closeCheckout()" class="flex items-center gap-1.5 p-2 -ml-2 hover:bg-gray-100 rounded-lg transition-colors text-sm font-medium text-gray-600" aria-label="Retour au panier">
+        <button id="checkout-back-btn" class="flex items-center gap-1.5 p-2 -ml-2 hover:bg-gray-100 rounded-lg transition-colors text-sm font-medium text-gray-600" aria-label="Retour au panier">
           <i class="fa-solid fa-arrow-left"></i> Retour
         </button>
         <h2 class="font-bold text-lg text-gray-900">Finaliser la commande</h2>
       </div>
-      <form id="checkout-form" class="px-4 py-6 space-y-5" onsubmit="submitOrder(event)">
+      <form id="checkout-form" class="px-4 py-6 space-y-5">
         <div>
           <label class="block text-sm font-semibold text-gray-700 mb-1.5">
             Votre prénom et nom <span class="text-red-500">*</span>
@@ -456,7 +456,7 @@ export function renderBoutiquePage(tenant: TenantBoutique, nomProjet: string, no
               <div class="text-center">
                 <i class="fa-solid fa-map text-3xl text-gray-300 mb-2 block"></i>
                 <span>Localisation en cours...</span><br>
-                <button type="button" onclick="geolocaliser()"
+                <button type="button" id="geolocate-btn"
                   class="mt-2 text-xs text-blue-600 hover:underline flex items-center gap-1 mx-auto">
                   <i class="fa-solid fa-location-crosshairs"></i> Utiliser ma position
                 </button>
@@ -482,8 +482,8 @@ export function renderBoutiquePage(tenant: TenantBoutique, nomProjet: string, no
             <input id="promo-input" type="text" maxlength="20" autocomplete="off"
               class="flex-1 border border-gray-200 bg-white text-gray-900 rounded-xl px-4 py-3 text-sm uppercase tracking-widest focus:outline-none focus:ring-2 focus:ring-red-200 focus:border-red-400 placeholder-gray-400"
               placeholder="EX : PROMO20"
-              onkeydown="if(event.key==='Enter'){event.preventDefault();appliquerCodePromo();}">
-            <button id="promo-btn" type="button" onclick="appliquerCodePromo()"
+>
+            <button id="promo-btn" type="button"
               class="btn-primary px-4 py-3 rounded-xl text-sm font-bold transition-colors">
               Appliquer
             </button>
@@ -606,6 +606,38 @@ export function renderBoutiquePage(tenant: TenantBoutique, nomProjet: string, no
     const WHATSAPP_NUMBER = '${tenant.whatsapp_number}';
     const PRIMARY_COLOR = '${primaryColor}';
     if (typeof initBoutique === 'function') initBoutique(TENANT_SLUG, TENANT_SLUG);
+
+    // ═══════════════════════════════════════════
+    // CSP-FIX (session 16) — Event listeners boutique
+    // Remplace tous les onclick=/onsubmit=/onkeydown= inline
+    // ═══════════════════════════════════════════
+    (function() {
+      var _ids = [
+        ['back-to-top-btn', 'click',  function() { scrollToTop(); }],
+        ['cart-open-btn',   'click',  function() { openCart(); }],
+        ['cart-overlay',    'click',  function() { closeCart(); }],
+        ['cart-back-btn',   'click',  function() { closeCart(); }],
+        ['cart-close-btn',  'click',  function() { closeCart(); }],
+        ['checkout-overlay','click',  function() { closeCheckout(); }],
+        ['checkout-back-btn','click', function() { closeCheckout(); }],
+        ['geolocate-btn',   'click',  function() { geolocaliser(); }],
+        ['promo-btn',       'click',  function() { appliquerCodePromo(); }]
+      ];
+      _ids.forEach(function(t) {
+        var el = document.getElementById(t[0]);
+        if (el) el.addEventListener(t[1], t[2]);
+      });
+
+      // #checkout-form submit → submitOrder
+      var form = document.getElementById('checkout-form');
+      if (form) form.addEventListener('submit', function(e) { submitOrder(e); });
+
+      // #promo-input onkeydown Enter → appliquerCodePromo
+      var promoInput = document.getElementById('promo-input');
+      if (promoInput) promoInput.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') { e.preventDefault(); appliquerCodePromo(); }
+      });
+    }());
   </script>
 </body>
 </html>`
