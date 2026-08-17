@@ -508,9 +508,9 @@ async function loadCommandes() {
   if (!content) return;
   content.innerHTML = `
     <div class="flex flex-wrap gap-2 mb-5">
-      <button onclick="filtrerCommandes(null)" class="statut-filter-btn active px-3 py-1.5 rounded-lg text-xs font-semibold bg-red-600 text-white">Toutes</button>
+      <button onclick="filtrerCommandes(null)" class="statut-filter-btn active px-3 py-1.5 rounded-lg text-xs font-semibold bg-red-600 text-white" data-statut="toutes">Toutes</button>
       ${['en_attente','confirmee','en_preparation','en_livraison','livree','annulee'].map(s =>
-        `<button onclick="filtrerCommandes('${s}')" class="statut-filter-btn px-3 py-1.5 rounded-lg text-xs font-semibold border border-gray-200 text-gray-600 hover:border-red-300 hover:text-red-600 transition-colors">${s.replace(/_/g,' ')}</button>`
+        `<button onclick="filtrerCommandes('${s}')" class="statut-filter-btn px-3 py-1.5 rounded-lg text-xs font-semibold border border-gray-200 text-gray-600 hover:border-red-300 hover:text-red-600 transition-colors" data-statut="${s}">${s.replace(/_/g,' ')}</button>`
       ).join('')}
       <button onclick="loadCommandes()" class="ml-auto flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-700 border border-gray-200 rounded-lg px-3 py-1.5 transition-colors">
         <i class="fa-solid fa-rotate-right"></i> Actualiser
@@ -800,9 +800,12 @@ function filtrerCommandes(statut) {
     b.classList.remove('bg-red-600', 'text-white');
     b.classList.add('border', 'border-gray-200', 'text-gray-600');
   });
+  // FIX CSP-BUG (session 14) : l'ancien sélecteur [onclick="..."] ne fonctionnait
+  // qu'avec des attributs onclick= inline. On utilise data-statut à la place,
+  // cohérent avec les boutons générés par loadCommandes() via innerHTML.
   const activeBtn = statut
-    ? document.querySelector(`[onclick="filtrerCommandes('${statut}')"]`)
-    : document.querySelector(`[onclick="filtrerCommandes(null)"]`);
+    ? document.querySelector(`.statut-filter-btn[data-statut="${statut}"]`)
+    : document.querySelector('.statut-filter-btn[data-statut="toutes"]');
   if (activeBtn) {
     activeBtn.classList.add('bg-red-600', 'text-white');
     activeBtn.classList.remove('border', 'border-gray-200', 'text-gray-600');
