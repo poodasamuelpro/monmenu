@@ -2,6 +2,13 @@
 // v1.9.0 — AJOUT : lien sidebar "Historique paiements" (page dédiée
 // /dashboard/historique-paiements, gérée par loadHistoriquePaiements()
 // dans dashboard.js). Tout le reste du fichier est inchangé.
+//
+// FIX CSP-BUG (session 14) — Tous les onclick= / onsubmit= inline du HTML SSR
+// étaient bloqués silencieusement par CSP Level 3 dès qu'un nonce est présent
+// dans script-src (les navigateurs modernes ignorent 'unsafe-inline' pour les
+// event handlers HTML inline). Résultat : AUCUN bouton du dashboard ne répondait.
+// Correctif : retrait de tous les onclick= du HTML et remplacement par
+// addEventListener dans le <script nonce> existant.
 import { renderHead } from '../components/head'
 
 export function renderDashboardPage(
@@ -70,7 +77,8 @@ export function renderDashboardPage(
         </a>
       </nav>
       <div class="p-4 border-t border-gray-800">
-        <button onclick="logout()"
+        <!-- FIX CSP: onclick="logout()" retiré → addEventListener dans script nonce -->
+        <button id="btn-logout"
           class="flex items-center gap-2 text-sm text-gray-400 hover:text-white transition-colors w-full">
           <i class="fa-solid fa-arrow-right-from-bracket"></i> Déconnexion
         </button>
@@ -81,13 +89,14 @@ export function renderDashboardPage(
     <div class="lg:pl-60 min-h-screen">
       <header class="bg-white border-b border-gray-100 sticky top-0 z-30">
         <div class="px-4 py-3 flex items-center gap-3">
-          <!-- Bouton menu sidebar mobile -->
-          <button onclick="toggleSidebar()" class="lg:hidden p-2 rounded-lg hover:bg-gray-100 text-gray-600" aria-label="Menu">
+          <!-- Bouton menu sidebar mobile — FIX CSP: onclick= retiré → addEventListener -->
+          <button id="btn-toggle-sidebar" class="lg:hidden p-2 rounded-lg hover:bg-gray-100 text-gray-600" aria-label="Menu">
             <i class="fa-solid fa-bars"></i>
           </button>
 
           <!-- Bouton Retour (masqué sur la section commandes = accueil) -->
-          <button id="btn-retour" onclick="retourAccueil()"
+          <!-- FIX CSP: onclick="retourAccueil()" retiré → addEventListener -->
+          <button id="btn-retour"
             class="hidden items-center gap-1.5 text-sm text-gray-600 hover:text-gray-900 p-2 rounded-lg hover:bg-gray-100 transition-colors"
             aria-label="Retour aux commandes"
             title="Retour aux commandes">
@@ -112,8 +121,8 @@ export function renderDashboardPage(
 
             <!-- Cloche notifications -->
             <div class="relative">
+              <!-- FIX CSP: onclick="toggleNotifPanel()" retiré → addEventListener -->
               <button id="btn-notif"
-                onclick="toggleNotifPanel()"
                 class="relative p-2 rounded-lg hover:bg-gray-100 text-gray-600 hover:text-gray-900 transition-colors"
                 aria-label="Notifications">
                 <i class="fa-solid fa-bell text-sm"></i>
@@ -128,7 +137,8 @@ export function renderDashboardPage(
                 class="hidden absolute right-0 top-full mt-2 w-80 bg-white border border-gray-200 rounded-2xl shadow-xl z-50 overflow-hidden">
                 <div class="flex items-center justify-between px-4 py-3 border-b border-gray-100">
                   <span class="font-bold text-gray-900 text-sm">Notifications</span>
-                  <button onclick="toutMarquerLu()" class="text-xs text-red-600 hover:underline font-medium">
+                  <!-- FIX CSP: onclick="toutMarquerLu()" retiré → addEventListener -->
+                  <button id="btn-tout-marquer-lu" class="text-xs text-red-600 hover:underline font-medium">
                     Tout marquer comme lu
                   </button>
                 </div>
@@ -139,11 +149,12 @@ export function renderDashboardPage(
                   </div>
                 </div>
                 <div id="notif-footer" class="hidden px-4 py-2.5 border-t border-gray-100 flex items-center justify-between">
-                  <button id="notif-prev" onclick="notifPagePrev()" class="text-xs text-gray-500 hover:text-gray-700 disabled:opacity-40" disabled>
+                  <!-- FIX CSP: onclick="notifPagePrev/Next()" retirés → addEventListener -->
+                  <button id="notif-prev" class="text-xs text-gray-500 hover:text-gray-700 disabled:opacity-40" disabled>
                     <i class="fa-solid fa-chevron-left mr-0.5"></i> Précédent
                   </button>
                   <span id="notif-page-info" class="text-xs text-gray-400"></span>
-                  <button id="notif-next" onclick="notifPageNext()" class="text-xs text-gray-500 hover:text-gray-700 disabled:opacity-40">
+                  <button id="notif-next" class="text-xs text-gray-500 hover:text-gray-700 disabled:opacity-40">
                     Suivant <i class="fa-solid fa-chevron-right ml-0.5"></i>
                   </button>
                 </div>
@@ -157,18 +168,10 @@ export function renderDashboardPage(
       <div id="notification-bandeaux" class="bg-white"></div>
 
       <main class="p-4 lg:p-6" id="dashboard-content">
-        <!-- Section Commandes (chargée par dashboard.js) -->
+        <!-- Section Commandes (chargée par dashboard.js via initDashboard/loadCommandes)
+             Les boutons de filtre statuts sont générés dynamiquement par loadCommandes().
+             Le skeleton ci-dessous est le seul état initial visible (~100ms). -->
         <section id="section-commandes">
-          <div class="flex flex-wrap gap-3 mb-6">
-            ${['en_attente', 'confirmee', 'en_preparation', 'en_livraison', 'livree', 'annulee'].map(s => `
-              <button onclick="filtrerCommandes('${s}')" class="statut-btn px-3 py-1.5 rounded-lg text-xs font-semibold border border-gray-200 text-gray-600 hover:border-red-300 hover:text-red-600 transition-colors" data-statut="${s}">
-                ${s.replace('_', ' ')}
-              </button>
-            `).join('')}
-            <button onclick="filtrerCommandes(null)" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-red-600 text-white">
-              Toutes
-            </button>
-          </div>
           <div id="commandes-list" class="space-y-3">
             <div class="text-center py-12 text-gray-400">
               <i class="fa-solid fa-circle-notch fa-spin text-3xl mb-3 block"></i>
@@ -179,8 +182,8 @@ export function renderDashboardPage(
       </main>
     </div>
 
-    <!-- Sidebar overlay mobile -->
-    <div id="sidebar-overlay" class="fixed inset-0 bg-black/50 z-30 hidden lg:hidden" onclick="toggleSidebar()"></div>
+    <!-- Sidebar overlay mobile — FIX CSP: onclick="toggleSidebar()" retiré → addEventListener -->
+    <div id="sidebar-overlay" class="fixed inset-0 bg-black/50 z-30 hidden lg:hidden"></div>
   </div>
 
   <!-- S6-03 : SRI sha384 calculé sur chart.js@4.5.1/dist/chart.umd.min.js -->
@@ -197,6 +200,7 @@ export function renderDashboardPage(
   <script src="/static/js/dashboard-paiement.js"></script>
   <script src="/static/js/notifications.js"></script>
   <script nonce="${nonce}">
+    // ── Initialisation tenant depuis localStorage ─────────────────────────────
     try {
       const tenant = JSON.parse(localStorage.getItem('monmenu_tenant') || '{}');
       if (tenant.nom) {
@@ -209,6 +213,7 @@ export function renderDashboardPage(
       }
     } catch {}
 
+    // ── Fonctions utilitaires sidebar / logout ────────────────────────────────
     function toggleSidebar() {
       const sidebar = document.getElementById('sidebar');
       const overlay = document.getElementById('sidebar-overlay');
@@ -229,6 +234,48 @@ export function renderDashboardPage(
       window.location.href = '/dashboard';
     }
 
+    // ── Wiring addEventListener (remplace tous les onclick= inline) ───────────
+    // Sidebar mobile
+    var btnToggleSidebar = document.getElementById('btn-toggle-sidebar');
+    if (btnToggleSidebar) btnToggleSidebar.addEventListener('click', toggleSidebar);
+
+    // Overlay sidebar mobile
+    var sidebarOverlay = document.getElementById('sidebar-overlay');
+    if (sidebarOverlay) sidebarOverlay.addEventListener('click', toggleSidebar);
+
+    // Bouton déconnexion
+    var btnLogout = document.getElementById('btn-logout');
+    if (btnLogout) btnLogout.addEventListener('click', logout);
+
+    // Bouton retour (dashboard.js définit retourAccueil)
+    var btnRetour = document.getElementById('btn-retour');
+    if (btnRetour) btnRetour.addEventListener('click', function() {
+      if (typeof retourAccueil === 'function') retourAccueil();
+    });
+
+    // Cloche notifications (notifications.js définit toggleNotifPanel)
+    var btnNotif = document.getElementById('btn-notif');
+    if (btnNotif) btnNotif.addEventListener('click', function() {
+      if (typeof toggleNotifPanel === 'function') toggleNotifPanel();
+    });
+
+    // "Tout marquer comme lu" (notifications.js définit toutMarquerLu)
+    var btnToutMarquerLu = document.getElementById('btn-tout-marquer-lu');
+    if (btnToutMarquerLu) btnToutMarquerLu.addEventListener('click', function() {
+      if (typeof toutMarquerLu === 'function') toutMarquerLu();
+    });
+
+    // Pagination notifications précédent/suivant (notifications.js)
+    var notifPrev = document.getElementById('notif-prev');
+    if (notifPrev) notifPrev.addEventListener('click', function() {
+      if (typeof notifPagePrev === 'function') notifPagePrev();
+    });
+    var notifNext = document.getElementById('notif-next');
+    if (notifNext) notifNext.addEventListener('click', function() {
+      if (typeof notifPageNext === 'function') notifPageNext();
+    });
+
+    // ── Fermer le panneau notif en cliquant ailleurs ──────────────────────────
     document.addEventListener('click', function(e) {
       const panel = document.getElementById('notif-panel');
       const btn = document.getElementById('btn-notif');
@@ -239,6 +286,7 @@ export function renderDashboardPage(
       }
     });
 
+    // ── Démarrage dashboard ───────────────────────────────────────────────────
     if (typeof initDashboard === 'function') initDashboard();
     if (typeof initBandeauxPaiement === 'function') initBandeauxPaiement();
   </script>
