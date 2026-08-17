@@ -73,6 +73,21 @@ export function renderLegalPage(type: 'cgu' | 'confidentialite' | 'mentions' | '
   </main>
   ${renderFooter(nomProjet, nonce)}
   <script src="/static/js/main.js"></script>
+  <script nonce="${nonce}">
+    // CSP-FIX (session 16) — cookies page buttons
+    (function() {
+      var btnAccept = document.getElementById('btn-accept-cookies');
+      var btnReject = document.getElementById('btn-reject-cookies');
+      if (btnAccept) btnAccept.addEventListener('click', function() {
+        if (typeof acceptCookies === 'function') acceptCookies();
+        window.location.reload();
+      });
+      if (btnReject) btnReject.addEventListener('click', function() {
+        if (typeof rejectCookies === 'function') rejectCookies();
+        window.location.reload();
+      });
+    }());
+  </script>
 </body>
 </html>`
 }

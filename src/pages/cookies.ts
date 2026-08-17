@@ -44,11 +44,11 @@ export function getCookiesContent(nomProjet: string, year: number) {
 <h2 class="text-xl font-bold text-gray-900 mt-8 mb-3">Gérer vos préférences</h2>
 <p>Vous pouvez modifier vos choix à tout moment via le bandeau de gestion des cookies ou en configurant les paramètres de votre navigateur internet.</p>
 <div class="flex gap-3 mt-6">
-  <button onclick="acceptCookies(); window.location.reload();"
+  <button id="btn-accept-cookies"
     class="bg-red-600 text-white font-semibold px-5 py-2.5 rounded-xl text-sm hover:bg-red-700 transition-colors">
     Accepter les cookies
   </button>
-  <button onclick="rejectCookies(); window.location.reload();"
+  <button id="btn-reject-cookies"
     class="border border-gray-300 text-gray-700 font-semibold px-5 py-2.5 rounded-xl text-sm hover:bg-gray-50 transition-colors">
     Refuser les cookies non essentiels
   </button>
