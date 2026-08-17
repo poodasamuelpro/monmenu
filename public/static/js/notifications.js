@@ -98,7 +98,7 @@ async function _chargerNotifications() {
     liste.innerHTML = `<div class="text-center py-6 text-sm text-red-500">
       <i class="fa-solid fa-circle-exclamation mb-1 block"></i>
       Erreur de chargement.
-      <button onclick="_chargerNotifications()" class="underline ml-1">Réessayer</button>
+      <button data-action="chargerNotificationsRetry" class="underline ml-1">Réessayer</button>
     </div>`;
   }
 }
@@ -129,7 +129,7 @@ function _renderNotifications(notifications, container) {
     const fondClass = n.lue ? '' : 'bg-blue-50/30';
 
     return `<div class="flex items-start gap-3 px-4 py-3 hover:bg-gray-50 transition-colors cursor-pointer ${fondClass} ${lueClass}"
-        onclick="_ouvrirLienNotif('${_escAttr(n.lien||'')}','${n.id}')">
+        data-action="ouvrirLienNotif" data-lien="${_escAttr(n.lien||'')}" data-notif-id="${n.id}">
       <!-- Icône type -->
       <div class="flex-shrink-0 w-8 h-8 rounded-full ${style.bg} flex items-center justify-center mt-0.5">
         <i class="fa-solid ${style.icon} text-xs ${style.cls}"></i>
@@ -140,7 +140,7 @@ function _renderNotifications(notifications, container) {
           <p class="text-sm font-semibold text-gray-900 leading-tight">${_escHtmlNotif(n.titre)}</p>
           <!-- Bouton lue/non lue -->
           <button
-            onclick="event.stopPropagation();toggleNotifLue('${n.id}',${n.lue})"
+            data-action="toggleNotifLue" data-notif-id="${n.id}" data-lue="${n.lue?1:0}"
             title="${n.lue ? 'Marquer non lue' : 'Marquer lue'}"
             class="flex-shrink-0 p-1 text-gray-300 hover:text-blue-500 transition-colors rounded">
             <i class="fa-${n.lue ? 'regular' : 'solid'} fa-circle-dot text-xs"></i>
@@ -334,3 +334,25 @@ function _formatNotifDate(isoStr) {
     return d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
   } catch { return ''; }
 }
+
+// ==============================
+// DISPATCHER NOTIFICATIONS CSP-SAFE
+// ==============================
+(function initNotificationsDispatcher() {
+  'use strict';
+  document.addEventListener('click', function(e) {
+    // toggleNotifLue en premier — stopPropagation pour ne pas déclencher ouvrirLienNotif
+    const btnToggle = e.target.closest('[data-action="toggleNotifLue"]');
+    if (btnToggle) {
+      e.stopPropagation();
+      toggleNotifLue(btnToggle.dataset.notifId, btnToggle.dataset.lue === '1');
+      return;
+    }
+    const el = e.target.closest('[data-action]');
+    if (!el) return;
+    switch (el.dataset.action) {
+      case 'chargerNotificationsRetry': _chargerNotifications(); break;
+      case 'ouvrirLienNotif':           _ouvrirLienNotif(el.dataset.lien || '', el.dataset.notifId); break;
+    }
+  });
+}());

@@ -225,12 +225,12 @@ async function initSectionAbonnement() {
           <i class="fa-solid fa-credit-card text-4xl mb-3 block"></i>
           <p class="text-sm font-medium text-gray-600 mb-1">Impossible de charger votre abonnement.</p>
           <p class="text-xs">Vérifiez votre connexion ou rechargez la page.</p>
-          <button onclick="initSectionAbonnement()" class="mt-4 text-red-600 hover:underline text-sm font-medium">Réessayer →</button>
+          <button data-action="initSectionAbonnement" class="mt-4 text-red-600 hover:underline text-sm font-medium">Réessayer →</button>
         </div>
       `;
     }
   } catch (err) {
-    container.innerHTML = `<div class="p-4 text-red-600 text-sm">Erreur de chargement. <button onclick="initSectionAbonnement()" class="underline">Réessayer</button></div>`;
+    container.innerHTML = `<div class="p-4 text-red-600 text-sm">Erreur de chargement. <button data-action="initSectionAbonnement" class="underline">Réessayer</button></div>`;
   }
 }
 
@@ -297,7 +297,7 @@ function construireCarteStatut(s) {
   } else if (statutAbonnement === 'actif') {
     upgradeHtml = `
       <div class="mt-3">
-        <button onclick="ouvrirModalChangementPlan()"
+        <button data-action="ouvrirModalChangementPlan"
           class="text-sm text-red-600 hover:text-red-800 font-medium underline hover:no-underline flex items-center gap-1.5">
           <i class="fa-solid fa-arrows-rotate text-xs"></i>
           Changer de plan (upgrade / downgrade)
@@ -404,7 +404,7 @@ function construireCarteStatut(s) {
         </p>
         <div class="flex items-center gap-3 bg-gray-50 rounded-xl px-4 py-3">
           <code class="font-mono font-bold text-gray-800 text-base tracking-wider flex-1">${esc(s.reference_active)}</code>
-          <button onclick="copierTexte('${esc(s.reference_active)}', this)"
+          <button data-action="copierTexte" data-texte="${esc(s.reference_active)}"
             class="text-xs border border-gray-200 hover:border-gray-400 px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1.5 text-gray-600 hover:text-gray-900">
             <i class="fa-solid fa-copy"></i> Copier
           </button>
@@ -437,7 +437,7 @@ function construireCarteStatut(s) {
                     <p class="text-xs text-gray-500 mt-0.5">${Number(p.prix_mensuel).toLocaleString('fr-FR')} FCFA/mois</p>
                   </div>
                   ${!isActuel && statutAbonnement !== 'en_attente_confirmation' ? `
-                  <button onclick="preselectPlan('${esc(p.id)}')"
+                  <button data-action="preselectPlan" data-plan-id="${esc(p.id)}"
                     class="text-xs bg-red-600 hover:bg-red-700 text-white px-3 py-1.5 rounded-lg transition-colors font-medium">
                     Choisir
                   </button>` : ''}
@@ -515,7 +515,7 @@ function construireBlocMoyensPaiement(moyens) {
             ${m.numero ? `
             <div class="flex items-center gap-2">
               <code class="text-xs font-mono text-gray-700 bg-gray-100 px-2 py-0.5 rounded">${esc(m.numero)}</code>
-              <button onclick="copierTexte('${esc(m.numero)}', this)"
+              <button data-action="copierTexte" data-texte="${esc(m.numero)}"
                 class="text-xs text-gray-400 hover:text-gray-700 border border-gray-200 px-2 py-0.5 rounded">
                 <i class="fa-solid fa-copy"></i>
               </button>
@@ -540,10 +540,10 @@ function construireFormUpload() {
   return `
     <div id="upload-zone"
       class="border-2 border-dashed border-gray-200 rounded-2xl p-8 text-center transition-all cursor-pointer hover:border-red-300 hover:bg-red-50/30"
-      ondragover="handleDragOver(event)"
-      ondragleave="handleDragLeave(event)"
-      ondrop="handleDrop(event)"
-      onclick="document.getElementById('inp-preuve').click()">
+      data-action="uploadZoneClick"
+      data-action-dragover="handleDragOver"
+      data-action-dragleave="handleDragLeave"
+      data-action-drop="handleDrop">
       <div id="upload-placeholder">
         <i class="fa-solid fa-cloud-arrow-up text-3xl text-gray-300 mb-2 block"></i>
         <p class="text-sm text-gray-500 font-medium">Glissez votre capture ici ou cliquez pour choisir</p>
@@ -554,7 +554,7 @@ function construireFormUpload() {
         <p id="upload-preview-name" class="text-xs text-gray-500 truncate max-w-xs mx-auto"></p>
       </div>
     </div>
-    <input id="inp-preuve" type="file" accept=".jpg,.jpeg,.png" class="hidden" onchange="previewPreuve(this)">
+    <input id="inp-preuve" type="file" accept=".jpg,.jpeg,.png" class="hidden" data-action-change="previewPreuve">
 
     <div id="upload-error" class="hidden mt-2 text-xs text-red-600 flex items-center gap-1.5">
       <i class="fa-solid fa-circle-exclamation"></i>
@@ -563,7 +563,7 @@ function construireFormUpload() {
 
     <div class="mt-4">
       <label class="block text-xs font-semibold text-gray-600 mb-1.5">Plan souhaité *</label>
-      <select id="inp-plan-preuve" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200 focus:border-red-400" onchange="majAffichagePrix()">
+      <select id="inp-plan-preuve" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-200 focus:border-red-400" data-action-change="majAffichagePrix">
         <option value="">Chargement des plans...</option>
       </select>
       <p id="affichage-prix-plan" class="mt-1.5 text-xs text-gray-400"></p>
@@ -595,7 +595,7 @@ function construireFormUpload() {
       <p class="text-xs text-gray-400 mt-1 text-center">Envoi en cours...</p>
     </div>
 
-    <button id="btn-soumettre-preuve" onclick="soumettrePreuvePaiement()"
+    <button id="btn-soumettre-preuve" data-action="soumettrePreuvePaiement"
       class="mt-4 w-full bg-red-600 hover:bg-red-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2">
       <i class="fa-solid fa-paper-plane"></i> Soumettre ma preuve
     </button>
@@ -827,7 +827,7 @@ function ouvrirModalChangementPlan() {
     <div class="bg-white rounded-2xl shadow-2xl max-w-lg w-full max-h-[90vh] overflow-y-auto">
       <div class="flex items-center justify-between px-6 py-4 border-b border-gray-100">
         <h2 class="font-bold text-gray-900">Changer de plan</h2>
-        <button onclick="document.getElementById('modal-changement-plan').remove()"
+        <button data-action="fermerModalChangementPlan"
           class="text-gray-400 hover:text-gray-700 text-xl font-bold">&times;</button>
       </div>
       <div class="p-6">
@@ -854,7 +854,7 @@ function ouvrirModalChangementPlan() {
           <i class="fa-solid fa-circle-info mr-1"></i>Périodicité : mensuel (uniquement)
         </p>
         <p id="msg-changement-plan" class="hidden text-xs p-3 rounded-xl mb-3"></p>
-        <button onclick="soumettreChangementPlan()"
+        <button data-action="soumettreChangementPlan"
           class="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 rounded-xl transition-colors">
           <i class="fa-solid fa-arrows-rotate mr-2"></i>Demander ce plan
         </button>
@@ -1041,3 +1041,43 @@ window.ouvrirModalChangementPlan = ouvrirModalChangementPlan;
 window.soumettreChangementPlan   = soumettreChangementPlan;
 window.majAffichagePrix = majAffichagePrix;
 window.preselectPlan    = preselectPlan;
+
+// ==============================
+// DISPATCHER PAIEMENT CSP-SAFE
+// ==============================
+(function initPaiementDispatcher() {
+  'use strict';
+  document.addEventListener('click', function(e) {
+    // uploadZoneClick doit ignorer les clics sur le file input lui-même
+    if (e.target && e.target.id === 'inp-preuve') return;
+    const btn = e.target.closest('[data-action]');
+    if (!btn) return;
+    switch (btn.dataset.action) {
+      case 'initSectionAbonnement':     initSectionAbonnement(); break;
+      case 'ouvrirModalChangementPlan': ouvrirModalChangementPlan(); break;
+      case 'soumettreChangementPlan':   soumettreChangementPlan(); break;
+      case 'fermerModalChangementPlan': document.getElementById('modal-changement-plan')?.remove(); break;
+      case 'copierTexte':               copierTexte(btn.dataset.texte, btn); break;
+      case 'preselectPlan':             preselectPlan(btn.dataset.planId); break;
+      case 'soumettrePreuvePaiement':   soumettrePreuvePaiement(); break;
+      case 'uploadZoneClick':           document.getElementById('inp-preuve')?.click(); break;
+    }
+  });
+  document.addEventListener('change', function(e) {
+    const el = e.target.closest('[data-action-change]');
+    if (!el) return;
+    switch (el.dataset.actionChange) {
+      case 'previewPreuve':    previewPreuve(el); break;
+      case 'majAffichagePrix': majAffichagePrix(); break;
+    }
+  });
+  document.addEventListener('dragover', function(e) {
+    if (e.target.closest('[data-action-dragover]')) handleDragOver(e);
+  });
+  document.addEventListener('dragleave', function(e) {
+    if (e.target.closest('[data-action-dragleave]')) handleDragLeave(e);
+  });
+  document.addEventListener('drop', function(e) {
+    if (e.target.closest('[data-action-drop]')) handleDrop(e);
+  });
+}());

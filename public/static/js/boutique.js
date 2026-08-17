@@ -417,7 +417,7 @@ function ouvrirModalSupplements(produit) {
     <div class="bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl max-w-md w-full max-h-[85vh] overflow-y-auto">
       <div class="flex items-center justify-between px-5 py-4 border-b border-gray-100">
         <h2 class="font-bold text-gray-900">${escHtml(produit.nom)}</h2>
-        <button onclick="document.getElementById('modal-supplements').remove()" class="text-gray-400 hover:text-gray-700 text-xl font-bold" aria-label="Fermer">&times;</button>
+        <button data-action="fermerModalSupplements" class="text-gray-400 hover:text-gray-700 text-xl font-bold" aria-label="Fermer">&times;</button>
       </div>
       <div class="p-5">
         <p class="text-sm text-gray-500 mb-3">Ajoutez des suppléments (facultatif) :</p>
@@ -431,7 +431,7 @@ function ouvrirModalSupplements(produit) {
               <span class="text-sm font-semibold text-gray-600">+${formatMontant(s.prix)}</span>
             </label>`).join('')}
         </div>
-        <button onclick="confirmerAjoutAvecSupplements('${escHtml(produit.id)}')" class="w-full text-white font-bold py-3.5 rounded-xl transition-colors" style="background-color:${PRIMARY_COLOR}">
+        <button data-action="confirmerAjoutAvecSupplements" data-prod-id="${escHtml(produit.id)}" class="w-full text-white font-bold py-3.5 rounded-xl transition-colors" style="background-color:${PRIMARY_COLOR}">
           Ajouter au panier
         </button>
       </div>
@@ -604,7 +604,7 @@ function renderCartModal() {
       <span>${formatMontant(total)}</span>
     </div>
     ${!boutiqueOuverte ? `<p class="text-xs text-center text-red-600 font-medium mb-2"><i class="fa-solid fa-circle-exclamation mr-1"></i>Le restaurant est actuellement fermé — la commande ne peut pas être finalisée.</p>` : ''}
-    <button ${boutonDesactive ? 'disabled' : ''} onclick="closeCart(); openCheckout();" class="w-full text-white font-bold py-3.5 rounded-xl flex items-center justify-center gap-2 ${boutonDesactive ? 'opacity-50 cursor-not-allowed' : ''}" style="background-color:${PRIMARY_COLOR}">
+    <button ${boutonDesactive ? 'disabled' : ''} data-action="passerCommande" class="w-full text-white font-bold py-3.5 rounded-xl flex items-center justify-center gap-2 ${boutonDesactive ? 'opacity-50 cursor-not-allowed' : ''}" style="background-color:${PRIMARY_COLOR}">
       <i class="fa-solid fa-arrow-right"></i> Passer à la commande
     </button>
   `;
@@ -1073,3 +1073,19 @@ window.retirerCodePromo = retirerCodePromo;
 window.scrollToTop = scrollToTop;
 window.ouvrirModalSupplements = ouvrirModalSupplements;
 window.confirmerAjoutAvecSupplements = confirmerAjoutAvecSupplements;
+
+// ==============================
+// DISPATCHER BOUTIQUE CSP-SAFE
+// ==============================
+(function initBoutiqueDispatcher() {
+  'use strict';
+  document.addEventListener('click', function(e) {
+    const btn = e.target.closest('[data-action]');
+    if (!btn) return;
+    switch (btn.dataset.action) {
+      case 'fermerModalSupplements':        document.getElementById('modal-supplements')?.remove(); break;
+      case 'confirmerAjoutAvecSupplements': confirmerAjoutAvecSupplements(btn.dataset.prodId); break;
+      case 'passerCommande':                closeCart(); openCheckout(); break;
+    }
+  });
+}());
