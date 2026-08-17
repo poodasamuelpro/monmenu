@@ -88,7 +88,7 @@ export function renderFooter(nomProjet: string, nonce: string = ''): string {
         <h3 class="text-white font-semibold text-sm mb-1">Recevez nos conseils par email</h3>
         <p class="text-sm text-gray-500">Un guide pratique de temps en temps. Pas de spam.</p>
       </div>
-      <form id="newsletter-form" class="flex w-full md:w-auto gap-2" onsubmit="submitNewsletterFooter(event)">
+      <form id="newsletter-form" class="flex w-full md:w-auto gap-2">
         <input type="email" id="newsletter-email" required placeholder="votre@email.com"
           class="flex-1 md:w-64 bg-gray-800 border border-gray-700 rounded-xl px-4 py-2.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-red-500/40 focus:border-red-500 transition-colors">
         <button type="submit" id="newsletter-btn"
@@ -116,11 +116,11 @@ export function renderFooter(nomProjet: string, nonce: string = ''): string {
       <a href="/legal/cookies" class="text-red-600 hover:underline">politique de cookies</a>.
     </p>
     <div class="flex items-center gap-2 flex-shrink-0">
-      <button onclick="rejectCookies()"
+      <button id="cookie-reject-btn"
         class="text-sm font-semibold px-4 py-2 rounded-xl border border-gray-300 text-gray-700 hover:bg-gray-50 transition-colors">
         Refuser
       </button>
-      <button onclick="acceptCookies()"
+      <button id="cookie-accept-btn"
         class="text-sm font-semibold px-4 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white transition-colors">
         Accepter
       </button>
@@ -164,5 +164,19 @@ export function renderFooter(nomProjet: string, nonce: string = ''): string {
     btn.disabled = false;
     btn.textContent = "S'abonner";
   }
+
+  // CSP-FIX (session 16) — footer handlers
+  (function() {
+    var form = document.getElementById('newsletter-form');
+    if (form) form.addEventListener('submit', function(e) { submitNewsletterFooter(e); });
+    var btnReject = document.getElementById('cookie-reject-btn');
+    if (btnReject) btnReject.addEventListener('click', function() {
+      if (typeof rejectCookies === 'function') rejectCookies();
+    });
+    var btnAccept = document.getElementById('cookie-accept-btn');
+    if (btnAccept) btnAccept.addEventListener('click', function() {
+      if (typeof acceptCookies === 'function') acceptCookies();
+    });
+  }());
 </script>`
 }
