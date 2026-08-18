@@ -1,4 +1,4 @@
-# 🔍 AUDIT COMPLET — MonMenu : Système de Paiement & Flux Utilisateur
+# 🔍 AUDIT COMPLET — MonMenu : Système de Paiement & Flux Utilisateur 
 > **Date :** 2026-07-31  
 > **Auditeur :** IA Code Audit (analyse statique exhaustive)  
 > **Périmètre :** Accueil → Inscription → Dashboard → Paiement → Admin  
