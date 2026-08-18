@@ -12,6 +12,9 @@ export interface ArticleDetail {
   image_url: string | null
   date_publication: string | null
   auteur: string | null
+  // FIX — slug réel de la base, pour la canonical et l'og:url exacts
+  // (plus de slugification à la volée depuis le titre)
+  slug: string
 }
 
 export function renderArticlePage(nomProjet: string, article: ArticleDetail, nonce: string = ''): string {
@@ -20,8 +23,11 @@ export function renderArticlePage(nomProjet: string, article: ArticleDetail, non
     return new Date(iso).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' })
   }
 
-  // SEO étendu pour les articles de blog
-  const articleUrl = `https://monmenu.com/blog/${article.titre.toLowerCase().replace(/\s+/g, '-')}`
+  // FIX — URL canonique, og:url et JSON-LD construits depuis le slug RÉEL
+  // de la base (article.slug), pas depuis le titre slugifié à la volée.
+  // Fallback : titre slugifié si slug absent (compatibilité données anciennes).
+  const slugReel = article.slug || article.titre.toLowerCase().replace(/\s+/g, '-')
+  const articleUrl = `https://monmenu.com/blog/${slugReel}`
   return `${renderHead(
     `${article.titre} — ${nomProjet}`,
     article.extrait,

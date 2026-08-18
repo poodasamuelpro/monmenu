@@ -271,6 +271,26 @@ app.get('/sitemap.xml', async (c) => {
   </url>`
   ).join('\n')
 
+  // FIX — articles de blog PUBLIÉS ajoutés au sitemap : sans eux, Google ne
+  // découvrait les articles que via la page /blog (référencement lent).
+  // Chaque article publié est listé sur /blog/:slug avec date_publication
+  // en lastmod (changefreq monthly, priority 0.6).
+  const { data: articlesData } = await adminClient
+    .from('articles')
+    .select('slug, date_publication')
+    .eq('statut', 'publie')
+    .not('date_publication', 'is', null)
+    .order('date_publication', { ascending: false })
+    .limit(200)
+  const articleUrls = (articlesData ?? []).map((a: { slug: string; date_publication: string | null }) =>
+    `  <url>
+    <loc>${baseUrl}/blog/${a.slug}</loc>
+    ${a.date_publication ? `<lastmod>${a.date_publication.split('T')[0]}</lastmod>` : ''}
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>`
+  ).join('\n')
+
   const sitemap = `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
@@ -314,6 +334,7 @@ app.get('/sitemap.xml', async (c) => {
     <priority>0.3</priority>
   </url>
 ${restaurantUrls}
+${articleUrls}
 </urlset>`
 
   // S9-05 — Écriture en cache KV TTL 1h (non bloquant)
@@ -472,7 +493,10 @@ app.get('/blog/:slug', async (c) => {
     const adminClient = createSupabaseAdminClient(c.env)
     const { data, error } = await adminClient
       .from('articles')
-      .select('titre, contenu, extrait, categorie, temps_lecture, image_url, date_publication, auteur')
+      // FIX — 'slug' ajouté à la sélection : renderArticlePage le réutilise
+      // pour la canonical, l'og:url et le JSON-LD (plus de slugification
+      // à la volée depuis le titre)
+      .select('titre, contenu, extrait, categorie, temps_lecture, image_url, date_publication, auteur, slug')
       .eq('slug', slug)
       .eq('statut', 'publie')
       .maybeSingle()
