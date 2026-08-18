@@ -389,6 +389,7 @@ authRouter.post('/register', async (c) => {
       statut: statutInitial,
       plan_id: estPlanGratuit ? planChoisi.id : null,
       plan_initial_id: planChoisi.id,
+      email: email.trim(),
       metadata: {}
     })
     .select('id, slug')

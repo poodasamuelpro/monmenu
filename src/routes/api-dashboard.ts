@@ -1422,12 +1422,15 @@ dashboardRouter.patch('/parametres', async (c) => {
   const auth = await verifyAuth(c)
   if (!auth) return c.json({ error: 'Non authentifié.' }, 401)
 
-  let body: { nom?: string; whatsapp_number?: string }
+  let body: { nom?: string; whatsapp_number?: string; email?: string }
   try { body = await c.req.json() } catch { return c.json({ error: 'JSON invalide.' }, 400) }
 
   if (!body.nom || body.nom.trim().length < 2) return c.json({ error: 'Nom invalide.' }, 422)
   if (body.whatsapp_number && !/^\+?[0-9]{10,15}$/.test(body.whatsapp_number)) {
     return c.json({ error: 'Numéro WhatsApp invalide.' }, 422)
+  }
+  if (body.email !== undefined && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(body.email)) {
+    return c.json({ error: 'Email invalide.' }, 422)
   }
 
   const supabase = createSupabaseClientWithToken(c.env, auth.token)
@@ -1436,6 +1439,7 @@ dashboardRouter.patch('/parametres', async (c) => {
 
   const updateData: any = { nom: body.nom.trim(), updated_at: new Date().toISOString() }
   if (body.whatsapp_number !== undefined) updateData.whatsapp_number = body.whatsapp_number
+  if (body.email !== undefined) updateData.email = body.email.trim() || null
 
   // B-DASH-03 — fix session-5 : ajout de .select('id') + vérification rows affectées.
   const { data: parametresUpdatedRows, error } = await supabase
@@ -1488,13 +1492,13 @@ dashboardRouter.get('/profil', async (c) => {
 
   const { data: tenant, error: tenantError } = await supabaseToken
     .from('tenants')
-    .select('id, nom, slug, logo_url, banniere_url, couleur_primaire, couleur_secondaire, whatsapp_number, statut, created_at, plan_id')
+    .select('id, nom, slug, email, logo_url, banniere_url, couleur_primaire, couleur_secondaire, whatsapp_number, statut, created_at, plan_id')
     .eq('id', tenantId)
     .maybeSingle()
 
   const tenantFinal = tenant ?? (await adminClient
     .from('tenants')
-    .select('id, nom, slug, logo_url, banniere_url, couleur_primaire, couleur_secondaire, whatsapp_number, statut, created_at, plan_id')
+    .select('id, nom, slug, email, logo_url, banniere_url, couleur_primaire, couleur_secondaire, whatsapp_number, statut, created_at, plan_id')
     .eq('id', tenantId)
     .maybeSingle()).data
 
