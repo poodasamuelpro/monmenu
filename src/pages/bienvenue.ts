@@ -334,7 +334,9 @@ export function renderBienvenuePage(nomProjet: string, nonce: string = ''): stri
           <ol class="text-sm text-green-700 space-y-2">
             <li class="flex items-start gap-2">
               <span class="font-bold w-5 text-center flex-shrink-0">1.</span>
-              Effectuez votre paiement via Orange Money / Moov Money / Virement bancaire au numéro communiqué par notre équipe.
+              Effectuez votre paiement via Mobile Money aux numéros affichés ci-dessous :
+              <div id="numeros-paiement" class="mt-1.5 space-y-1.5"></div>
+              <noscript>au numéro communiqué par notre équipe.</noscript>
             </li>
             <li class="flex items-start gap-2">
               <span class="font-bold w-5 text-center flex-shrink-0">2.</span>
@@ -346,7 +348,7 @@ export function renderBienvenuePage(nomProjet: string, nonce: string = ''): stri
             </li>
             <li class="flex items-start gap-2">
               <span class="font-bold w-5 text-center flex-shrink-0">4.</span>
-              Notre équipe confirme votre paiement sous 38h. Vous recevrez une notification.
+              Notre équipe confirme votre paiement sous <span class="duree-sla"></span>h maximum. Vous recevrez une notification.
             </li>
           </ol>
         </div>
@@ -762,6 +764,32 @@ export function renderBienvenuePage(nomProjet: string, nonce: string = ''): stri
     }
 
     /**
+     * Charge les numéros de paiement depuis la table moyens_paiement
+     * (API publique /api/v1/moyens-paiement — lecture directe Supabase, actifs uniquement).
+     * SEC : aucune entrée utilisateur — tout le contenu vient de la base et est
+     * échappé via escHtml(). En cas d'échec ou de liste vide, comportement
+     * d'origine préservé (aucun affichage, texte de repli disponible).
+     */
+    async function chargerNumerosPaiement() {
+      const container = document.getElementById('numeros-paiement');
+      if (!container) return;
+      try {
+        const res = await fetch('/api/v1/moyens-paiement');
+        if (!res.ok) return;
+        const data = await res.json();
+        const moyens = Array.isArray(data?.moyens) ? data.moyens : [];
+        if (!moyens.length) return;
+        container.innerHTML = moyens.map(m => \`
+          <div class="bg-white border border-green-200 rounded-lg px-3 py-2 flex items-center justify-between">
+            <span class="font-bold">\${escHtml(m.nom)}</span>
+            <code class="font-mono font-bold text-green-800">\${escHtml(m.numero || '')}</code>
+          </div>\`).join('');
+      } catch (e) {
+        // Silencieux : la liste reste vide, le texte de repli s'applique
+      }
+    }
+
+    /**
      * Sélectionne un plan et génère la référence de paiement via l'API.
      * SEC-10 : la référence ne crée aucun abonnement, elle est juste un aide-mémoire.
      */
@@ -857,6 +885,15 @@ export function renderBienvenuePage(nomProjet: string, nonce: string = ''): stri
       if (inpLogo) inpLogo.addEventListener('change', function() { previewImage(this, 'logo'); });
       var inpBanniere = document.getElementById('inp-banniere');
       if (inpBanniere) inpBanniere.addEventListener('change', function() { previewImage(this, 'banniere'); });
+
+      // Délais officiels (source unique : src/lib/paiement.ts)
+      // SLA annoncé au client : 48h — fenêtre technique : 72h
+      var SLA_ADMIN_HEURES = 48;
+      var dureeSla = document.querySelector('.duree-sla');
+      if (dureeSla) dureeSla.textContent = SLA_ADMIN_HEURES;
+
+      // Numéros de paiement depuis la table moyens_paiement (actifs uniquement)
+      chargerNumerosPaiement();
     });
 
     // Délégation pour les éléments générés dynamiquement

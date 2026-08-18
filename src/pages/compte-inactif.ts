@@ -41,7 +41,7 @@ export function renderCompteInactifPage(nomProjet: string, nonce: string = ''): 
     <!-- Note informative : délai de confirmation -->
     <p class="mt-8 text-xs text-gray-400 max-w-md mx-auto">
       <i class="fa-solid fa-clock mr-1" aria-hidden="true"></i>
-      Si vous avez déjà effectué un paiement, déclarez-le ci-dessus. Votre accès sera maintenu pendant 72h le temps de la confirmation par notre équipe (délai engagé : 38h).
+      Si vous avez déjà effectué un paiement, déclarez-le ci-dessus. Votre accès sera maintenu pendant 72h le temps de la confirmation par notre équipe (délai engagé : 48h).
     </p>
   </section>
   ${renderFooter(nomProjet, nonce)}
