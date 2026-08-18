@@ -102,6 +102,24 @@ newsletterRouter.post('/envoyer', async (c) => {
     return c.json({ error: 'Non autorisé.' }, 401)
   }
 
+  // ── Rate limit : 1 campagne par heure par origine (IP pour voie 1,
+  // email admin pour voie 2) — KV distribué entre isolates (S4-01).
+  // Protège contre le spam email massif si le secret ou le JWT venait à fuir.
+  const ip = c.req.header('CF-Connecting-IP') ?? 'unknown'
+  let rateKey: string
+  if (bearerToken) {
+    try {
+      const supabase = createSupabaseClient(c.env)
+      const { data: ud } = await supabase.auth.getUser(bearerToken)
+      if (ud?.user?.email) rateKey = `newsletter_envoyer:${ud.user.email}`
+    } catch { /* fallback IP */ }
+  }
+  rateKey ??= `newsletter_envoyer:${ip}`
+  const rlCampagne = await checkRateLimit(rateKey, 1, 3600000, c.env.KV_CACHE)
+  if (!rlCampagne.allowed) {
+    return c.json({ error: 'Une seule campagne par heure. Réessayez plus tard.' }, 429)
+  }
+
   let body: { sujet?: string; html_content?: string; text_content?: string }
   try { body = await c.req.json() }
   catch { return c.json({ error: 'JSON invalide.' }, 400) }
