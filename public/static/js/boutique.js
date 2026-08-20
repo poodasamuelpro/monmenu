@@ -4,16 +4,16 @@
 // Modèle :
 //   - GET /:slug/menu retourne maintenant `supplements` au niveau racine
 //     (tableau des suppléments généraux actifs du tenant).
-//   - Les boutons "+" et "-" sur les cartes produits ajoutent/retirent DIRECTEMENT
-//     au panier — jamais de modal par produit.
-//   - Bouton "Passer à la commande" : si le panier contient des articles et
-//     qu'il y a des suppléments généraux disponibles, un écran groupé unique
-//     est affiché pour les proposer (sélection libre), avant le checkout.
-//   - Les suppléments par produit (ancien modèle) sont conservés dans la réponse
-//     menu pour rétrocompatibilité mais ne déclenchent plus de modal par produit.
-//
-// Supprimé : ouvrirModalSupplements (modal par produit) — l'écran groupé
-// remplace entièrement cette UX. Voir rapport final section "suppressions".
+//   - LOGIQUE 1 — FICHE PRODUIT : clic sur l'IMAGE d'un produit → modale fiche
+//     (photo, description si présente, prix) avec les suppléments généraux en bas.
+//     VERROU : dès qu'un produit est coché dans le panier (via la croix +),
+//     le clic sur l'image d'un AUTRE produit n'ouvre plus la modale tant que
+//     le panier n'est pas vide (décoché/retiré).
+//     Validation de la fiche → ajout au panier SANS réafficher les suppléments.
+//   - LOGIQUE 2 — PANIER : les boutons "+"/"−" ajoutent/retirent directement
+//     au panier. Au "Passer à la commande", l'écran groupé des suppléments
+//     généraux s'affiche en page indépendante (proposition libre), puis le checkout.
+//   - Les deux logiques sont indépendantes : pas de double affichage des suppléments.
 //
 // CSP : aucun handler inline (data-action= + dispatcher global CSP-safe).
 'use strict';
@@ -49,6 +49,12 @@ const STATUT_LABELS = {
   annulee: 'Annulée'
 };
 
+// LOGIQUE 1 — verrou fiche produit :
+// dès qu'un produit est ajouté au panier via la croix (+), le clic sur l'image
+// d'un autre produit n'ouvre plus la fiche (tant que le panier n'est pas vide).
+let _ficheProduitVerrouillee = false;
+function panierEstVide() { return getCartCount() === 0; }
+
 let _menuListenerAttache = false;
 function attacherEcouteurMenu() {
   if (_menuListenerAttache) return;
@@ -64,14 +70,28 @@ function attacherEcouteurMenu() {
       if (!boutiqueOuverte) return;
       const produit = _produitRegistry[produitId];
       if (!produit) return;
-      // CORRECTIF — Suppléments généraux : les boutons +/- ajoutent/retirent
-      // DIRECTEMENT au panier. Les suppléments généraux sont proposés via
-      // l'écran groupé au moment de "Passer à la commande" (voir ouvrirEcranSupplementsGroupes).
-      // L'ancienne modal par produit (ouvrirModalSupplements) est supprimée.
+      // LOGIQUE 2 — les boutons +/- ajoutent/retirent DIRECTEMENT au panier.
+      // Activation du verrou fiche produit dès la première coque au panier.
+      _ficheProduitVerrouillee = true;
       addToCart(produit);
     } else if (action === 'remove') {
       removeFromCart(produitId);
+      if (panierEstVide()) {
+        _ficheProduitVerrouillee = false;
+      }
     }
+  });
+  // LOGIQUE 1 — clic sur l'IMAGE d'un produit → fiche produit (verrou panier appliqué).
+  menuContent.addEventListener('click', (e) => {
+    if (_ficheProduitVerrouillee) return;
+    const img = e.target.closest('.fiche-produit-cible');
+    if (!img) return;
+    const produitId = img.getAttribute('data-produit-id');
+    if (!produitId) return;
+    const produit = _produitRegistry[produitId];
+    if (!produit) return;
+    if (!boutiqueOuverte) return;
+    ouvrirFicheProduit(produit);
   });
   _menuListenerAttache = true;
 }
@@ -271,6 +291,7 @@ function renderProduitCard(p) {
   const quantiteInCart = getQuantiteInCart(p.id);
   _produitRegistry[p.id] = {
     id: p.id, nom: p.nom, prix: p.prix, photo_url: p.photo_url,
+    description: p.description || null,
     supplements: p.supplements || [] // conservé pour rétrocompatibilité interne
   };
 
@@ -295,9 +316,12 @@ function renderProduitCard(p) {
       </button>`;
   }
 
-  // CORRECTIF — Badge "+ options" supprimé : les suppléments sont généraux
-  // (proposés via l'écran groupé au checkout, pas par produit au clic +).
-  const badgeOptions = '';
+  // LOGIQUE 1 — Badge indicateur "aperçu fiche" : l'image est cliquable tant que
+  // le panier est vide (fiche produit avec suppléments). Le verrou est géré dans
+  // attacherEcouteurMenu() via _ficheProduitVerrouillee.
+  const badgeOptions = (!_ficheProduitVerrouillee && boutiqueOuverte && p.disponible)
+    ? `<div class="absolute top-2 right-2 text-[10px] font-semibold text-white bg-black/50 backdrop-blur px-2 py-1 rounded-lg shadow-sm pointer-events-none"><i class="fa-solid fa-magnifying-glass-plus mr-1"></i>Aperçu</div>`
+    : '';
 
   const assombri = (!p.disponible || !boutiqueOuverte) ? 'opacity-60' : '';
 
@@ -305,8 +329,8 @@ function renderProduitCard(p) {
   <div class="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden flex flex-col h-full ${assombri}">
     <div class="relative w-full aspect-[4/3] bg-gray-50 overflow-hidden">
       ${p.photo_url
-        ? `<img src="${escHtml(p.photo_url)}" alt="${escHtml(p.nom)}" class="w-full h-full object-cover" loading="lazy">`
-        : `<div class="w-full h-full flex items-center justify-center"><i class="fa-solid fa-utensils text-3xl text-gray-300"></i></div>`
+        ? `<img src="${escHtml(p.photo_url)}" alt="${escHtml(p.nom)}" data-produit-id="${escHtml(p.id)}" class="fiche-produit-cible w-full h-full object-cover cursor-pointer hover:opacity-95 transition-opacity" loading="lazy">`
+        : `<div class="fiche-produit-cible w-full h-full flex items-center justify-center cursor-pointer" data-produit-id="${escHtml(p.id)}"><i class="fa-solid fa-utensils text-3xl text-gray-300"></i></div>`
       }
       ${badgeOptions}
       ${controles}
@@ -466,6 +490,83 @@ function confirmerAjoutAvecSupplements(produitId) {
   }
 }
 
+// ============================================================
+// LOGIQUE 1 — FICHE PRODUIT (clic sur l'IMAGE du produit)
+// Photo + description + prix + suppléments généraux en bas.
+// Validation → ajout direct au panier SANS réafficher les suppléments.
+// Verrou : _ficheProduitVerrouillee (activé dès qu'un produit est au panier
+// via la croix + ; levé quand le panier est vidé).
+// ============================================================
+function ouvrirFicheProduit(produit) {
+  document.getElementById('modal-fiche-produit')?.remove();
+  const supps = supplementsGeneraux || [];
+  const modal = document.createElement('div');
+  modal.id = 'modal-fiche-produit';
+  modal.className = 'fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 p-0 sm:p-4';
+  modal.innerHTML = `
+    <div class="bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl max-w-md w-full max-h-[90vh] overflow-y-auto">
+      <div class="relative">
+        ${produit.photo_url
+          ? `<img src="${escHtml(produit.photo_url)}" alt="${escHtml(produit.nom)}" class="w-full h-52 object-cover">`
+          : `<div class="w-full h-52 bg-gray-100 flex items-center justify-center"><i class="fa-solid fa-utensils text-4xl text-gray-300"></i></div>`
+        }
+        <button data-action="fermerFicheProduit" class="absolute top-2 right-2 w-8 h-8 rounded-full bg-white/90 backdrop-blur flex items-center justify-center text-gray-600 hover:text-gray-900 shadow-sm text-lg font-bold" aria-label="Fermer">&times;</button>
+      </div>
+      <div class="p-5">
+        <h2 class="font-bold text-gray-900 text-lg">${escHtml(produit.nom)}</h2>
+        ${produit.description ? `<p class="text-sm text-gray-500 mt-1">${escHtml(produit.description)}</p>` : `<p class="text-sm text-gray-400 italic mt-1">Aucune description disponible.</p>`}
+        <div class="flex items-center justify-between border-t border-gray-100 mt-3 pt-3 mb-3">
+          <span class="text-xs font-medium text-gray-400 uppercase tracking-wide">Prix</span>
+          <span class="font-bold" style="color:${PRIMARY_COLOR}">${formatMontant(produit.prix)}</span>
+        </div>
+        ${supps.length > 0 ? `
+          <p class="text-sm font-semibold text-gray-700 mb-2"><i class="fa-solid fa-pepper-hot text-amber-500 mr-1"></i>Suppléments (facultatif)</p>
+          <div class="space-y-2 mb-4">
+            ${supps.map(s => `
+              <label class="flex items-center justify-between border border-gray-200 rounded-xl px-4 py-3 cursor-pointer hover:border-red-300 has-[:checked]:border-red-500 has-[:checked]:bg-red-50 transition-colors">
+                <span class="flex items-center gap-2 min-w-0">
+                  <input type="checkbox" data-fiche-sup-id="${escHtml(s.id)}" data-fiche-sup-prix="${s.prix}" data-fiche-sup-nom="${escHtml(s.nom)}" class="text-red-600 rounded w-4 h-4">
+                  <span class="text-sm font-medium truncate">${escHtml(s.nom)}</span>
+                </span>
+                <span class="text-sm font-semibold text-gray-600 flex-shrink-0 ml-2">+${formatMontant(s.prix)}</span>
+              </label>`).join('')}
+          </div>
+        ` : ''}
+        <button data-action="confirmerFicheProduit" data-prod-id="${escHtml(produit.id)}" class="w-full text-white font-bold py-3.5 rounded-xl transition-colors active:scale-[0.98]" style="background-color:${PRIMARY_COLOR}">
+          <i class="fa-solid fa-cart-plus mr-1"></i> Ajouter au panier
+        </button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+  document.body.style.overflow = 'hidden';
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) {
+      modal.remove();
+      document.body.style.overflow = '';
+    }
+  });
+}
+function confirmerFicheProduit(produitId) {
+  const produit = _produitRegistry[produitId];
+  if (!produit) return;
+  const modal = document.getElementById('modal-fiche-produit');
+  const checked = modal ? Array.from(modal.querySelectorAll('input[data-fiche-sup-id]:checked')) : [];
+  const supplements = checked.map(el => ({
+    supplement_id: el.getAttribute('data-fiche-sup-id'),
+    nom: el.getAttribute('data-fiche-sup-nom'),
+    prix: parseFloat(el.getAttribute('data-fiche-sup-prix'))
+  }));
+  modal?.remove();
+  document.body.style.overflow = '';
+  // Validation de la fiche → ajout direct au panier, SANS réafficher les suppléments.
+  _ficheProduitVerrouillee = true;
+  if (supplements.length === 0) {
+    addToCart(produit);
+  } else {
+    addToCartAvecSupplements(produit, supplements);
+  }
+}
+
 // ---- Suivi de commande ----
 function afficherBoutonSuiviSiCommandeRecente() {
   try {
@@ -601,6 +702,8 @@ function renderCartModal() {
       renderCartModal();
       updateCartUI();
       renderMenu();
+      // LOGIQUE 1 — lever le verrou fiche produit dès que le panier est vidé
+      if (panierEstVide()) _ficheProduitVerrouillee = false;
     });
   });
 
@@ -1089,6 +1192,8 @@ window.geolocaliser = geolocaliser;
 window.appliquerCodePromo = appliquerCodePromo;
 window.retirerCodePromo = retirerCodePromo;
 window.scrollToTop = scrollToTop;
+window.ouvrirFicheProduit = ouvrirFicheProduit;
+window.confirmerFicheProduit = confirmerFicheProduit;
 window.ouvrirModalSupplements = ouvrirModalSupplements;
 window.confirmerAjoutAvecSupplements = confirmerAjoutAvecSupplements;
 
@@ -1109,7 +1214,15 @@ window.confirmerAjoutAvecSupplements = confirmerAjoutAvecSupplements;
       case 'confirmerAjoutAvecSupplements':
         confirmerAjoutAvecSupplements(btn.dataset.prodId);
         break;
-      // AJOUT — Passer à la commande : écran groupé si suppléments disponibles
+      // LOGIQUE 1 — fiche produit : fermeture / validation (ajout panier direct)
+      case 'fermerFicheProduit':
+        document.getElementById('modal-fiche-produit')?.remove();
+        document.body.style.overflow = '';
+        break;
+      case 'confirmerFicheProduit':
+        confirmerFicheProduit(btn.dataset.prodId);
+        break;
+      // LOGIQUE 2 — passer au checkout : écran groupé suppléments si disponible
       case 'passerCommande':
         closeCart();
         _verifierEcranSupplementsAvantCheckout();
